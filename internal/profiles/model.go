@@ -12,6 +12,7 @@ type ModelDef struct {
 	SupportsBackendSearch   bool              `json:"supports_backend_search"`
 	SupportsReasoningEffort bool              `json:"supports_reasoning_effort"`
 	ReasoningEfforts        []string          `json:"reasoning_efforts"`
+	ReasoningEffortsSource  string            `json:"reasoning_efforts_source,omitempty"`
 	ContextWindow           int64             `json:"context_window"`
 	MaxCompletionTokens     int64             `json:"max_completion_tokens"`
 }
@@ -26,6 +27,7 @@ type SubagentsModels struct {
 type Profile struct {
 	ID                     string          `json:"id"`
 	Name                   string          `json:"name"`
+	Source                 string          `json:"source,omitempty"`
 	Template               string          `json:"template,omitempty"`
 	UpstreamFormat         string          `json:"upstream_format"`
 	BaseURL                string          `json:"base_url"`
@@ -92,6 +94,7 @@ func modelEqual(a, b ModelDef) bool {
 		a.APIBackend != b.APIBackend ||
 		a.SupportsBackendSearch != b.SupportsBackendSearch ||
 		a.SupportsReasoningEffort != b.SupportsReasoningEffort ||
+		a.ReasoningEffortsSource != b.ReasoningEffortsSource ||
 		a.ContextWindow != b.ContextWindow ||
 		a.MaxCompletionTokens != b.MaxCompletionTokens {
 		return false
@@ -176,6 +179,9 @@ func Normalize(p Profile) Profile {
 			p.Models[i].ReasoningEfforts = []string{"low", "medium", "high"}
 		} else {
 			p.Models[i].ReasoningEfforts = uniqueStrings(p.Models[i].ReasoningEfforts)
+		}
+		if p.Models[i].ReasoningEffortsSource == "" {
+			p.Models[i].ReasoningEffortsSource = "default"
 		}
 	}
 	p.AvailableModels = uniqueStrings(p.AvailableModels)

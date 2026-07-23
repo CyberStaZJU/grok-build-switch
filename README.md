@@ -6,13 +6,15 @@
 
 一键切换上游 `base_url`、默认模型、联网搜索模型、subagents 与各 `[model.*]` 定义。
 
+> 本仓库的 macOS 扩展版本基于 [1parado/grok-build-switch](https://github.com/1parado/grok-build-switch) 开发，并集成 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 提供订阅账号代理能力。感谢原项目及相关开源项目的工作。
+
 ## 功能
 
 - 供应商增删改查：名称、Base URL、API Key、上游格式、默认 / 联网 / explore·plan 子代理模型、已启用模型列表
 
   <img width="1524" height="1012" alt="image" src="https://github.com/user-attachments/assets/cdcfddd0-55d4-4ae5-a830-4f99c1525b9b" />
 
-- 供应商默认使用 `high` 推理强度；每个模型自动写入 `supports_reasoning_effort = true` 和 `low/medium/high` 支持列表
+- 新建供应商默认使用 `low` 推理强度，旧供应商保留原设置；每个模型自动写入 `supports_reasoning_effort = true` 和 `low/medium/high` 支持列表
 - 一键启用：写入 `[endpoints]`、`[models]`、`[subagents.models]`（explore / plan）与 `[model.*]`，其它段尽量保留
 - 切换 / 保存 config 前自动备份；设置页可还原备份、直接编辑 `config.toml`
 - 首次运行可从当前 `config.toml` 导入 Default 供应商
@@ -199,6 +201,34 @@ $env:GROK_SWITCH_SIGN_THUMBPRINT = "<certificate-thumbprint>"
 - `WINDOWS_SIGNING_CERT_PASSWORD`：PFX 密码
 
 证书私钥和密码不得提交到仓库。
+
+### macOS Apple Silicon 构建
+
+在 Apple Silicon Mac 上运行：
+
+```bash
+./build-macos.sh
+```
+
+默认生成 `dist/macos/Grok Build Switch.app`、arm64 DMG 和对应的 `.sha256`。可通过
+`APP_NAME`、`BUNDLE_ID`（默认 `com.grokbuildswitch.app`）和 `VERSION` 覆盖发布信息。
+未配置凭据时脚本会明确提示并生成未签名版本。
+
+Developer ID 签名可设置 `APPLE_SIGNING_IDENTITY`；要求签名时运行：
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  ./build-macos.sh --require-signature
+```
+
+如已用 `xcrun notarytool store-credentials` 保存公证凭据，再设置
+`APPLE_NOTARY_PROFILE`，脚本会提交公证并执行 stapler。`macOS Release` workflow 在 `v*`
+tag 或手动触发时构建 arm64 DMG；仅当配置相应 Secrets 时使用：
+
+- `MACOS_SIGNING_CERT_BASE64`、`MACOS_SIGNING_CERT_PASSWORD`、`MACOS_SIGNING_IDENTITY`
+- `MACOS_NOTARY_KEY_BASE64`、`MACOS_NOTARY_KEY_ID`、`MACOS_NOTARY_ISSUER_ID`
+
+证书、私钥和密码不得提交到仓库。
 
 ### 手动构建
 

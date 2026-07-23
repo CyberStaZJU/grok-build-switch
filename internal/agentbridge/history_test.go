@@ -60,3 +60,38 @@ func TestStoredSessionRejectsPathTraversal(t *testing.T) {
 		t.Fatal("expected invalid session id error")
 	}
 }
+
+func TestDeleteStoredSession(t *testing.T) {
+	grokHome := t.TempDir()
+	projectDir := t.TempDir()
+	sessionDir := filepath.Join(grokHome, "sessions", "encoded-cwd", "session-del")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var summary storedSummary
+	summary.Info.ID = "session-del"
+	summary.Info.Cwd = projectDir
+	summary.GeneratedTitle = "To delete"
+	summary.CreatedAt = time.Now().UTC()
+	summary.UpdatedAt = time.Now().UTC()
+	summaryData, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "summary.json"), summaryData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "chat_history.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bridge := New(grokHome, filepath.Join(t.TempDir(), "agent.log"))
+	if err := bridge.DeleteStoredSession("session-del"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+		t.Fatalf("session dir still exists: %v", err)
+	}
+	if err := bridge.DeleteStoredSession("../evil"); err == nil {
+		t.Fatal("expected path traversal rejection")
+	}
+}

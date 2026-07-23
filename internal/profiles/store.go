@@ -161,7 +161,7 @@ func (s *Store) ClearActive() error {
 }
 
 func (s *Store) EnsureDir() error {
-	return os.MkdirAll(filepath.Dir(s.path), 0o755)
+	return os.MkdirAll(filepath.Dir(s.path), 0o700)
 }
 
 func (s *Store) readLocked() ([]Profile, error) {
@@ -207,7 +207,7 @@ func (s *Store) writeLocked(profiles []Profile) error {
 }
 
 func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")

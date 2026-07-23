@@ -15,6 +15,7 @@ import (
 
 	"grok_switch/internal/agentbridge"
 	"grok_switch/internal/autostart"
+	"grok_switch/internal/cliproxy"
 	"grok_switch/internal/cpamint"
 	"grok_switch/internal/crash"
 	"grok_switch/internal/grokauth"
@@ -26,6 +27,7 @@ import (
 	"grok_switch/internal/server"
 	"grok_switch/internal/settings"
 	"grok_switch/internal/singleinstance"
+	"grok_switch/internal/ssh"
 	"grok_switch/internal/switcher"
 	"grok_switch/internal/tray"
 )
@@ -117,20 +119,26 @@ func main() {
 	agent := agentbridge.New(resolved.GrokHome, filepath.Join(resolved.DataDir, "agent.log"))
 	agent.SetDefaultCwd(currentSettings.AgentDefaultCwd)
 	defer agent.Stop()
+	home, _ := os.UserHomeDir()
+	proxyManager := cliproxy.NewManager(resolved.DataDir, home, cliproxy.ResolveBuiltinBinary(exePath), cliproxy.DarwinKeychain{})
+	sshHandler := ssh.NewHandler(resolved.DataDir)
 
 	appServer := &server.Server{
-		Paths:        resolved,
-		Profiles:     profileStore,
-		Settings:     settingsStore,
-		RemoteAccess: remoteaccess.NewStore(resolved.RemoteAccessFile),
-		GrokAuth:     grokAuthStore,
-		GrokPool:     grokPool,
-		CpaMint:      cpamint.NewService(),
-		Registrar:    registrarService,
-		Switcher:     sw,
-		Agent:        agent,
-		Assets:       assets,
-		ExePath:      exePath,
+		Paths:             resolved,
+		Profiles:          profileStore,
+		Settings:          settingsStore,
+		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
+		GrokAuth:          grokAuthStore,
+		GrokPool:          grokPool,
+		CpaMint:           cpamint.NewService(),
+		Registrar:         registrarService,
+		Switcher:          sw,
+		Agent:             agent,
+		SubscriptionProxy: proxyManager,
+		SSH:               sshHandler,
+		BrowserOpener:     server.SafeBrowserOpener{},
+		Assets:            assets,
+		ExePath:           exePath,
 	}
 	httpServer, port, err := appServer.Listen(currentSettings.Port)
 	if err != nil {

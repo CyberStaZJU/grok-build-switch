@@ -24,6 +24,7 @@ const state = {
   chatStickToBottom: true,
   agentAutoRestoring: false,
   pendingAttachments: [],
+  subscriptionProxy: null,
 };
 
 const OFFICIAL_PROVIDER_KEY = "official";
@@ -38,6 +39,8 @@ let registrarFormDirty = false;
 let cpaMintPollTimer = null;
 let cpaMintSession = null;
 let cpaMintTerminalNotice = "";
+let subscriptionLoginPollTimer = null;
+let subscriptionLoginBusy = false;
 let agentSocket = null;
 let agentReconnectTimer = null;
 let agentActiveAssistant = null;
@@ -377,11 +380,20 @@ function subagentsModelsOf(profile) {
 }
 
 const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const REASONING_EFFORT_LABELS = {
+  none: "禁用推理 (none)", minimal: "最小 (minimal)", low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max，仅部分模型；当前 Grok CLI 不支持)",
+};
+
+function normalizeReasoningEffort(effort) {
+  return REASONING_EFFORTS.includes(effort) ? effort : "low";
+}
 
 function newProfileDraft() {
   return {
     template: "responses",
     upstream_format: "openai_responses",
+    default_reasoning_effort: "low",
     models: [],
     available_models: [],
   };
@@ -401,6 +413,59 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+// Custom prompt dialog (window.prompt is unreliable in Wails WebView2)
+function customPrompt(message, defaultValue) {
+  return new Promise((resolve) => {
+    const dialog = $("promptDialog");
+    const input = $("promptInput");
+    $("promptLabel").textContent = message;
+    input.value = defaultValue || "";
+    dialog.showModal();
+    input.focus();
+    input.select();
+    const cleanup = () => {
+      dialog.close();
+      input.onkeydown = null;
+    };
+    input.onkeydown = (e) => { if (e.key === "Enter") { cleanup(); resolve(input.value); } };
+    $("promptOk").onclick = () => { cleanup(); resolve(input.value); };
+    $("promptCancel").onclick = () => { cleanup(); resolve(null); };
+  });
+}
+
+// Custom confirm dialog (window.confirm is unreliable in Wails WebView)
+function customConfirm(message, { okLabel = "确定", cancelLabel = "取消", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dialog = $("confirmDialog");
+    if (!dialog) {
+      resolve(window.confirm(message));
+      return;
+    }
+    const msg = $("confirmMessage");
+    const ok = $("confirmOk");
+    const cancel = $("confirmCancel");
+    if (msg) msg.textContent = message;
+    if (ok) {
+      ok.textContent = okLabel;
+      ok.classList.toggle("danger", !!danger);
+      ok.classList.toggle("primary", !danger);
+    }
+    if (cancel) cancel.textContent = cancelLabel;
+    const finish = (value) => {
+      dialog.close();
+      ok.onclick = null;
+      cancel.onclick = null;
+      dialog.oncancel = null;
+      resolve(value);
+    };
+    ok.onclick = (e) => { e.preventDefault(); finish(true); };
+    cancel.onclick = (e) => { e.preventDefault(); finish(false); };
+    dialog.oncancel = () => finish(false);
+    dialog.showModal();
+    ok?.focus();
+  });
 }
 
 function toast(message, type = "info") {
@@ -567,7 +632,9 @@ function showView(name) {
   const home = $("viewHome");
   const edit = $("viewEdit");
   const settings = $("viewSettings");
+  const subscriptionProxy = $("viewSubscriptionProxy");
   const chat = $("viewChat");
+  const ssh = $("viewSSH");
   if (home) {
     home.hidden = name !== "home";
     home.style.display = name === "home" ? "" : "none";
@@ -580,9 +647,17 @@ function showView(name) {
     settings.hidden = name !== "settings";
     settings.style.display = name === "settings" ? "" : "none";
   }
+  if (subscriptionProxy) {
+    subscriptionProxy.hidden = name !== "subscriptionProxy";
+    subscriptionProxy.style.display = name === "subscriptionProxy" ? "" : "none";
+  }
   if (chat) {
     chat.hidden = name !== "chat";
     chat.style.display = name === "chat" ? "" : "none";
+  }
+  if (ssh) {
+    ssh.hidden = name !== "ssh";
+    ssh.style.display = name === "ssh" ? "" : "none";
   }
   if ($("navHomeBtn")) $("navHomeBtn").hidden = name === "home";
   document.querySelectorAll("[data-home-only]").forEach((el) => {
@@ -591,10 +666,19 @@ function showView(name) {
   // Keep header add/import only on home list.
   if ($("headerSubtitle")) {
     $("headerSubtitle").textContent =
-      name === "settings" ? "设置" : name === "edit" ? ( $("profileId")?.value ? "编辑供应商" : "添加供应商") : name === "chat" ? "对话" : "供应商";
+      name === "settings" ? "设置" : name === "subscriptionProxy" ? "订阅代理" : name === "ssh" ? "SSH 远程文件" : name === "edit" ? ( $("profileId")?.value ? "编辑供应商" : "添加供应商") : name === "chat" ? "对话" : "供应商";
   }
   if (name === "settings") {
     loadConfigEditor().catch((err) => toast(err.message, "error"));
+    loadCacheStats().catch((err) => toast(err.message, "error"));
+  }
+  if (name === "ssh") {
+    loadSSHConnections().catch((err) => toast(err.message, "error"));
+  }
+  if (name === "subscriptionProxy") {
+    loadSubscriptionProxy().catch((err) => toast(err.message, "error"));
+  } else {
+    clearSubscriptionLoginPoll();
   }
   if (name === "chat") {
     openAgentView().catch((err) => toast(err.message, "error"));
@@ -766,17 +850,40 @@ function renderAgentSessionList() {
     const path = document.createElement("span");
     path.className = "sessionItemPath";
     path.textContent = session.cwd || "";
+    const actions = document.createElement("div");
+    actions.className = "sessionItemActions";
     const renameBtn = document.createElement("button");
     renameBtn.type = "button";
     renameBtn.className = "sessionRenameBtn";
     renameBtn.title = "重命名会话";
     renameBtn.setAttribute("aria-label", `重命名会话 ${session.title || ""}`);
     renameBtn.textContent = "✎";
-    renameBtn.onclick = (event) => {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "sessionDeleteBtn";
+    deleteBtn.title = "删除会话及本地文件";
+    deleteBtn.setAttribute("aria-label", `删除会话 ${session.title || ""}`);
+    deleteBtn.textContent = "×";
+    const stopBubble = (event) => {
+      event.preventDefault();
       event.stopPropagation();
-      startRenameSession(session);
     };
-    button.append(title, meta, path, renameBtn);
+    // Wails/WebView can fire parent click if only onclick is stopped.
+    ["click", "mousedown", "mouseup", "pointerdown", "pointerup"].forEach((type) => {
+      deleteBtn.addEventListener(type, stopBubble);
+      renameBtn.addEventListener(type, stopBubble);
+      actions.addEventListener(type, stopBubble);
+    });
+    deleteBtn.addEventListener("click", (event) => {
+      stopBubble(event);
+      deleteAgentSession(session, deleteBtn);
+    });
+    renameBtn.addEventListener("click", (event) => {
+      stopBubble(event);
+      startRenameSession(session);
+    });
+    actions.append(renameBtn, deleteBtn);
+    button.append(title, meta, path, actions);
     const activate = async () => {
       try {
         button.setAttribute("aria-busy", "true");
@@ -813,7 +920,7 @@ function formatSessionTime(value) {
 
 async function startRenameSession(session) {
   if (!session?.id) return;
-  const next = window.prompt("重命名会话", session.title || "");
+  const next = await customPrompt("重命名会话", session.title || "");
   if (next === null) return;
   const title = next.trim();
   if (title === (session.title || "").trim() && title !== "") return;
@@ -833,6 +940,37 @@ async function startRenameSession(session) {
   } catch (err) {
     toast(err.message || String(err), "error");
   }
+}
+
+async function deleteAgentSession(session, button) {
+  if (!session?.id) return;
+  const label = session.title || session.id;
+  const ok = await customConfirm(
+    `删除对话「${label}」？\n\n将永久删除本地会话目录（历史记录、终端日志等），不可恢复。`,
+    { okLabel: "删除", cancelLabel: "取消", danger: true },
+  );
+  if (!ok) return;
+  await run(async () => {
+    await api(`/api/agent/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+    state.agentSessions = (state.agentSessions || []).filter((item) => item.id !== session.id);
+    if (state.activeAgentSession?.id === session.id) {
+      // Active conversation files are gone; drop local UI state.
+      state.activeAgentSession = null;
+      clearAgentTranscript(true);
+      setAgentEngineState("none");
+      updateConversationIdentity();
+      persistLastChatContext({ sessionId: "", title: "", model: "" });
+      // If the running agent is still bound to the deleted session, stop it.
+      if (state.agentStatus?.session_id === session.id && agentIsRunning()) {
+        try {
+          await api("/api/agent/stop", { method: "POST", body: "{}" });
+        } catch (_) {
+          // ignore stop errors after delete
+        }
+      }
+    }
+    renderAgentSessionList();
+  }, { button, busyLabel: "…", success: "对话已删除" });
 }
 
 async function resumeAgentSession(session) {
@@ -916,6 +1054,91 @@ function updateConversationIdentity() {
   if ($("activeChatPath")) $("activeChatPath").textContent = session?.cwd || state.agentStatus?.cwd || $("agentCwd")?.value || "尚未选择工作目录";
   if ($("contextSessionId")) $("contextSessionId").textContent = session?.id || state.agentStatus?.session_id || "—";
   renderAgentSessionList();
+  refreshContextCacheStats().catch(() => {});
+}
+
+function formatTokenCount(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 10_000) return `${(v / 1000).toFixed(1)}k`;
+  if (v >= 1000) return `${(v / 1000).toFixed(2)}k`;
+  return String(v);
+}
+
+function formatHitRate(rate) {
+  if (rate == null || Number.isNaN(Number(rate))) return "—";
+  return `${(Number(rate) * 100).toFixed(1)}%`;
+}
+
+function cacheTableHTML(headers, rows) {
+  if (!rows.length) return `<p class="muted tiny">暂无数据</p>`;
+  const head = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+  const body = rows.map((cols) => `<tr>${cols.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
+  return `<table class="cacheDataTable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadCacheStats() {
+  const hours = Number($("cacheStatsHours")?.value || 24);
+  const data = await api(`/api/cache-stats?hours=${encodeURIComponent(hours)}`);
+  const overall = data.overall || {};
+  if ($("cacheHitRate")) $("cacheHitRate").textContent = formatHitRate(overall.hit_rate);
+  if ($("cacheTurns")) $("cacheTurns").textContent = String(overall.turns || 0);
+  if ($("cachePromptTokens")) $("cachePromptTokens").textContent = formatTokenCount(overall.prompt_tokens);
+  if ($("cacheCachedTokens")) $("cacheCachedTokens").textContent = formatTokenCount(overall.cached_prompt_tokens);
+  if ($("cacheStatsHint")) {
+    if (!data.log_exists) {
+      $("cacheStatsHint").textContent = "未找到 Grok 日志 unified.jsonl。使用 grok / 本应用聊天后会自动生成。";
+    } else if (!(overall.turns > 0)) {
+      $("cacheStatsHint").textContent = `已扫描日志，近 ${hours} 小时暂无推理事件。`;
+    } else {
+      $("cacheStatsHint").textContent = `统计窗口 ${hours}h · 事件 ${data.scanned_events || overall.turns} · 命中率 = cached_prompt_tokens / prompt_tokens`;
+    }
+  }
+  if ($("cacheByModel")) {
+    const rows = (data.by_model || []).map((row) => [
+      escapeHtml(row.model || "—"),
+      formatHitRate(row.hit_rate),
+      String(row.turns || 0),
+      formatTokenCount(row.prompt_tokens),
+      formatTokenCount(row.cached_prompt_tokens),
+    ]);
+    $("cacheByModel").innerHTML = cacheTableHTML(["模型", "命中率", "次数", "Prompt", "Cached"], rows);
+  }
+  if ($("cacheRecent")) {
+    const rows = (data.recent || []).map((row) => {
+      const ts = row.ts ? new Date(row.ts).toLocaleString() : "—";
+      const sid = row.session_id ? String(row.session_id).slice(0, 8) : "—";
+      return [
+        escapeHtml(ts),
+        escapeHtml(row.model || "—"),
+        escapeHtml(sid),
+        formatHitRate(row.hit_rate),
+        formatTokenCount(row.prompt_tokens),
+      ];
+    });
+    $("cacheRecent").innerHTML = cacheTableHTML(["时间", "模型", "会话", "命中率", "Prompt"], rows);
+  }
+  return data;
+}
+
+async function refreshContextCacheStats() {
+  const sid = state.activeAgentSession?.id || state.agentStatus?.session_id || "";
+  if (!sid) {
+    if ($("contextCacheHitRate")) $("contextCacheHitRate").textContent = "—";
+    if ($("contextCacheDetail")) $("contextCacheDetail").textContent = "启动 Agent 后按会话统计";
+    return;
+  }
+  const data = await api(`/api/cache-stats?hours=24&session_id=${encodeURIComponent(sid)}`);
+  const session = data.session || {};
+  if ($("contextCacheHitRate")) $("contextCacheHitRate").textContent = formatHitRate(session.hit_rate);
+  if ($("contextCacheDetail")) {
+    if (!(session.turns > 0)) {
+      $("contextCacheDetail").textContent = "本会话近 24h 暂无缓存数据";
+    } else {
+      $("contextCacheDetail").textContent = `${session.turns} 次 · cached ${formatTokenCount(session.cached_prompt_tokens)} / prompt ${formatTokenCount(session.prompt_tokens)}`;
+    }
+  }
+  if ($("contextCacheNote")) $("contextCacheNote").textContent = "24h";
 }
 
 function setNativePanel(name, open) {
@@ -1727,18 +1950,28 @@ function createChatMessage(role, text, model = "", final = false, attachments = 
   article.className = `chatMessage ${role}`;
   article._rawText = text || "";
   article.dataset.role = role;
-  const header = document.createElement("div");
-  header.className = "chatMessageHeader";
-  const label = document.createElement("span");
-  label.className = "chatMessageRole";
-  label.textContent = role === "user" ? "你" : role === "assistant" ? "Grok" : "系统";
-  header.append(label);
+
+  const avatar = document.createElement("div");
+  avatar.className = "chatAvatar";
+  avatar.textContent = role === "user" ? "我" : "G";
+  article.append(avatar);
+
+  const bubble = document.createElement("div");
+  bubble.className = "chatBubble";
+
+  const body = document.createElement("div");
+  body.className = "chatMessageText markdownBody";
+  bubble.append(body);
+
   if (role === "assistant" && model) {
     const modelLabel = document.createElement("span");
     modelLabel.className = "messageModel";
     modelLabel.textContent = model;
-    header.append(modelLabel);
+    bubble.append(modelLabel);
   }
+
+  article.append(bubble);
+
   if (role === "user" || role === "assistant") {
     const actions = document.createElement("div");
     actions.className = "chatMessageActions";
@@ -1767,15 +2000,9 @@ function createChatMessage(role, text, model = "", final = false, attachments = 
       editBtn.onclick = () => enterUserEditMode(article);
       actions.append(editBtn);
     }
-    header.append(actions);
+    article.append(actions);
   }
-  const body = document.createElement("div");
-  body.className = "chatMessageText markdownBody";
-  article.append(header, body);
-  // Markdown / attachments are rendered in appendChatMessage after the article is
-  // attached to the DOM. renderMessageMarkdown and renderMessageAttachments both
-  // bail out when !article.isConnected, which left user (and history) bubbles
-  // showing only the role label "你".
+
   refreshMessageActionButtons();
   return article;
 }
@@ -2655,12 +2882,28 @@ function renderProfiles() {
 				$("name").focus();
 			};
 			el.querySelector('[data-action="export"]').onclick = () => exportProfile(profile);
-			el.querySelector('[data-action="delete"]').onclick = () => run(async () => {
-				if (!confirm(`删除「${profile.name}」？不可撤销。`)) return false;
-				await api(`/api/profiles/${profile.id}`, { method: "DELETE" });
-				await refreshAll();
-				showView("home");
-			}, { button: el.querySelector('[data-action="delete"]'), busyLabel: "删除中…", success: "已删除" });
+			const deleteBtn = el.querySelector('[data-action="delete"]');
+			let deleteConfirmTimer = 0;
+			deleteBtn.onclick = () => {
+				if (deleteBtn.dataset.confirmDelete !== "1") {
+					deleteBtn.dataset.confirmDelete = "1";
+					deleteBtn.dataset.originalLabel = deleteBtn.textContent;
+					deleteBtn.textContent = "再次点击确认删除";
+					toast(`再次点击以删除「${profile.name}」`, "error");
+					clearTimeout(deleteConfirmTimer);
+					deleteConfirmTimer = setTimeout(() => {
+						deleteBtn.dataset.confirmDelete = "0";
+						deleteBtn.textContent = deleteBtn.dataset.originalLabel || "删除";
+					}, 5000);
+					return;
+				}
+				clearTimeout(deleteConfirmTimer);
+				run(async () => {
+					await api(`/api/profiles/${profile.id}`, { method: "DELETE" });
+					await refreshAll();
+					showView("home");
+				}, { button: deleteBtn, busyLabel: "删除中…", success: "已删除" });
+			};
 		}
 
     $("profiles").appendChild(el);
@@ -3205,6 +3448,7 @@ function fillForm(profile) {
   $("profileApiKey").value = profile.api_key || firstModelKey(profile) || "";
   $("upstreamFormat").value = upstreamFormatValue(profile.upstream_format);
   $("templateSelect").value = templateValue(profile);
+  $("defaultReasoningEffort").value = normalizeReasoningEffort(profile.default_reasoning_effort);
   state.availableModels = unique([
     ...(profile.available_models || []),
     ...(profile.models || []).map((model) => model.name || model.model),
@@ -3236,6 +3480,7 @@ function applyTemplate(key) {
     upstream_format: tpl.upstream_format,
     base_url: tpl.base_url,
     api_key: keepKey || tpl.api_key || "",
+    default_reasoning_effort: $("defaultReasoningEffort").value,
     default_model: "",
     web_search_model: "",
     subagents_models: { explore: "", plan: "" },
@@ -3276,7 +3521,7 @@ function stripSecrets(profile, includeKey) {
     upstream_format: profile.upstream_format,
     base_url: profile.base_url,
     default_model: profile.default_model,
-    default_reasoning_effort: profile.default_reasoning_effort || "high",
+    default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
     web_search_model: profile.web_search_model,
     subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
@@ -3288,8 +3533,9 @@ function stripSecrets(profile, includeKey) {
         api_backend: m.api_backend,
         extra_headers: m.extra_headers || {},
         supports_backend_search: !!m.supports_backend_search,
-        supports_reasoning_effort: true,
-        reasoning_efforts: m.reasoning_efforts?.length ? m.reasoning_efforts : ["low", "medium", "high"],
+        supports_reasoning_effort: !!m.supports_reasoning_effort || !!m.reasoning_efforts?.length,
+        reasoning_efforts: m.reasoning_efforts?.filter((effort) => REASONING_EFFORTS.includes(effort)) || [],
+        reasoning_efforts_source: m.reasoning_efforts_source || "default",
         context_window: m.context_window || 0,
         max_completion_tokens: m.max_completion_tokens || 0,
       };
@@ -3335,6 +3581,7 @@ function importProfileJSON(text) {
     base_url: profile.base_url || "",
     api_key: profile.api_key || "",
     default_model: profile.default_model || "",
+    default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
     web_search_model: profile.web_search_model || "",
     subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
@@ -3427,6 +3674,112 @@ function renderModelSelect() {
   }
 }
 
+function defaultModelCard() {
+  const selected = $("defaultModel")?.value || "";
+  return [...$("modelsBody")?.querySelectorAll(".modelCard") || []].find((card) => {
+    const name = card.querySelector('[data-field="name"]')?.value.trim();
+    const model = card.querySelector('[data-field="model"]')?.value.trim();
+    return selected && (selected === name || selected === model);
+  }) || null;
+}
+
+function setReasoningEffortOptions(recommended = [], statuses = {}) {
+  const select = $("defaultReasoningEffort");
+  if (!select) return;
+  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "low";
+  const recommendedSet = new Set(recommended.filter((effort) => REASONING_EFFORTS.includes(effort)));
+  select.replaceChildren(...REASONING_EFFORTS.map((effort) => {
+    const option = document.createElement("option");
+    option.value = effort;
+    const status = statuses[effort];
+    const suffix = status === "unsupported" ? " — 不支持" : status === "unknown" ? " — 未知" : recommendedSet.has(effort) ? " — 推荐" : "";
+    option.textContent = `${REASONING_EFFORT_LABELS[effort]}${suffix}`;
+    return option;
+  }));
+  if (current === "max" && statuses.max === "unsupported") {
+    select.value = "low";
+    const statusElement = $("reasoningEffortStatus");
+    if (statusElement) {
+      statusElement.textContent = "当前模型明确不支持 max，已自动回退到 low。";
+      statusElement.classList.add("warn");
+    }
+    return;
+  }
+  select.value = current;
+}
+
+function updateReasoningEffortMetadata() {
+  const status = $("reasoningEffortStatus");
+  if (!status) return;
+  status.classList.remove("ok", "warn", "fail");
+  const selected = $("defaultModel")?.value || "";
+  const card = defaultModelCard();
+  const efforts = card ? JSON.parse(card.dataset.reasoningEfforts || "[]") : [];
+  const source = card?.dataset.reasoningEffortsSource || "";
+  const declared = source === "declared" ? efforts : [];
+  setReasoningEffortOptions(declared);
+  if (!selected) {
+    status.textContent = "选择默认模型后可检测；所有档位均可手动选择。";
+  } else if (declared.length) {
+    status.textContent = `模型明确声明支持：${declared.join("、")}；其他档位仍可手动选择。`;
+    status.classList.add("ok");
+  } else {
+    status.textContent = "模型未声明支持档位，可检测；所有档位仍可手动选择。";
+  }
+}
+
+async function detectReasoningEfforts() {
+  const current = readForm();
+  if (!current.default_model) throw new Error("请先选择默认模型");
+  const card = defaultModelCard();
+  const model = card?.querySelector('[data-field="model"]')?.value.trim() || current.default_model;
+  const baseURL = card?.querySelector('[data-field="base_url"]')?.value.trim() || current.base_url;
+  const apiBackend = card?.querySelector('[data-field="api_backend"]')?.value || apiBackendFor(current.upstream_format);
+  const requestContext = `${current.id}\n${current.default_model}\n${model}\n${baseURL}\n${apiBackend}`;
+  const status = $("reasoningEffortStatus");
+  if (status) {
+    status.classList.remove("ok", "warn", "fail");
+    status.textContent = "正在检测支持档位…";
+  }
+  try {
+    const data = await api("/api/models/reasoning-efforts", {
+      method: "POST",
+      body: JSON.stringify({
+        profile_id: current.id, base_url: baseURL, api_key: current.api_key,
+        upstream_format: current.upstream_format, model, api_backend: apiBackend,
+      }),
+    });
+    const latest = readForm();
+    const latestCard = defaultModelCard();
+    const latestModel = latestCard?.querySelector('[data-field="model"]')?.value.trim() || latest.default_model;
+    const latestBaseURL = latestCard?.querySelector('[data-field="base_url"]')?.value.trim() || latest.base_url;
+    const latestBackend = latestCard?.querySelector('[data-field="api_backend"]')?.value || apiBackendFor(latest.upstream_format);
+    if (`${latest.id}\n${latest.default_model}\n${latestModel}\n${latestBaseURL}\n${latestBackend}` !== requestContext) return false;
+    const statuses = Object.fromEntries((data.results || []).map((item) => [item.effort, item.status]));
+    const recommended = data.source === "declared"
+      ? (data.efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort))
+      : (data.results || []).filter((item) => item.status === "accepted").map((item) => item.effort);
+    setReasoningEffortOptions(recommended, statuses);
+    const details = data.source === "declared"
+      ? [`模型明确声明支持：${recommended.join("、") || "未提供档位"}`]
+      : (data.results || []).map((item) => {
+      if (item.status === "accepted") return `${item.effort}：上游接受请求，可能静默忽略`;
+      if (item.status === "unsupported") return `${item.effort}：不支持`;
+      return `${item.effort}：未知`;
+    });
+    if (status) {
+      status.textContent = [details.join("；"), data.note].filter(Boolean).join("。") || "检测完成；所有档位仍可手动选择。";
+      status.classList.add(recommended.length ? "ok" : "warn");
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = `检测失败：${err.message || String(err)}；仍可手动选择所有档位。`;
+      status.classList.add("fail");
+    }
+    throw err;
+  }
+}
+
 function syncEnabledModelList(preferred) {
   const names = unique(readEnabledModelNames());
   const fields = [
@@ -3480,6 +3833,7 @@ function syncEnabledModelList(preferred) {
       sel.value = "";
     }
   });
+  updateReasoningEffortMetadata();
 }
 
 function syncAdvancedUI() {
@@ -3551,6 +3905,8 @@ function addModelCard(model = {}) {
   const modelBaseURL = model.base_url || $("baseUrl")?.value.trim() || "";
   const card = document.createElement("div");
   card.className = "modelCard";
+  card.dataset.reasoningEfforts = JSON.stringify((model.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort)));
+  card.dataset.reasoningEffortsSource = model.reasoning_efforts_source || "default";
   card.innerHTML = `
     <div class="modelCardTop">
       <strong>${escapeHtml(model.name || model.model || "新模型")}</strong>
@@ -3686,7 +4042,7 @@ function readForm() {
     api_key: apiKey,
     available_models: state.availableModels,
     default_model: $("defaultModel")?.value?.trim() || "",
-    default_reasoning_effort: "high",
+    default_reasoning_effort: $("defaultReasoningEffort")?.value || "low",
     web_search_model: $("webSearchModel")?.value?.trim() || "",
     subagents_models: {
       explore: $("subagentsExploreModel")?.value?.trim() || "",
@@ -3703,8 +4059,9 @@ function readForm() {
         api_backend: row.querySelector('[data-field="api_backend"]')?.value || apiBackendFor($("upstreamFormat").value),
         extra_headers: parseHeaders(row.querySelector('[data-field="extra_headers"]')?.value || ""),
         supports_backend_search: !!row.querySelector('[data-field="supports_backend_search"]')?.checked,
-        supports_reasoning_effort: true,
-        reasoning_efforts: ["low", "medium", "high"],
+        supports_reasoning_effort: JSON.parse(row.dataset.reasoningEfforts || "[]").length > 0,
+        reasoning_efforts: JSON.parse(row.dataset.reasoningEfforts || "[]"),
+        reasoning_efforts_source: row.dataset.reasoningEffortsSource || "default",
         context_window: num("context_window"),
         max_completion_tokens: num("max_completion_tokens"),
       };
@@ -3741,17 +4098,6 @@ function showConnectionStatus(ok, text) {
   el.classList.toggle("fail", !ok);
 }
 
-async function importCurrentConfig(button) {
-  const name = prompt("供应商名称", "Imported");
-  if (!name) return;
-  await run(async () => {
-    await api("/api/import", { method: "POST", body: JSON.stringify({ name, active: false }) });
-    await refreshAll();
-    const imported = state.profiles.find((p) => p.name === name) || state.profiles[state.profiles.length - 1];
-    if (imported) openEdit(imported);
-  }, { button, busyLabel: "导入中…", success: "已从 config.toml 导入" });
-}
-
 async function saveCurrentProfile() {
   const profile = readForm();
   if (!profile.name) throw new Error("请填写名称");
@@ -3762,16 +4108,595 @@ async function saveCurrentProfile() {
   return await api("/api/profiles", { method: "POST", body: JSON.stringify(profile) });
 }
 
+function clearSubscriptionLoginPoll() {
+  clearTimeout(subscriptionLoginPollTimer);
+  subscriptionLoginPollTimer = null;
+}
+
+function subscriptionStatusLabel(value) {
+  return ({
+    running: "运行中",
+    stopped: "已停止",
+    starting: "启动中",
+    stopping: "停止中",
+    pending: "等待浏览器授权",
+    wait: "等待浏览器授权",
+    waiting: "等待浏览器授权",
+    opening: "等待浏览器授权",
+    ok: "登录成功",
+    completed: "登录成功",
+    success: "登录成功",
+    failed: "失败",
+    error: "失败",
+    cancelled: "已取消",
+    ready: "可用",
+  })[value] || value || "未知";
+}
+
+function renderSubscriptionProxy(data) {
+  state.subscriptionProxy = data || {};
+  const service = data?.service || {};
+  $("subscriptionServiceBadge").textContent = subscriptionStatusLabel(service.state);
+  $("subscriptionServiceBadge").dataset.state = service.state || "unknown";
+  $("subscriptionServiceDetail").textContent = [service.version, service.pid ? `PID ${service.pid}` : "", service.config_path, service.last_error].filter(Boolean).join(" · ") || "服务未启动";
+  $("subscriptionBaseUrl").textContent = service.base_url || "—";
+  $("subscriptionApiKey").textContent = service.api_key_masked || "—";
+  const transitioning = ["starting", "stopping"].includes(service.state);
+  $("subscriptionStartBtn").disabled = transitioning || service.state === "running";
+  $("subscriptionStopBtn").disabled = transitioning || service.state !== "running";
+  $("subscriptionRestartBtn").disabled = transitioning || service.state !== "running";
+  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  $("subscriptionAccountCount").textContent = `${accounts.length} 个`;
+  $("subscriptionAccounts").innerHTML = accounts.length ? accounts.map((account) => `<article class="subscriptionAccount"><div><strong>${escapeHtml(account.name || account.label || account.email || account.id)}</strong><p>${escapeHtml([account.provider, account.email, account.status_message].filter(Boolean).join(" · "))}</p></div><span class="badge">${escapeHtml(subscriptionStatusLabel(account.status))}</span><div class="inlineActions"><button type="button" class="btn sm subscriptionAccountToggle" data-id="${escapeAttr(account.id)}" data-disabled="${account.disabled ? "1" : "0"}">${account.disabled ? "启用" : "禁用"}</button><button type="button" class="btn sm danger subscriptionAccountDelete" data-id="${escapeAttr(account.id)}">删除</button></div></article>`).join("") : '<p class="muted tiny">尚未登录订阅账号。</p>';
+  const models = Array.isArray(data?.models) ? data.models : [];
+  const groups = Object.groupBy ? Object.groupBy(models, (model) => model.provider || "其他") : models.reduce((result, model) => { (result[model.provider || "其他"] ||= []).push(model); return result; }, {});
+  $("subscriptionModels").innerHTML = Object.entries(groups).map(([provider, items]) => `<fieldset><legend>${escapeHtml(provider)}</legend>${items.map((model) => `<label class="check"><input type="checkbox" value="${escapeAttr(model.id)}" data-provider="${escapeAttr(model.provider)}" ${model.selected ? "checked" : ""}> <span>${escapeHtml(model.label || model.id)}</span></label>`).join("")}</fieldset>`).join("") || '<p class="muted tiny">暂无可用模型。</p>';
+  document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => { button.textContent = `${data?.providers?.[`${button.dataset.provider}_profile_id`] ? "更新" : "创建"} ${button.dataset.provider === "gemini" ? "Gemini" : button.dataset.provider === "grok" ? "Grok" : "Codex"} Provider`; });
+  bindSubscriptionDynamicHandlers();
+  if (data?.login_session) renderSubscriptionLoginSession(data.login_session);
+}
+
+async function loadSubscriptionProxy() {
+  renderSubscriptionProxy(await api("/api/subscription-proxy"));
+}
+
+function isSubscriptionLoginPending(status) {
+  return ["pending", "wait", "waiting", "opening"].includes(String(status || "").toLowerCase());
+}
+
+function isSubscriptionLoginCompleted(status) {
+  return ["completed", "success", "done", "authenticated", "authorized"].includes(String(status || "").toLowerCase());
+}
+
+function isSubscriptionLoginFailed(status) {
+  return ["failed", "error", "timeout", "timed_out", "expired", "cancelled", "canceled"].includes(String(status || "").toLowerCase());
+}
+
+function renderSubscriptionLoginSession(session) {
+  const box = $("subscriptionLoginSession");
+  if (!session?.id) { box.hidden = true; return; }
+  box.hidden = false;
+  const pending = isSubscriptionLoginPending(session.status);
+  const completed = isSubscriptionLoginCompleted(session.status);
+  const failed = isSubscriptionLoginFailed(session.status);
+  const hint = session.status_message
+    || (pending ? "已打开浏览器。请用要添加的 ChatGPT 账号登录并授权，完成后会自动回到这里。" : "")
+    || (completed ? "账号已写入订阅代理。" : "");
+  box.innerHTML = `<div class="rowBetween"><div><strong>${escapeHtml(subscriptionStatusLabel(session.status))}</strong><p class="muted tiny">${escapeHtml(session.provider || "codex")}${hint ? ` · ${escapeHtml(hint)}` : ""}</p></div><div class="inlineActions">${pending ? `<button type="button" id="subscriptionOpenLoginBtn" class="btn primary">重新打开浏览器</button><button type="button" id="subscriptionCancelLoginBtn" class="btn">取消</button>` : `<button type="button" id="subscriptionDismissLoginBtn" class="btn">关闭</button>`}</div></div>`;
+  if ($("subscriptionOpenLoginBtn")) {
+    $("subscriptionOpenLoginBtn").onclick = () => run(() => api("/api/subscription-proxy/login/open", { method: "POST", body: JSON.stringify({ id: session.id }) }), { button: $("subscriptionOpenLoginBtn"), busyLabel: "打开中…" });
+  }
+  if ($("subscriptionCancelLoginBtn")) {
+    $("subscriptionCancelLoginBtn").onclick = () => run(async () => {
+      await api(`/api/subscription-proxy/login?id=${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      clearSubscriptionLoginPoll();
+      await loadSubscriptionProxy();
+    }, { button: $("subscriptionCancelLoginBtn"), busyLabel: "取消中…" });
+  }
+  if ($("subscriptionDismissLoginBtn")) {
+    $("subscriptionDismissLoginBtn").onclick = () => { clearSubscriptionLoginPoll(); box.hidden = true; box.innerHTML = ""; };
+  }
+  clearSubscriptionLoginPoll();
+  if (pending) subscriptionLoginPollTimer = setTimeout(() => pollSubscriptionLogin(session.id), 1500);
+  if (completed) {
+    // Keep a short success state, then refresh account list.
+  }
+  if (failed && session.status_message) {
+    // Message already shown in the card.
+  }
+}
+
+async function pollSubscriptionLogin(id) {
+  if (state.view !== "subscriptionProxy") return;
+  try {
+    const result = await api(`/api/subscription-proxy/login?id=${encodeURIComponent(id)}`);
+    const session = result.session || result;
+    const wasPending = isSubscriptionLoginPending(session.status);
+    clearSubscriptionLoginPoll();
+    renderSubscriptionLoginSession(session);
+    if (isSubscriptionLoginCompleted(session.status)) {
+      toast("订阅账号登录成功", "success");
+      await loadSubscriptionProxy();
+      return;
+    }
+    if (isSubscriptionLoginFailed(session.status)) {
+      toast(session.status_message || "登录失败，请重试", "error");
+      return;
+    }
+    // renderSubscriptionLoginSession already re-arms the timer for pending states.
+    if (!wasPending && isSubscriptionLoginPending(session.status)) {
+      subscriptionLoginPollTimer = setTimeout(() => pollSubscriptionLogin(id), 1500);
+    }
+  } catch (err) {
+    toast(err.message, "error");
+    clearSubscriptionLoginPoll();
+  }
+}
+
+function bindSubscriptionDynamicHandlers() {
+  document.querySelectorAll(".subscriptionAccountToggle").forEach((button) => button.onclick = () => run(async () => { await api(`/api/subscription-proxy/accounts/${encodeURIComponent(button.dataset.id)}`, { method: "PATCH", body: JSON.stringify({ disabled: button.dataset.disabled !== "1" }) }); await loadSubscriptionProxy(); }, { button, busyLabel: "保存中…" }));
+  document.querySelectorAll(".subscriptionAccountDelete").forEach((button) => button.onclick = () => { if (!confirm("确定删除这个订阅账号？")) return; run(async () => { await api(`/api/subscription-proxy/accounts/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); await loadSubscriptionProxy(); }, { button, busyLabel: "删除中…", success: "账号已删除" }); });
+}
+
+// ——— SSH Remote File Manager ———
+
+const ssh = {
+  connections: [],
+  activeConn: null,
+  currentPath: "/",
+  selected: new Set(),
+  filter: null,
+};
+
+async function loadSSHConnections() {
+  ssh.connections = await api("/api/ssh/connections");
+  renderSSHConnections();
+}
+
+function renderSSHConnections() {
+  const box = $("sshConnections");
+  if (!ssh.connections.length) {
+    box.innerHTML = '<p class="muted tiny" style="padding:14px">还没有连接</p>';
+    return;
+  }
+  box.innerHTML = ssh.connections.map((c) => {
+    const status = c.connected ? "connected" : "";
+    return `<div class="sshConnection${ssh.activeConn === c.id ? " active" : ""}" data-id="${c.id}">
+      <div class="sshConnectionName"><span class="sshConnectionStatus ${status}"></span>${escapeHtml(c.name)}</div>
+      <div class="sshConnectionMeta">${escapeHtml(c.user)}@${escapeHtml(c.host)}:${c.port || 22}</div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".sshConnection").forEach((el) => {
+    el.onclick = () => connectSSH(el.dataset.id);
+  });
+}
+
+async function connectSSH(id) {
+  const conn = ssh.connections.find((c) => c.id === id);
+  if (!conn) return;
+  try {
+    let password = null;
+    if (conn.auth_type === "password") {
+      password = await customPrompt("输入 SSH 密码", "");
+      if (password === null) return;
+    }
+    await api("/api/ssh/connect", { method: "POST", body: JSON.stringify({ id, password }) });
+    ssh.activeConn = id;
+    ssh.currentPath = "/";
+    ssh.selected.clear();
+    toast(`已连接到 ${conn.name}`, "success");
+    await loadSSHConnections();
+    await loadSSHFiles("/");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+async function disconnectSSH(id) {
+  await api(`/api/ssh/disconnect/${id}`, { method: "POST" });
+  if (ssh.activeConn === id) { ssh.activeConn = null; renderSSHFiles([]); }
+  await loadSSHConnections();
+}
+
+async function loadSSHFiles(path) {
+  if (!ssh.activeConn) { renderSSHFiles([]); return; }
+  ssh.currentPath = path;
+  ssh.selected.clear();
+  updateSSHToolbar();
+  const infos = await api(`/api/ssh/files?conn_id=${encodeURIComponent(ssh.activeConn)}&path=${encodeURIComponent(path)}`);
+  renderSSHFiles(infos || []);
+  renderBreadcrumb(path);
+}
+
+function renderBreadcrumb(path) {
+  const box = $("sshBreadcrumb");
+  const parts = path.split("/").filter(Boolean);
+  let accum = "";
+  const links = [`<a data-path="/">/</a>`];
+  for (const part of parts) {
+    accum += "/" + part;
+    links.push(`<span class="sep">/</span><a data-path="${escapeAttr(accum)}">${escapeHtml(part)}</a>`);
+  }
+  box.innerHTML = links.join("");
+  box.querySelectorAll("a").forEach((a) => { a.onclick = () => loadSSHFiles(a.dataset.path); });
+}
+
+function renderSSHFiles(infos) {
+  const box = $("sshFiles");
+  const empty = $("sshEmpty");
+  if (!ssh.activeConn) { box.innerHTML = ""; empty.textContent = "选择一个连接开始浏览"; empty.hidden = false; return; }
+  if (!infos.length) { box.innerHTML = ""; empty.textContent = "目录为空"; empty.hidden = false; return; }
+  empty.hidden = true;
+  const filtered = ssh.filter ? infos.filter((f) => minimatch(f.name, ssh.filter)) : infos;
+  const dirs = filtered.filter((f) => f.is_dir).sort((a, b) => a.name.localeCompare(b.name));
+  const files = filtered.filter((f) => !f.is_dir).sort((a, b) => a.name.localeCompare(b.name));
+  box.innerHTML = [...dirs, ...files].map((f) => {
+    const icon = f.is_dir ? "📁" : getFileIcon(f.name);
+    const size = f.is_dir ? "" : formatSize(f.size);
+    const selected = ssh.selected.has(f.path) ? " selected" : "";
+    return `<div class="sshFileRow${selected}" data-path="${escapeAttr(f.path)}" data-dir="${f.is_dir}">
+      <input type="checkbox" class="sshFileCheck" ${ssh.selected.has(f.path) ? "checked" : ""}>
+      <span class="sshFileIcon">${icon}</span>
+      <span class="sshFileName">${escapeHtml(f.name)}</span>
+      <span class="sshFileSize">${size}</span>
+      <div class="sshFileActions">
+        <button type="button" class="btn sm danger sshFileActionBtn" data-action="delete">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".sshFileRow").forEach((row) => {
+    const path = row.dataset.path;
+    const isDir = row.dataset.dir === "true";
+    // Single click: select/deselect.
+    row.onclick = (e) => {
+      if (e.target.closest(".sshFileActionBtn") || e.target.classList.contains("sshFileCheck")) return;
+      toggleSSHSelection(path, row);
+    };
+    // Double-click: enter folder or preview file.
+    row.ondblclick = (e) => {
+      if (e.target.closest(".sshFileActionBtn") || e.target.classList.contains("sshFileCheck")) return;
+      if (isDir) { loadSSHFiles(path); }
+      else { previewSSHFile(path); }
+    };
+    const check = row.querySelector(".sshFileCheck");
+    if (check) check.onchange = () => { toggleSSHSelection(path, row); };
+    row.querySelectorAll(".sshFileActionBtn").forEach((btn) => {
+      btn.onclick = (e) => { e.stopPropagation(); handleSSFAction(btn.dataset.action, path, isDir); };
+    });
+  });
+}
+
+function toggleSSHSelection(path, row) {
+  if (ssh.selected.has(path)) { ssh.selected.delete(path); row.classList.remove("selected"); }
+  else { ssh.selected.add(path); row.classList.add("selected"); }
+  row.querySelector(".sshFileCheck").checked = ssh.selected.has(path);
+  updateSSHToolbar();
+}
+
+function updateSSHToolbar() {
+  const toolbar = $("sshToolbar");
+  const delBtn = $("sshDeleteSelectedBtn");
+  toolbar.hidden = !ssh.activeConn;
+  delBtn.hidden = ssh.selected.size === 0;
+  delBtn.textContent = `删除 (${ssh.selected.size})`;
+}
+
+async function handleSSFAction(action, path, isDir) {
+  if (action === "preview") { await previewSSHFile(path); }
+  else if (action === "delete") { await deleteSSFFiles([path]); }
+}
+
+// ——— SSH Floating Windows ———
+
+const sshWindows = new Map(); // path -> { el, textarea, status, savedContent }
+let sshWindowZIndex = 1000;
+
+async function previewSSHFile(path) {
+  // Don't reopen if already open.
+  if (sshWindows.has(path)) {
+    focusSSHWindow(path);
+    return;
+  }
+  try {
+    const data = await api(`/api/ssh/preview?conn_id=${encodeURIComponent(ssh.activeConn)}&path=${encodeURIComponent(path)}`);
+    createSSHWindow(data.name, path, data.content);
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function createSSHWindow(name, path, content) {
+  const win = document.createElement("div");
+  win.className = "sshWindow";
+  win.style.left = (80 + sshWindows.size * 30) + "px";
+  win.style.top = (60 + sshWindows.size * 30) + "px";
+  win.style.zIndex = ++sshWindowZIndex;
+  win.dataset.path = path;
+
+  win.innerHTML = `
+    <div class="sshWindowHeader">
+      <span class="sshWindowName">${escapeHtml(name)}</span>
+      <div class="sshWindowActions">
+        <button type="button" class="btn sm sshWindowBtn" data-action="save">保存</button>
+        <button type="button" class="sshWindowClose" data-action="close">×</button>
+      </div>
+    </div>
+    <div class="sshWindowBody">
+      <textarea spellcheck="false">${escapeHtml(content)}</textarea>
+    </div>
+    <div class="sshWindowFooter">
+      <span class="sshWindowStatus">已加载</span>
+      <span class="sshWindowStatus">${escapeHtml(path)}</span>
+    </div>
+  `;
+
+  $("sshWindows").append(win);
+
+  const textarea = win.querySelector("textarea");
+  const status = win.querySelector(".sshWindowStatus");
+  const savedContent = content;
+
+  sshWindows.set(path, { el: win, textarea, status, savedContent, name });
+
+  // Make draggable.
+  const header = win.querySelector(".sshWindowHeader");
+  makeDraggable(win, header);
+
+  // Focus on click.
+  win.onmousedown = () => { win.style.zIndex = ++sshWindowZIndex; };
+
+  // Close button.
+  win.querySelector(".sshWindowClose").onclick = () => closeSSHWindow(path);
+
+  // Save button.
+  win.querySelector('[data-action="save"]').onclick = () => saveSSHFile(path);
+
+  // Track dirty state.
+  textarea.addEventListener("input", () => {
+    const w = sshWindows.get(path);
+    if (w) {
+      status.textContent = textarea.value !== w.savedContent ? "未保存" : "已保存";
+      status.className = "sshWindowStatus " + (textarea.value !== w.savedContent ? "dirty" : "saved");
+    }
+  });
+
+  // Keyboard shortcut: Ctrl+S to save.
+  textarea.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      saveSSHFile(path);
+    }
+  });
+
+  status.textContent = "已加载";
+  status.className = "sshWindowStatus saved";
+}
+
+function makeDraggable(win, handle) {
+  let startX, startY, startLeft, startTop;
+  handle.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".sshWindowActions")) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = win.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
+    win.classList.add("dragging");
+    const onMove = (ev) => {
+      win.style.left = (startLeft + ev.clientX - startX) + "px";
+      win.style.top = (startTop + ev.clientY - startY) + "px";
+    };
+    const onUp = () => {
+      win.classList.remove("dragging");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
+function focusSSHWindow(path) {
+  const w = sshWindows.get(path);
+  if (w) {
+    w.el.style.zIndex = ++sshWindowZIndex;
+    w.textarea.focus();
+  }
+}
+
+function closeSSHWindow(path) {
+  const w = sshWindows.get(path);
+  if (!w) return;
+  // Warn if unsaved.
+  if (w.textarea.value !== w.savedContent) {
+    if (!confirm("有未保存的修改，确定关闭？")) return;
+  }
+  w.el.remove();
+  sshWindows.delete(path);
+}
+
+async function saveSSHFile(path) {
+  const w = sshWindows.get(path);
+  if (!w) return;
+  try {
+    await api("/api/ssh/save", {
+      method: "PUT",
+      body: JSON.stringify({ conn_id: ssh.activeConn, path, content: w.textarea.value }),
+    });
+    w.savedContent = w.textarea.value;
+    w.status.textContent = "已保存";
+    w.status.className = "sshWindowStatus saved";
+    toast("已保存", "success");
+  } catch (err) {
+    toast(err.message, "error");
+    w.status.textContent = "保存失败";
+    w.status.className = "sshWindowStatus dirty";
+  }
+}
+
+async function deleteSSFFiles(paths) {
+  const msg = paths.length === 1 ? `确定删除 "${paths[0].split("/").pop()}"？` : `确定删除选中的 ${paths.length} 个文件？`;
+  if (!confirm(msg)) return;
+  try {
+    await api("/api/ssh/files", { method: "DELETE", body: JSON.stringify({ paths }) });
+    ssh.selected.clear();
+    await loadSSHFiles(ssh.currentPath);
+    toast("已删除", "success");
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function getFileIcon(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  const icons = { py: "🐍", js: "📜", ts: "📘", json: "📋", md: "📝", sh: "⚙️", yaml: "📄", yml: "📄", txt: "📄", log: "📃", html: "🌐", css: "🎨", go: "🔵", rs: "🦀", java: "☕", c: "©️", cpp: "➕", rb: "💎", php: "🐘" };
+  return icons[ext] || "📄";
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1048576).toFixed(1) + " MB";
+  return (bytes / 1073741824).toFixed(1) + " GB";
+}
+
+// Simple glob matching for filters
+function minimatch(name, pattern) {
+  const re = new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+  return re.test(name);
+}
+
+// ——— SSH Dialog Handlers ———
+
+function showSSHConnDialog(existing) {
+  $("sshConnDialogTitle").textContent = existing ? "编辑连接" : "新建连接";
+  $("sshConnName").value = existing?.name || "";
+  $("sshConnHost").value = existing?.host || "";
+  $("sshConnPort").value = existing?.port || 22;
+  $("sshConnUser").value = existing?.user || "";
+  $("sshConnAuthType").value = existing?.auth_type || "key";
+  $("sshConnKeyPath").value = existing?.key_path || "~/.ssh/id_rsa";
+  updateSSHAuthUI();
+  $("sshConnDialog").showModal();
+}
+
+async function importSSHConfig() {
+  try {
+    const data = await api("/api/ssh/import-ssh-config", { method: "POST", body: JSON.stringify({}) });
+    const available = data.available || [];
+    if (!available.length) { toast("~/.ssh/config 中没有找到连接", "info"); return; }
+    // Let user pick which to import.
+    const picked = await customPrompt(
+      `找到 ${available.length} 个连接。输入要导入的序号（逗号分隔，或 all 全部）：`,
+      "all"
+    );
+    if (picked === null) return;
+    let ids = [];
+    if (picked.trim().toLowerCase() === "all") {
+      ids = available.map((c) => c.id);
+    } else {
+      const idxs = picked.split(",").map((s) => parseInt(s.trim()) - 1).filter((i) => i >= 0 && i < available.length);
+      ids = idxs.map((i) => available[i].id);
+    }
+    const result = await api("/api/ssh/import-ssh-config", { method: "POST", body: JSON.stringify({ ids }) });
+    toast(`已导入 ${result.imported?.length || 0} 个连接`, "success");
+    await loadSSHConnections();
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function updateSSHAuthUI() {
+  const isKey = $("sshConnAuthType").value === "key";
+  $("sshConnKeyPathWrap").hidden = !isKey;
+  $("sshConnPasswordWrap").hidden = isKey;
+}
+
+async function saveSSHConnection() {
+  const cfg = {
+    id: ssh.editingConn || "ssh_" + Date.now(),
+    name: $("sshConnName").value.trim(),
+    host: $("sshConnHost").value.trim(),
+    port: parseInt($("sshConnPort").value) || 22,
+    user: $("sshConnUser").value.trim(),
+    auth_type: $("sshConnAuthType").value,
+    key_path: $("sshConnKeyPath").value.trim(),
+  };
+  if (!cfg.name || !cfg.host || !cfg.user) { toast("请填写完整", "error"); return; }
+  const url = ssh.editingConn ? `/api/ssh/connections/${cfg.id}` : "/api/ssh/connections";
+  const method = ssh.editingConn ? "PUT" : "POST";
+  await api(url, { method, body: JSON.stringify(cfg) });
+  $("sshConnDialog").close();
+  ssh.editingConn = null;
+  await loadSSHConnections();
+  toast("已保存", "success");
+}
+
 // Navigation
 $("navHomeBtn").onclick = () => showView("home");
 $("navSettingsBtn").onclick = () => showView("settings");
+$("navSubscriptionProxyBtn").onclick = () => showView("subscriptionProxy");
+$("navSSHBtn").onclick = () => showView("ssh");
+if ($("refreshCacheStatsBtn")) {
+  $("refreshCacheStatsBtn").onclick = () => run(loadCacheStats, {
+    button: $("refreshCacheStatsBtn"),
+    busyLabel: "刷新中…",
+  });
+}
+if ($("cacheStatsHours")) {
+  $("cacheStatsHours").onchange = () => {
+    loadCacheStats().catch((err) => toast(err.message, "error"));
+  };
+}
+$("backFromSubscriptionProxyBtn").onclick = () => showView("home");
+$("subscriptionRefreshBtn").onclick = () => run(loadSubscriptionProxy, { button: $("subscriptionRefreshBtn"), busyLabel: "刷新中…" });
+for (const action of ["start", "stop", "restart"]) $("subscription" + action[0].toUpperCase() + action.slice(1) + "Btn").onclick = (event) => run(async () => { await api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) }); await loadSubscriptionProxy(); }, { button: event.currentTarget, busyLabel: "处理中…" });
+document.querySelectorAll(".subscriptionLoginBtn").forEach((button) => button.onclick = () => {
+  if (subscriptionLoginBusy) return;
+  subscriptionLoginBusy = true;
+  run(async () => {
+    const result = await api("/api/subscription-proxy/login", {
+      method: "POST",
+      body: JSON.stringify({ provider: button.dataset.provider }),
+    });
+    const session = result.session || result;
+    renderSubscriptionLoginSession(session);
+    toast("已打开浏览器，请用要添加的账号完成授权", "info");
+  }, { button, busyLabel: "打开浏览器…" }).finally(() => {
+    subscriptionLoginBusy = false;
+  });
+});
+$("saveSubscriptionModelsBtn").onclick = () => run(async () => { const selected = [...document.querySelectorAll("#subscriptionModels input:checked")].map((input) => ({ id: input.value, provider: input.dataset.provider })); await api("/api/subscription-proxy/models", { method: "PUT", body: JSON.stringify({ models: selected }) }); await loadSubscriptionProxy(); }, { button: $("saveSubscriptionModelsBtn"), busyLabel: "保存中…", success: "模型已保存" });
+document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => button.onclick = () => run(async () => { await api("/api/subscription-proxy/providers", { method: "POST", body: JSON.stringify({}) }); await refreshAll(); await loadSubscriptionProxy(); }, { button, busyLabel: "更新中…", success: "Provider 已更新" }));
+$("runSubscriptionDiagnosticsBtn").onclick = () => run(async () => { const result = await api("/api/subscription-proxy/diagnostics", { method: "POST" }); $("subscriptionDiagnostics").textContent = JSON.stringify(result, null, 2); }, { button: $("runSubscriptionDiagnosticsBtn"), busyLabel: "诊断中…" });
 $("backFromEditBtn").onclick = () => showView("home");
 $("backFromSettingsBtn").onclick = () => showView("home");
 $("chatBtn").onclick = () => showView("chat");
 $("addBtn").onclick = () => openEdit(newProfileDraft());
 $("emptyNewBtn").onclick = () => openEdit(newProfileDraft());
-$("emptyImportBtn").onclick = () => importCurrentConfig($("emptyImportBtn"));
-$("importHeaderBtn").onclick = () => importCurrentConfig($("importHeaderBtn"));
+
+// SSH event handlers
+$("sshNewConnBtn").onclick = () => { ssh.editingConn = null; showSSHConnDialog(null); };
+$("sshImportBtn").onclick = () => importSSHConfig();
+$("sshRefreshBtn").onclick = () => loadSSHConnections();
+$("sshRefreshFilesBtn").onclick = () => loadSSHFiles(ssh.currentPath);
+$("sshSelectAll").onchange = (e) => {
+  const rows = document.querySelectorAll(".sshFileRow");
+  rows.forEach((row) => {
+    const path = row.dataset.path;
+    if (e.target.checked) { ssh.selected.add(path); row.classList.add("selected"); }
+    else { ssh.selected.delete(path); row.classList.remove("selected"); }
+    row.querySelector(".sshFileCheck").checked = e.target.checked;
+  });
+  updateSSHToolbar();
+};
+$("sshDeleteSelectedBtn").onclick = () => deleteSSFFiles([...ssh.selected]);
+document.querySelectorAll(".sshFilter").forEach((btn) => {
+  btn.onclick = () => {
+    const active = ssh.filter === btn.dataset.filter;
+    ssh.filter = active ? null : btn.dataset.filter;
+    document.querySelectorAll(".sshFilter").forEach((b) => b.classList.toggle("active", b.dataset.filter === ssh.filter && !active));
+    loadSSHFiles(ssh.currentPath);
+  };
+});
+$("sshConnCancel").onclick = () => $("sshConnDialog").close();
+$("sshConnForm").onsubmit = (e) => { e.preventDefault(); saveSSHConnection(); };
+$("sshConnAuthType").onchange = updateSSHAuthUI;
 $("reapplyBtn").onclick = () => {
   const id = state.status?.active_profile?.id;
   const name = state.status?.active_profile?.name;
@@ -3843,7 +4768,7 @@ if ($("configPreviewBlock")) {
     if ($("configPreviewBlock").open) refreshProviderConfigPreview();
   });
 }
-["name", "baseUrl", "profileApiKey", "defaultModel", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel", "upstreamFormat"].forEach((id) => {
+["name", "baseUrl", "profileApiKey", "defaultModel", "defaultReasoningEffort", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel", "upstreamFormat"].forEach((id) => {
   const el = $(id);
   if (!el) return;
   el.addEventListener("input", scheduleProviderPreview);
@@ -3852,6 +4777,7 @@ if ($("configPreviewBlock")) {
     el.addEventListener("input", syncModelBaseURLs);
     el.addEventListener("change", syncModelBaseURLs);
   }
+  if (id === "defaultModel") el.addEventListener("change", updateReasoningEffortMetadata);
 });
 
 if ($("providerSearch")) {
@@ -3883,6 +4809,9 @@ $("templateSelect").onchange = () => {
 };
 $("cancelBtn").onclick = () => fillForm(newProfileDraft());
 $("upstreamFormat").onchange = syncModelBackends;
+$("detectReasoningEffortsBtn").onclick = () => run(detectReasoningEfforts, {
+  button: $("detectReasoningEffortsBtn"), busyLabel: "检测中…",
+});
 $("copyProfileBtn").onclick = () => {
   const current = readForm();
   if (!current.name && !current.base_url) {
@@ -3910,7 +4839,7 @@ $("importProfileFile").onchange = async (event) => {
     toast(err.message || String(err), "error");
   }
 };
-$("importBtn").onclick = () => importCurrentConfig($("importBtn"));
+
 $("privacyProtectBtn").onclick = () => run(async () => {
 	await api("/api/config/privacy", { method: "POST" });
 	if ($("configPreviewBlock")?.open) await refreshProviderConfigPreview();
@@ -4210,25 +5139,23 @@ $("openGrokPoolAuthDirBtn").onclick = () => run(
   { button: $("openGrokPoolAuthDirBtn"), busyLabel: "打开中…" },
 );
 
-$("importGrokPoolPathBtn").onclick = () => {
-  const path = prompt("输入服务器本机上的认证目录绝对路径：", $("grokPoolAuthDir").value.trim());
+$("importGrokPoolPathBtn").onclick = () => run(async () => {
+  const path = await customPrompt("输入服务器本机上的认证目录绝对路径：", $("grokPoolAuthDir").value.trim());
   if (!path?.trim()) return;
-  run(async () => {
-    const response = await api("/api/grok-pool/import-dir", {
-      method: "POST",
-      body: JSON.stringify({ path: path.trim(), recursive: true }),
-    });
-    await refreshAll();
-    if (response.result?.failed?.length) {
-      toast(`部分文件失败：${response.result.failed.join("；")}`, "error");
-      return false;
-    }
-  }, {
-    button: $("importGrokPoolPathBtn"),
-    busyLabel: "导入中…",
-    success: "指定目录已导入号池",
+  const response = await api("/api/grok-pool/import-dir", {
+    method: "POST",
+    body: JSON.stringify({ path: path.trim(), recursive: true }),
   });
-};
+  await refreshAll();
+  if (response.result?.failed?.length) {
+    toast(`部分文件失败：${response.result.failed.join("；")}`, "error");
+    return false;
+  }
+}, {
+  button: $("importGrokPoolPathBtn"),
+  busyLabel: "导入中…",
+  success: "指定目录已导入号池",
+});
 
 $("startCpaMintBtn").onclick = () => run(async () => {
   cpaMintTerminalNotice = "";

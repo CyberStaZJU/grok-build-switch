@@ -96,7 +96,7 @@ func (s *Store) SetActualPort(port int) error {
 }
 
 func (s *Store) readLocked() (Settings, error) {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return Settings{}, err
 	}
 	data, err := os.ReadFile(s.path)
@@ -145,7 +145,7 @@ func (s *Store) writeLocked(current Settings) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+".*.tmp")

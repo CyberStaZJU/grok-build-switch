@@ -261,14 +261,15 @@ func (s *Server) upsertGrokAuthProfile() (profiles.Profile, error) {
 		}
 	}
 	profile := profiles.Profile{
-		Name:            grokAuthProfileName,
-		Template:        "responses",
-		UpstreamFormat:  "openai_responses",
-		BaseURL:         baseURL,
-		APIKey:          apiKey,
-		AvailableModels: modelNames(defaultGrokAuthModels),
-		DefaultModel:    "grok-4.5",
-		WebSearchModel:  "grok-4.5",
+		Name:                   grokAuthProfileName,
+		Template:               "responses",
+		UpstreamFormat:         "openai_responses",
+		BaseURL:                baseURL,
+		APIKey:                 apiKey,
+		AvailableModels:        modelNames(defaultGrokAuthModels),
+		DefaultModel:           "grok-4.5",
+		DefaultReasoningEffort: "low",
+		WebSearchModel:         "grok-4.5",
 		SubagentsModels: profiles.SubagentsModels{
 			Explore: "grok-4.5",
 			Plan:    "grok-composer-2.5-fast",
@@ -279,6 +280,7 @@ func (s *Server) upsertGrokAuthProfile() (profiles.Profile, error) {
 		return s.Profiles.Create(profile)
 	}
 	profile.DefaultModel = firstNonEmptyServer(existing.DefaultModel, profile.DefaultModel)
+	profile.DefaultReasoningEffort = firstNonEmptyServer(existing.DefaultReasoningEffort, profile.DefaultReasoningEffort)
 	profile.WebSearchModel = firstNonEmptyServer(existing.WebSearchModel, profile.WebSearchModel)
 	profile.SubagentsModels.Explore = firstNonEmptyServer(existing.SubagentsModels.Explore, profile.SubagentsModels.Explore)
 	profile.SubagentsModels.Plan = firstNonEmptyServer(existing.SubagentsModels.Plan, profile.SubagentsModels.Plan)

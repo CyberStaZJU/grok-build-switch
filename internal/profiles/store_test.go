@@ -33,6 +33,22 @@ func TestStorePreservesProfileTemplate(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	created, err := store.Create(Profile{Name: "kimi", DefaultReasoningEffort: "low", Models: []ModelDef{{Name: "kimi", Model: "kimi", SupportsReasoningEffort: true, ReasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, ReasoningEffortsSource: "declared"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+	if !stringSlicesEqual(got.Models[0].ReasoningEfforts, want) || got.Models[0].ReasoningEffortsSource != "declared" {
+		t.Fatalf("model metadata = %#v", got.Models[0])
+	}
+}
+
 func TestNormalizeAddsReasoningEffortDefaults(t *testing.T) {
 	profile := Normalize(Profile{
 		DefaultModel: "grok-4.5",
@@ -48,6 +64,13 @@ func TestNormalizeAddsReasoningEffortDefaults(t *testing.T) {
 	want := []string{"low", "medium", "high"}
 	if !stringSlicesEqual(model.ReasoningEfforts, want) {
 		t.Fatalf("ReasoningEfforts = %#v, want %#v", model.ReasoningEfforts, want)
+	}
+	if model.ReasoningEffortsSource != "default" {
+		t.Fatalf("ReasoningEffortsSource = %q, want default", model.ReasoningEffortsSource)
+	}
+	declared := Normalize(Profile{Models: []ModelDef{{Name: "m", ReasoningEffortsSource: "declared"}}})
+	if declared.Models[0].ReasoningEffortsSource != "declared" {
+		t.Fatalf("explicit ReasoningEffortsSource was overwritten: %#v", declared.Models[0])
 	}
 }
 

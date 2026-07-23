@@ -238,6 +238,9 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 			"supports_reasoning_effort": model.SupportsReasoningEffort,
 			"reasoning_efforts":         model.ReasoningEfforts,
 		}
+		if strings.TrimSpace(model.ReasoningEffortsSource) != "" {
+			entry["reasoning_efforts_source"] = model.ReasoningEffortsSource
+		}
 		// Omit zero values so Grok uses its own defaults:
 		// - omitted context_window → ~200k for new models (or built-in inherit)
 		// - omitted max_completion_tokens → global [models] default if set
@@ -384,6 +387,7 @@ func readModels(doc map[string]any) []profiles.ModelDef {
 			SupportsBackendSearch:   boolAt(table, "supports_backend_search"),
 			SupportsReasoningEffort: boolAt(table, "supports_reasoning_effort"),
 			ReasoningEfforts:        stringSliceAt(table, "reasoning_efforts"),
+			ReasoningEffortsSource:  stringAt(table, "reasoning_efforts_source"),
 			ContextWindow:           intAt(table, "context_window"),
 			MaxCompletionTokens:     intAt(table, "max_completion_tokens"),
 		})
@@ -713,7 +717,7 @@ func trimUTF8BOM(data []byte) []byte {
 }
 
 func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")

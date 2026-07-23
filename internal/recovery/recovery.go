@@ -26,6 +26,9 @@ func BackupCorrupt(path string) (string, error) {
 		if err := os.Rename(path, backup); err != nil {
 			return "", err
 		}
+		if err := os.Chmod(backup, 0o600); err != nil {
+			return "", err
+		}
 		return backup, nil
 	}
 	return "", fmt.Errorf("cannot allocate corrupt backup name for %s", path)

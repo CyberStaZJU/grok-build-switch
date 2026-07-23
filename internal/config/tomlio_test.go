@@ -514,6 +514,9 @@ func TestApplyProfileWritesReasoningEffortDefaults(t *testing.T) {
 			t.Fatalf("reasoning_efforts = %#v, want %#v", got, want)
 		}
 	}
+	if got := stringAt(model, "reasoning_efforts_source"); got != "default" {
+		t.Fatalf("reasoning_efforts_source = %q, want default", got)
+	}
 }
 
 func TestImportLegacySubagentsDefaultModelMigrates(t *testing.T) {
@@ -571,6 +574,7 @@ model = "grok-4.5"
 api_backend = "responses"
 supports_reasoning_effort = true
 reasoning_efforts = ["low", "medium"]
+reasoning_efforts_source = "declared"
 `
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
@@ -588,5 +592,8 @@ reasoning_efforts = ["low", "medium"]
 	want := []string{"low", "medium"}
 	if got := profile.Models[0].ReasoningEfforts; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("ReasoningEfforts = %#v", got)
+	}
+	if got := profile.Models[0].ReasoningEffortsSource; got != "declared" {
+		t.Fatalf("ReasoningEffortsSource = %q", got)
 	}
 }

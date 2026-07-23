@@ -191,6 +191,38 @@ func (b *Bridge) RenameStoredSession(id, title string) error {
 	return nil
 }
 
+// DeleteStoredSession removes a stored session directory under ~/.grok/sessions
+// (summary, chat history, terminals, and grok_switch sidecars).
+func (b *Bridge) DeleteStoredSession(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, `/\\`) {
+		return errors.New("会话 ID 无效")
+	}
+	dir, _, err := b.findStoredSession(id)
+	if err != nil {
+		return err
+	}
+	// Safety: only delete under <grokHome>/sessions/<cwd>/<id>
+	root := filepath.Clean(filepath.Join(b.grokHome, "sessions"))
+	cleanDir := filepath.Clean(dir)
+	rel, err := filepath.Rel(root, cleanDir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("会话路径无效，拒绝删除")
+	}
+	if filepath.Base(cleanDir) != id {
+		return fmt.Errorf("会话目录与 ID 不匹配，拒绝删除")
+	}
+	if err := os.RemoveAll(cleanDir); err != nil {
+		return fmt.Errorf("删除会话文件失败: %w", err)
+	}
+	// Best-effort: drop empty cwd bucket directories.
+	parent := filepath.Dir(cleanDir)
+	if entries, readErr := os.ReadDir(parent); readErr == nil && len(entries) == 0 {
+		_ = os.Remove(parent)
+	}
+	return nil
+}
+
 func (s storedSummary) toSessionSummary() SessionSummary {
 	title := strings.TrimSpace(s.CustomTitle)
 	if title == "" {

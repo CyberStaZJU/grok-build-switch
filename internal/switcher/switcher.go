@@ -36,6 +36,9 @@ func (s *Switcher) Activate(id string) (profiles.Profile, error) {
 	if err != nil {
 		return profiles.Profile{}, err
 	}
+	if profile.DefaultReasoningEffort == "max" {
+		return profiles.Profile{}, fmt.Errorf("无法启用：当前 Grok CLI 的 models.default_reasoning_effort schema 不支持 max；该档位已保存在模型能力元数据中，请改用 xhigh 或更低档位后再启用")
+	}
 	if _, err := s.Backup(); err != nil {
 		return profiles.Profile{}, err
 	}
@@ -118,7 +121,7 @@ func (s *Switcher) EnsureDefaultProfile() error {
 }
 
 func (s *Switcher) Backup() (Backup, error) {
-	if err := os.MkdirAll(s.BackupsDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.BackupsDir, 0o700); err != nil {
 		return Backup{}, err
 	}
 	data, err := os.ReadFile(s.ConfigPath)
@@ -128,7 +131,7 @@ func (s *Switcher) Backup() (Backup, error) {
 	now := time.Now()
 	file := fmt.Sprintf("config-%s.toml", now.Format("20060102-150405"))
 	path := filepath.Join(s.BackupsDir, file)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return Backup{}, err
 	}
 	if err := s.PruneBackups(10); err != nil {
@@ -247,7 +250,7 @@ func (s *Switcher) WriteConfig(content []byte) error {
 }
 
 func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")

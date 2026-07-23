@@ -32,31 +32,36 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/registrar"
 	"grok_switch/internal/remoteaccess"
+	"grok_switch/internal/ssh"
 	"grok_switch/internal/settings"
 	"grok_switch/internal/switcher"
 )
 
 type Server struct {
-	Paths        paths.Paths
-	Profiles     *profiles.Store
-	Settings     *settings.Store
-	RemoteAccess *remoteaccess.Store
-	GrokAuth     *grokauth.Store
-	GrokPool     *grokpool.Manager
-	CpaMint      *cpamint.Service
-	Registrar    *registrar.Service
-	Switcher     *switcher.Switcher
-	Agent        AgentService
-	Assets       embed.FS
-	ExePath      string
-	ActualPort   int
-	onChanged    func()
-	listenerMu   sync.Mutex
-	listener     net.Listener
-	bindHost     string
-	httpServer   *http.Server
-	loginMu      sync.Mutex
-	loginFails   map[string]loginFailure
+	Paths                  paths.Paths
+	Profiles               *profiles.Store
+	Settings               *settings.Store
+	RemoteAccess           *remoteaccess.Store
+	GrokAuth               *grokauth.Store
+	GrokPool               *grokpool.Manager
+	CpaMint                *cpamint.Service
+	Registrar              *registrar.Service
+	Switcher               *switcher.Switcher
+	Agent                  AgentService
+	SubscriptionProxy      SubscriptionProxy
+	SSH                    *ssh.Handler
+	BrowserOpener          BrowserOpener
+	Assets                 embed.FS
+	ExePath                string
+	ActualPort             int
+	onChanged              func()
+	listenerMu             sync.Mutex
+	listener               net.Listener
+	bindHost               string
+	httpServer             *http.Server
+	loginMu                sync.Mutex
+	loginFails             map[string]loginFailure
+	subscriptionProxyState *subscriptionProxySelection
 }
 
 func (s *Server) SetOnChanged(fn func()) {
@@ -191,6 +196,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/pair", s.handlePair)
 	mux.HandleFunc("/api/lan-access", s.handleLANAccess)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/cache-stats", s.handleCacheStats)
 	mux.HandleFunc("/api/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/profiles/", s.handleProfileByID)
 	mux.HandleFunc("/api/official/activate", s.handleOfficialActivate)
@@ -199,6 +205,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/backups/", s.handleBackupByFile)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/models/fetch", s.handleFetchModels)
+	mux.HandleFunc("/api/models/reasoning-efforts", s.handleReasoningEfforts)
 	mux.HandleFunc("/api/connection/test", s.handleConnectionTest)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/config/preview", s.handleConfigPreview)
@@ -228,8 +235,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/sessions/", s.handleAgentSessionHistory)
 	mux.HandleFunc("/api/agent/session/rename", s.handleAgentRename)
 	mux.HandleFunc("/api/agent/ws", s.handleAgentWebSocket)
+	mux.HandleFunc("/api/subscription-proxy", s.handleSubscriptionProxy)
+	mux.HandleFunc("/api/subscription-proxy/service", s.handleSubscriptionProxyService)
+	mux.HandleFunc("/api/subscription-proxy/login", s.handleSubscriptionProxyLogin)
+	mux.HandleFunc("/api/subscription-proxy/login/open", s.handleSubscriptionProxyLoginOpen)
+	mux.HandleFunc("/api/subscription-proxy/accounts/", s.handleSubscriptionProxyAccount)
+	mux.HandleFunc("/api/subscription-proxy/models", s.handleSubscriptionProxyModels)
+	mux.HandleFunc("/api/subscription-proxy/providers", s.handleSubscriptionProxyProviders)
+	mux.HandleFunc("/api/subscription-proxy/diagnostics", s.handleSubscriptionProxyDiagnostics)
 	mux.HandleFunc("/grok/v1", s.handleGrokProxy)
 	mux.HandleFunc("/grok/v1/", s.handleGrokProxy)
+	if s.SSH != nil {
+		s.SSH.RegisterRoutes(mux)
+	}
 	mux.HandleFunc("/", s.handleStatic)
 }
 
@@ -537,6 +555,180 @@ func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"models": models})
+}
+
+type reasoningEffortProbeResult struct {
+	Effort string `json:"effort"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type reasoningEffortsResponse struct {
+	Efforts []string                     `json:"efforts"`
+	Source  string                       `json:"source"`
+	Note    string                       `json:"note"`
+	Results []reasoningEffortProbeResult `json:"results,omitempty"`
+}
+
+var reasoningEffortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+func (s *Server) handleReasoningEfforts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req struct {
+		ProfileID      string `json:"profile_id"`
+		BaseURL        string `json:"base_url"`
+		APIKey         string `json:"api_key"`
+		UpstreamFormat string `json:"upstream_format"`
+		Model          string `json:"model"`
+		APIBackend     string `json:"api_backend"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	var profile profiles.Profile
+	if req.ProfileID != "" && s.Profiles != nil {
+		if stored, err := s.Profiles.Get(req.ProfileID); err == nil {
+			profile = stored
+			if req.BaseURL == "" {
+				req.BaseURL = stored.BaseURL
+			}
+			if req.APIKey == "" {
+				req.APIKey = stored.EffectiveAPIKey()
+			}
+			if req.UpstreamFormat == "" {
+				req.UpstreamFormat = stored.UpstreamFormat
+			}
+		}
+	}
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		writeError(w, fmt.Errorf("model is required"), http.StatusBadRequest)
+		return
+	}
+	for _, def := range profile.Models {
+		if def.Model != model && def.Name != model {
+			continue
+		}
+		if req.BaseURL == "" {
+			req.BaseURL = def.BaseURL
+		}
+		if req.APIKey == "" {
+			req.APIKey = def.APIKey
+		}
+		if req.APIBackend == "" {
+			req.APIBackend = def.APIBackend
+		}
+		if def.SupportsReasoningEffort && def.ReasoningEffortsSource == "declared" {
+			if efforts := normalizeReasoningEfforts(def.ReasoningEfforts); len(efforts) > 0 {
+				writeJSON(w, reasoningEffortsResponse{Efforts: efforts, Source: "declared", Note: "使用 Profile 中该模型声明的推理强度，未向上游发送探测请求。"})
+				return
+			}
+		}
+		break
+	}
+	backend := req.APIBackend
+	if backend == "" {
+		backend = profiles.APIBackendForUpstreamFormat(req.UpstreamFormat)
+	}
+	if backend == "messages" {
+		writeJSON(w, reasoningEffortsResponse{Efforts: []string{}, Source: "unknown", Note: "messages 后端没有可安全通用探测的 reasoning_effort 字段，未发送探测请求。"})
+		return
+	}
+	if strings.TrimSpace(req.BaseURL) == "" {
+		writeError(w, fmt.Errorf("base_url is required"), http.StatusBadRequest)
+		return
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	results := make([]reasoningEffortProbeResult, 0, len(reasoningEffortOrder))
+	accepted := make([]string, 0, len(reasoningEffortOrder))
+	for _, effort := range reasoningEffortOrder {
+		result := probeReasoningEffort(r.Context(), client, req.BaseURL, req.APIKey, backend, model, effort)
+		results = append(results, result)
+		if result.Status == "accepted" {
+			accepted = append(accepted, effort)
+		}
+	}
+	source := "probe"
+	if len(accepted) == 0 {
+		source = "unknown"
+	}
+	writeJSON(w, reasoningEffortsResponse{Efforts: accepted, Source: source, Note: "accepted 仅表示上游接受了请求；上游仍可能静默忽略 reasoning_effort。", Results: results})
+}
+
+func normalizeReasoningEfforts(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		seen[strings.ToLower(strings.TrimSpace(value))] = true
+	}
+	out := make([]string, 0, len(reasoningEffortOrder))
+	for _, effort := range reasoningEffortOrder {
+		if seen[effort] {
+			out = append(out, effort)
+		}
+	}
+	return out
+}
+
+func probeReasoningEffort(ctx context.Context, client *http.Client, baseURL, apiKey, backend, model, effort string) reasoningEffortProbeResult {
+	result := reasoningEffortProbeResult{Effort: effort, Status: "unknown"}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	body := map[string]any{"model": model, "reasoning_effort": effort}
+	endpoint := baseURL + "/chat/completions"
+	if backend == "responses" {
+		endpoint = baseURL + "/responses"
+		body["input"] = "ping"
+		body["max_output_tokens"] = 1
+	} else {
+		body["messages"] = []map[string]string{{"role": "user", "content": "ping"}}
+		body["max_tokens"] = 1
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		result.Error = "无法编码探测请求"
+		return result
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		result.Error = "无法创建探测请求"
+		return result
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = "上游网络请求失败或超时"
+		return result
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		result.Status = "accepted"
+		return result
+	}
+	message := strings.TrimSpace(string(raw))
+	if apiKey != "" {
+		message = strings.ReplaceAll(message, apiKey, "[REDACTED]")
+	}
+	lower := strings.ToLower(message)
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+		(strings.Contains(lower, "unsupported") || strings.Contains(lower, "invalid") || strings.Contains(lower, "unknown")) &&
+		(strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning effort") || strings.Contains(lower, "effort")) {
+		result.Status = "unsupported"
+	}
+	if message == "" {
+		result.Error = resp.Status
+	} else {
+		result.Error = fmt.Sprintf("%s: %s", resp.Status, message)
+	}
+	return result
 }
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {

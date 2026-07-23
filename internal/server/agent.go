@@ -34,6 +34,7 @@ type AgentService interface {
 	ListStoredSessions(string, int) ([]agentbridge.SessionSummary, error)
 	StoredSessionHistory(string) (agentbridge.SessionHistory, error)
 	RenameStoredSession(string, string) error
+	DeleteStoredSession(string) error
 }
 
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
@@ -185,25 +186,40 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentSessionHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
 	if s.Agent == nil {
 		writeError(w, errors.New("Agent 服务未初始化"), http.StatusServiceUnavailable)
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/agent/sessions/")
-	history, err := s.Agent.StoredSessionHistory(id)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, os.ErrNotExist) {
-			status = http.StatusNotFound
-		}
-		writeError(w, err, status)
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/agent/sessions/"), "/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, errors.New("会话 ID 无效"), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, history)
+	switch r.Method {
+	case http.MethodGet:
+		history, err := s.Agent.StoredSessionHistory(id)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			writeError(w, err, status)
+			return
+		}
+		writeJSON(w, history)
+	case http.MethodDelete:
+		if err := s.Agent.DeleteStoredSession(id); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			writeError(w, err, status)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "id": id})
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {

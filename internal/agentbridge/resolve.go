@@ -26,6 +26,16 @@ func ResolveExecutable(override, grokHome string) (string, error) {
 		}
 		candidates = append(candidates, filepath.Join(grokHome, "bin", name))
 	}
+	if runtime.GOOS == "darwin" {
+		candidates = append(candidates, "/opt/homebrew/bin/grok", "/usr/local/bin/grok")
+		if home, err := os.UserHomeDir(); err == nil {
+			candidates = append(candidates,
+				filepath.Join(home, ".local", "bin", "grok"),
+				filepath.Join(home, "bin", "grok"),
+				filepath.Join(home, ".grok", "bin", "grok"),
+			)
+		}
+	}
 	seen := map[string]bool{}
 	for _, candidate := range candidates {
 		absolute, err := filepath.Abs(candidate)

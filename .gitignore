@@ -50,3 +50,17 @@ Desktop.ini
 *.tmp
 *.temp
 /docs/design/chat-agent-integration.md
+
+# Build artifacts / packaging (keep source; publish via Releases)
+/dist/
+*.dmg
+*.dmg.sha256
+*.app/
+
+# Local secrets / runtime (never commit)
+profiles.json
+settings.json
+**/config.yaml
+**/*auth*.json
+**/selected-models.json
+/cliproxy/

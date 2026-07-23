@@ -51,7 +51,7 @@ func TestGrokAuthImportCreatesLocalProfile(t *testing.T) {
 	if response.Profile == nil || response.Profile.Name != grokAuthProfileName {
 		t.Fatalf("generated profile = %#v", response.Profile)
 	}
-	if response.Profile.UpstreamFormat != "openai_responses" || len(response.Profile.Models) != 2 {
+	if response.Profile.UpstreamFormat != "openai_responses" || response.Profile.DefaultReasoningEffort != "low" || len(response.Profile.Models) != 2 {
 		t.Fatalf("generated profile config = %#v", response.Profile)
 	}
 	if response.Profile.EffectiveAPIKey() != response.LocalAPIKey || response.Profile.BaseURL != response.BaseURL {
@@ -61,6 +61,34 @@ func TestGrokAuthImportCreatesLocalProfile(t *testing.T) {
 	profilesOnDisk, err := profileStore.List()
 	if err != nil || len(profilesOnDisk) != 1 {
 		t.Fatalf("profiles after import = %#v, err = %v", profilesOnDisk, err)
+	}
+}
+
+func TestGrokAuthProfileUpdatePreservesReasoningEffort(t *testing.T) {
+	for _, effort := range []string{"medium", "low"} {
+		t.Run(effort, func(t *testing.T) {
+			dir := t.TempDir()
+			profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+			existing, err := profileStore.Create(profiles.Profile{
+				Name:                   grokAuthProfileName,
+				DefaultReasoningEffort: effort,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			authStore := grokauth.NewStore(filepath.Join(dir, "grok_auth.json"))
+			if _, err := authStore.Import([]byte(`{"type":"xai","access_token":"access"}`)); err != nil {
+				t.Fatal(err)
+			}
+			server := &Server{ActualPort: 19091, Profiles: profileStore, GrokAuth: authStore}
+			updated, err := server.upsertGrokAuthProfile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.ID != existing.ID || updated.DefaultReasoningEffort != effort {
+				t.Fatalf("updated profile = %#v, want existing id and effort %q", updated, effort)
+			}
+		})
 	}
 }
 

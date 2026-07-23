@@ -7,7 +7,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/highlight-github.min.css?v=11.11.1">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.18.0">
-  <link rel="stylesheet" href="/style.css?v=38">
+  <link rel="stylesheet" href="/style.css?v=39">
 </head>
 <body>
   <div class="shell">
@@ -17,7 +17,7 @@
         <div class="brand">
           <img src="/icon.svg" alt="" class="brandIcon">
           <div>
-            <div class="brandTitle">grok_switch</div>
+            <div class="brandTitle">Grok Build Switch</div>
             <div class="brandSub" id="headerSubtitle">登录方式</div>
           </div>
         </div>
@@ -25,8 +25,9 @@
       <div class="headerRight">
         <button type="button" id="chatBtn" class="btn" data-home-only>聊天</button>
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
-        <button type="button" id="importHeaderBtn" class="btn" data-home-only>导入配置</button>
+        <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
+        <button type="button" id="navSSHBtn" class="btn">SSH</button>
       </div>
     </header>
 
@@ -61,10 +62,9 @@
 
       <div id="emptyState" class="empty" hidden>
         <h2>还没有供应商</h2>
-        <p>从当前 config.toml 导入，或添加一个新的上游配置。</p>
+        <p>添加一个上游配置开始使用。</p>
         <div class="emptyActions">
-          <button type="button" id="emptyImportBtn" class="btn primary">导入现有配置</button>
-          <button type="button" id="emptyNewBtn" class="btn">添加供应商</button>
+          <button type="button" id="emptyNewBtn" class="btn primary">添加供应商</button>
         </div>
       </div>
 
@@ -125,6 +125,21 @@
                   <option value="">（请先启用模型）</option>
                 </select>
               </label>
+              <label class="field reasoningEffortField">默认推理强度
+                <div class="reasoningEffortControl">
+                  <select id="defaultReasoningEffort">
+                    <option value="none">禁用推理 (none)</option>
+                    <option value="minimal">最小 (minimal)</option>
+                    <option value="low">低 (low)</option>
+                    <option value="medium">中 (medium)</option>
+                    <option value="high">高 (high)</option>
+                    <option value="xhigh">超高 (xhigh)</option>
+                    <option value="max">最大 (max，仅部分模型；当前 Grok CLI 不支持)</option>
+                  </select>
+                  <button type="button" id="detectReasoningEffortsBtn" class="btn sm">检测支持档位</button>
+                </div>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">选择默认模型后可检测；所有档位均可手动选择。</span>
+              </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
                   <option value="openai_chat">OpenAI Chat</option>
@@ -168,7 +183,6 @@
             <button type="button" id="copyProfileBtn" class="btn sm">复制</button>
             <button type="button" id="exportProfileBtn" class="btn sm">导出 JSON</button>
             <button type="button" id="importProfileJsonBtn" class="btn sm">导入 JSON</button>
-            <button type="button" id="importBtn" class="btn sm">从 config 导入</button>
             <button type="button" id="cancelBtn" class="btn sm ghost">清空</button>
           </div>
           <input type="file" id="importProfileFile" accept="application/json,.json" hidden>
@@ -330,6 +344,11 @@
             <div id="contextUsageBar" class="contextUsageBar"><span id="contextUsageFill" class="contextUsageFill"></span></div>
             <span id="contextUsageText" class="muted tiny">尚未发送消息</span>
           </div>
+          <div class="contextSection" id="contextCacheSection">
+            <div class="contextSectionHead"><span class="contextLabel">缓存命中</span><span id="contextCacheNote" class="muted tiny">24h</span></div>
+            <strong id="contextCacheHitRate">—</strong>
+            <span id="contextCacheDetail" class="muted tiny">启动 Agent 后按会话统计</span>
+          </div>
           <label class="check autoApproveCheck" title="自动允许 Grok Build 执行工具">
             <input type="checkbox" id="agentAlwaysApprove"> 自动批准工具
           </label>
@@ -345,6 +364,20 @@
         </aside>
         <div id="nativeChatScrim" class="nativeChatScrim" hidden></div>
       </section>
+    </main>
+
+    <!-- SUBSCRIPTION PROXY -->
+    <main id="viewSubscriptionProxy" class="view subscriptionProxyView" hidden>
+      <div class="pageHead">
+        <div><h1 class="pageTitle">订阅代理</h1><p class="pageDesc">统一管理官方订阅账号、模型与本地代理服务</p></div>
+        <button type="button" id="backFromSubscriptionProxyBtn" class="btn">返回</button>
+      </div>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">代理服务</h2><p id="subscriptionServiceDetail" class="muted tiny">加载中…</p></div><span id="subscriptionServiceBadge" class="badge">未知</span></div><div class="subscriptionConnection"><div><span>Base URL</span><code id="subscriptionBaseUrl">—</code></div><div><span>推理 Key</span><code id="subscriptionApiKey">—</code></div></div><div class="inlineActions"><button id="subscriptionStartBtn" class="btn primary" type="button">启动</button><button id="subscriptionStopBtn" class="btn danger" type="button">停止</button><button id="subscriptionRestartBtn" class="btn" type="button">重启</button><button id="subscriptionRefreshBtn" class="btn ghost" type="button">刷新</button></div></section>
+      <section><h2 class="sectionTitle subscriptionSectionTitle">添加订阅账号</h2><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
+      <section class="formCard"><div class="rowBetween"><h2 class="sectionTitle">账号</h2><span id="subscriptionAccountCount" class="muted tiny">0 个</span></div><div id="subscriptionAccounts" class="subscriptionAccounts"></div></section>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">模型</h2><p class="muted tiny">按供应商选择要暴露的模型。</p></div><button type="button" id="saveSubscriptionModelsBtn" class="btn primary">保存模型</button></div><div id="subscriptionModels" class="subscriptionModels"></div></section>
+      <section class="formCard"><div><h2 class="sectionTitle">创建 / 更新供应商</h2><p class="muted tiny">将订阅代理连接写入供应商列表。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 / 更新 Codex Provider</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 / 更新 Gemini Provider</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 / 更新 Grok Provider</button></div></section>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">诊断</h2><p class="muted tiny">检查服务、账号与模型路由。</p></div><button type="button" id="runSubscriptionDiagnosticsBtn" class="btn">运行诊断</button></div><pre id="subscriptionDiagnostics" class="subscriptionDiagnostics mono">尚未运行诊断。</pre></section>
     </main>
 
     <!-- SETTINGS -->
@@ -366,6 +399,41 @@
         <p id="portHint" class="muted tiny" hidden></p>
         <button type="submit" id="saveSettingsBtn" class="btn primary">保存设置</button>
       </form>
+
+      <section class="formCard" id="cacheStatsCard">
+        <div class="rowBetween">
+          <div>
+            <h2 class="sectionTitle">缓存命中率</h2>
+            <p class="muted tiny">基于本地 Grok 日志 <code>unified.jsonl</code> 统计 prompt 缓存命中。</p>
+          </div>
+          <div class="inlineActions">
+            <select id="cacheStatsHours" class="smSelect" title="统计窗口">
+              <option value="6">近 6 小时</option>
+              <option value="24" selected>近 24 小时</option>
+              <option value="72">近 3 天</option>
+              <option value="168">近 7 天</option>
+            </select>
+            <button type="button" id="refreshCacheStatsBtn" class="btn sm">刷新</button>
+          </div>
+        </div>
+        <div id="cacheStatsSummary" class="cacheStatsSummary">
+          <div class="cacheStatTile"><span class="muted tiny">命中率</span><strong id="cacheHitRate">—</strong></div>
+          <div class="cacheStatTile"><span class="muted tiny">推理次数</span><strong id="cacheTurns">—</strong></div>
+          <div class="cacheStatTile"><span class="muted tiny">Prompt tokens</span><strong id="cachePromptTokens">—</strong></div>
+          <div class="cacheStatTile"><span class="muted tiny">Cached tokens</span><strong id="cacheCachedTokens">—</strong></div>
+        </div>
+        <p id="cacheStatsHint" class="muted tiny"></p>
+        <div class="cacheStatsTables">
+          <div>
+            <h3 class="sectionTitle tinyTitle">按模型</h3>
+            <div id="cacheByModel" class="cacheTable"></div>
+          </div>
+          <div>
+            <h3 class="sectionTitle tinyTitle">最近 turn</h3>
+            <div id="cacheRecent" class="cacheTable"></div>
+          </div>
+        </div>
+      </section>
 
       <section class="formCard lanAccessCard" id="lanAccessCard">
         <div class="rowBetween">
@@ -712,7 +780,73 @@
 
       <button type="button" id="backFromSettingsBtn" class="btn">返回供应商列表</button>
     </main>
+
+    <!-- SSH -->
+    <main id="viewSSH" class="view" hidden>
+      <div class="pageHead">
+        <div><h1 class="pageTitle">SSH 远程文件</h1><p class="pageDesc">连接远程服务器，浏览和删除文件</p></div>
+        <div class="inlineActions">
+          <button type="button" id="sshImportBtn" class="btn">从 VSCode 导入</button>
+          <button type="button" id="sshRefreshBtn" class="btn">刷新</button>
+          <button type="button" id="sshNewConnBtn" class="btn primary">+ 新连接</button>
+        </div>
+      </div>
+      <div class="sshLayout">
+        <aside class="sshSidebar">
+          <div class="sshSidebarHead"><span>连接</span></div>
+          <div id="sshConnections" class="sshConnections"></div>
+        </aside>
+        <section class="sshBrowser">
+          <div class="sshBrowserHead">
+            <div class="sshBreadcrumb" id="sshBreadcrumb"></div>
+            <div class="inlineActions">
+              <button type="button" id="sshRefreshFilesBtn" class="btn sm">刷新</button>
+            </div>
+          </div>
+          <div class="sshToolbar" id="sshToolbar" hidden>
+            <label class="check"><input type="checkbox" id="sshSelectAll"> 全选</label>
+            <div class="sshFilters">
+              <button type="button" class="btn sm sshFilter" data-filter="*.py">.py</button>
+              <button type="button" class="btn sm sshFilter" data-filter="*.sh">.sh</button>
+              <button type="button" class="btn sm sshFilter" data-filter="test_*">test_</button>
+              <button type="button" class="btn sm sshFilter" data-filter="smoke_*">smoke_</button>
+            </div>
+            <button type="button" id="sshDeleteSelectedBtn" class="btn sm danger" hidden>删除选中</button>
+          </div>
+          <div id="sshFiles" class="sshFiles"></div>
+          <div id="sshEmpty" class="sshEmpty">选择一个连接开始浏览</div>
+        </section>
+      </div>
+    </main>
   </div>
+
+  <!-- SSH Connection Dialog -->
+  <dialog id="sshConnDialog" class="promptDialog">
+    <form method="dialog" id="sshConnForm">
+      <h3 id="sshConnDialogTitle">新建连接</h3>
+      <label>名称<input id="sshConnName" type="text" placeholder="My Server" required></label>
+      <label>主机<input id="sshConnHost" type="text" placeholder="192.168.1.100" required></label>
+      <div class="sshConnRow">
+        <label>端口<input id="sshConnPort" type="number" placeholder="22" value="22" min="1" max="65535"></label>
+        <label>用户名<input id="sshConnUser" type="text" placeholder="root" required></label>
+      </div>
+      <label>认证方式
+        <select id="sshConnAuthType">
+          <option value="key">SSH Key</option>
+          <option value="password">Password</option>
+        </select>
+      </label>
+      <label id="sshConnKeyPathWrap">密钥路径<input id="sshConnKeyPath" type="text" placeholder="~/.ssh/id_rsa"></label>
+      <label id="sshConnPasswordWrap" hidden>密码（连接时输入，不保存）</label>
+      <div class="promptActions">
+        <button type="button" id="sshConnCancel" class="btn">取消</button>
+        <button type="submit" id="sshConnSave" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Floating Windows Container -->
+  <div id="sshWindows" class="sshWindows"></div>
 
   <dialog id="chatThemeDialog" class="chatThemeDialog" aria-labelledby="chatThemeTitle">
     <div class="chatThemeHead">
@@ -780,12 +914,31 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="promptDialog" class="promptDialog">
+    <form method="dialog" id="promptForm">
+      <label id="promptLabel" for="promptInput">输入内容</label>
+      <input id="promptInput" type="text" autocomplete="off">
+      <div class="promptActions">
+        <button type="button" id="promptCancel" class="btn">取消</button>
+        <button type="submit" id="promptOk" class="btn primary">确定</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="confirmDialog" class="promptDialog">
+    <form method="dialog" id="confirmForm">
+      <p id="confirmMessage" class="confirmMessage">确认操作？</p>
+      <div class="promptActions">
+        <button type="button" id="confirmCancel" class="btn">取消</button>
+        <button type="submit" id="confirmOk" class="btn primary danger">删除</button>
+      </div>
+    </form>
+  </dialog>
   <script src="/vendor/marked.umd.js?v=18.0.6"></script>
   <script src="/vendor/purify.min.js?v=3.4.12"></script>
   <script src="/vendor/highlight.min.js?v=11.11.1"></script>
   <script src="/vendor/katex/katex.min.js?v=0.18.0"></script>
   <script src="/vendor/katex/contrib/auto-render.min.js?v=0.18.0"></script>
   <script src="/vendor/mermaid.min.js?v=11.16.0"></script>
-  <script src="/app.js?v=40"></script>
+  <script src="/app.js?v=42"></script>
 </body>
 </html>
