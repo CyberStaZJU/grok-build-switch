@@ -37,9 +37,9 @@ type mintTokens struct {
 	ExpiresIn    int
 }
 
-func mintFromSSO(ctx context.Context, browser *browserSession, sso, proxy string, preferProtocol, protocolOnly bool, log func(string)) (mintTokens, string, error) {
+func mintFromSSO(ctx context.Context, browser *browserSession, sso, proxy, clientID string, preferProtocol, protocolOnly bool, log func(string)) (mintTokens, string, error) {
 	if preferProtocol || protocolOnly {
-		tokens, err := mintProtocol(ctx, sso, proxy, log)
+		tokens, err := mintProtocol(ctx, sso, proxy, clientID, log)
 		if err == nil {
 			return tokens, "protocol", nil
 		}
@@ -48,14 +48,14 @@ func mintFromSSO(ctx context.Context, browser *browserSession, sso, proxy string
 			return mintTokens{}, "", err
 		}
 	}
-	tokens, err := mintBrowser(ctx, browser, proxy, log)
+	tokens, err := mintBrowser(ctx, browser, proxy, clientID, log)
 	if err != nil {
 		return mintTokens{}, "", err
 	}
 	return tokens, "browser", nil
 }
 
-func mintProtocol(ctx context.Context, sso, proxy string, log func(string)) (mintTokens, error) {
+func mintProtocol(ctx context.Context, sso, proxy, clientID string, log func(string)) (mintTokens, error) {
 	jar, _ := cookiejar.New(nil)
 	client, err := registrarHTTPClient(proxy)
 	if err != nil {
@@ -79,7 +79,7 @@ func mintProtocol(ctx context.Context, sso, proxy string, log func(string)) (min
 	if strings.Contains(response.Request.URL.Path, "sign-in") || strings.Contains(response.Request.URL.Path, "sign-up") {
 		return mintTokens{}, fmt.Errorf("SSO 已失效")
 	}
-	device, err := requestDevice(ctx, client)
+	device, err := requestDevice(ctx, client, clientID)
 	if err != nil {
 		return mintTokens{}, err
 	}
@@ -95,11 +95,11 @@ func mintProtocol(ctx context.Context, sso, proxy string, log func(string)) (min
 	}); err != nil {
 		return mintTokens{}, fmt.Errorf("device approve: %w", err)
 	}
-	return pollToken(ctx, client, device)
+	return pollToken(ctx, client, device, clientID)
 }
 
-func requestDevice(ctx context.Context, client *http.Client) (deviceCode, error) {
-	form := url.Values{"client_id": {cpamint.ClientID}, "scope": {cpamint.Scope}}
+func requestDevice(ctx context.Context, client *http.Client, clientID string) (deviceCode, error) {
+	form := url.Values{"client_id": {clientID}, "scope": {cpamint.Scope}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cpamint.DeviceCodeURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return deviceCode{}, err
@@ -174,13 +174,13 @@ func postDeviceAction(ctx context.Context, client *http.Client, endpoint string,
 	return nil
 }
 
-func pollToken(ctx context.Context, client *http.Client, device deviceCode) (mintTokens, error) {
+func pollToken(ctx context.Context, client *http.Client, device deviceCode, clientID string) (mintTokens, error) {
 	deadline := time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
 	sleep := time.Duration(device.Interval) * time.Second
 	for time.Now().Before(deadline) {
 		form := url.Values{
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-			"device_code": {device.DeviceCode}, "client_id": {cpamint.ClientID},
+			"device_code": {device.DeviceCode}, "client_id": {clientID},
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cpamint.TokenURL, strings.NewReader(form.Encode()))
 		if err != nil {
@@ -220,12 +220,12 @@ func pollToken(ctx context.Context, client *http.Client, device deviceCode) (min
 	return mintTokens{}, fmt.Errorf("设备授权超时")
 }
 
-func mintBrowser(ctx context.Context, browser *browserSession, proxy string, log func(string)) (mintTokens, error) {
+func mintBrowser(ctx context.Context, browser *browserSession, proxy, clientID string, log func(string)) (mintTokens, error) {
 	client, err := registrarHTTPClient(proxy)
 	if err != nil {
 		return mintTokens{}, err
 	}
-	device, err := requestDevice(ctx, client)
+	device, err := requestDevice(ctx, client, clientID)
 	if err != nil {
 		return mintTokens{}, err
 	}
@@ -238,7 +238,7 @@ func mintBrowser(ctx context.Context, browser *browserSession, proxy string, log
 	if err := clickConsentReal(browser.ctx, 90*time.Second); err != nil {
 		return mintTokens{}, err
 	}
-	return pollToken(ctx, client, device)
+	return pollToken(ctx, client, device, clientID)
 }
 
 func clickConsentReal(ctx context.Context, timeout time.Duration) error {

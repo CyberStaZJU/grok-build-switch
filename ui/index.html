@@ -463,6 +463,10 @@
           <input id="port" type="number" min="1024" max="65535">
         </label>
         <p id="portHint" class="muted tiny" hidden></p>
+        <label class="field">OAuth Client ID
+          <input id="oauthClientID" type="text" autocomplete="off" placeholder="留空则使用 CPA 铸造和号池导入功能不可用">
+        </label>
+        <p class="muted tiny">用于 xAI OAuth Device Code 流。可自定义自己的 OAuth 应用客户端 ID。</p>
         <button type="submit" id="saveSettingsBtn" class="btn primary">保存设置</button>
       </form>
 

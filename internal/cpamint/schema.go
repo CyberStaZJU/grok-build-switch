@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	ClientID           = "b1a00492-073a-47ea-816f-4c329264a828"
 	Issuer             = "https://auth.x.ai"
 	DeviceCodeURL      = "https://auth.x.ai/oauth2/device/code"
 	TokenURL           = "https://auth.x.ai/oauth2/token"

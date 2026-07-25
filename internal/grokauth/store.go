@@ -28,7 +28,6 @@ import (
 
 const (
 	defaultIssuer      = "https://auth.x.ai"
-	defaultClientID    = "b1a00492-073a-47ea-816f-4c329264a828"
 	defaultUpstreamURL = "https://cli-chat-proxy.grok.com/v1"
 	refreshLead        = 5 * time.Minute
 	maxCredentialSize  = 1 << 20
@@ -67,6 +66,7 @@ type Store struct {
 	client               *http.Client
 	mu                   sync.Mutex
 	allowUnsafeEndpoints bool
+	clientID             string
 }
 
 func NewStore(path string) *Store {
@@ -74,6 +74,18 @@ func NewStore(path string) *Store {
 		path:   path,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func (s *Store) SetClientID(clientID string) {
+	s.mu.Lock()
+	s.clientID = strings.TrimSpace(clientID)
+	s.mu.Unlock()
+}
+
+func (s *Store) ClientID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientID
 }
 
 func (s *Store) Path() string { return s.path }
@@ -100,7 +112,7 @@ func (s *Store) Import(raw []byte) (Status, error) {
 	if len(raw) > maxCredentialSize {
 		return Status{}, fmt.Errorf("认证 JSON 超过 1 MiB 限制")
 	}
-	next, err := ParseCredential(raw)
+	next, err := ParseCredential(raw, s.clientID)
 	if err != nil {
 		return Status{}, err
 	}
@@ -108,7 +120,7 @@ func (s *Store) Import(raw []byte) (Status, error) {
 }
 
 func (s *Store) ImportCredential(next Credential) (Status, error) {
-	next = normalizeCredential(next)
+	next = normalizeCredential(next, s.clientID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if current, readErr := s.readLocked(); readErr == nil {
@@ -209,7 +221,7 @@ func (s *Store) refreshLocked(ctx context.Context, credential Credential) (Crede
 	}
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
-		"client_id":     {firstNonEmpty(credential.ClientID, defaultClientID)},
+		"client_id":     {firstNonEmpty(credential.ClientID, s.clientID)},
 		"refresh_token": {credential.RefreshToken},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -350,15 +362,15 @@ func (s *Store) writeLocked(credential Credential) error {
 	return atomicWrite(s.path, append(data, '\n'))
 }
 
-func ParseCredential(raw []byte) (Credential, error) {
-	credentials, err := ParseCredentials(raw)
+func ParseCredential(raw []byte, clientID string) (Credential, error) {
+	credentials, err := ParseCredentials(raw, clientID)
 	if err != nil {
 		return Credential{}, err
 	}
 	return credentials[0], nil
 }
 
-func ParseCredentials(raw []byte) ([]Credential, error) {
+func ParseCredentials(raw []byte, clientID string) ([]Credential, error) {
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, fmt.Errorf("认证文件不是有效 JSON: %w", err)
@@ -366,8 +378,8 @@ func ParseCredentials(raw []byte) ([]Credential, error) {
 	if provider := lowerString(root["type"]); provider != "" && provider != "xai" && provider != "grok" {
 		return nil, fmt.Errorf("认证文件 type=%q，不是 xai/grok", provider)
 	}
-	if credential, ok := credentialFromMap(root, "cpa-xai"); ok {
-		return []Credential{normalizeCredential(credential)}, nil
+	if credential, ok := credentialFromMap(root, "cpa-xai", clientID); ok {
+		return []Credential{normalizeCredential(credential, clientID)}, nil
 	}
 
 	keys := make([]string, 0, len(root))
@@ -381,8 +393,8 @@ func ParseCredentials(raw []byte) ([]Credential, error) {
 		if !ok {
 			continue
 		}
-		if credential, found := credentialFromMap(entry, "grok-auth-json"); found {
-			candidates = append(candidates, normalizeCredential(credential))
+		if credential, found := credentialFromMap(entry, "grok-auth-json", clientID); found {
+			candidates = append(candidates, normalizeCredential(credential, clientID))
 		}
 	}
 	if len(candidates) == 0 {
@@ -394,7 +406,7 @@ func ParseCredentials(raw []byte) ([]Credential, error) {
 	return candidates, nil
 }
 
-func credentialFromMap(entry map[string]any, source string) (Credential, bool) {
+func credentialFromMap(entry map[string]any, source, clientID string) (Credential, bool) {
 	accessToken := firstNonEmpty(stringValue(entry["access_token"]), stringValue(entry["key"]))
 	if accessToken == "" {
 		return Credential{}, false
@@ -413,7 +425,7 @@ func credentialFromMap(entry map[string]any, source string) (Credential, bool) {
 		ExpiresAt:     expiresAt,
 		TokenEndpoint: stringValue(entry["token_endpoint"]),
 		Issuer:        issuer,
-		ClientID:      firstNonEmpty(stringValue(entry["client_id"]), stringValue(entry["oidc_client_id"]), defaultClientID),
+		ClientID:      firstNonEmpty(stringValue(entry["client_id"]), stringValue(entry["oidc_client_id"]), clientID),
 		Email:         stringValue(entry["email"]),
 		Subject:       firstNonEmpty(stringValue(entry["sub"]), jwtStringClaim(accessToken, "sub")),
 		Source:        source,
@@ -421,13 +433,13 @@ func credentialFromMap(entry map[string]any, source string) (Credential, bool) {
 	return credential, true
 }
 
-func normalizeCredential(credential Credential) Credential {
+func normalizeCredential(credential Credential, clientID string) Credential {
 	credential.Version = credentialVersion
 	credential.AccessToken = strings.TrimSpace(credential.AccessToken)
 	credential.RefreshToken = strings.TrimSpace(credential.RefreshToken)
 	credential.TokenEndpoint = strings.TrimSpace(credential.TokenEndpoint)
 	credential.Issuer = strings.TrimRight(strings.TrimSpace(firstNonEmpty(credential.Issuer, defaultIssuer)), "/")
-	credential.ClientID = strings.TrimSpace(firstNonEmpty(credential.ClientID, defaultClientID))
+	credential.ClientID = strings.TrimSpace(firstNonEmpty(credential.ClientID, clientID))
 	credential.Email = strings.TrimSpace(credential.Email)
 	credential.Subject = strings.TrimSpace(credential.Subject)
 	if credential.Email == "" {

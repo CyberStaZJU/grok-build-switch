@@ -20,7 +20,7 @@ import (
 func TestGrokPoolImportCreatesPoolBackedProfile(t *testing.T) {
 	dir := t.TempDir()
 	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
-	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"))
+	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestGrokPoolImportCreatesPoolBackedProfile(t *testing.T) {
 
 func TestGrokProxyFallsBackToSingleAuthWhenPoolHasNoAvailableAccount(t *testing.T) {
 	dir := t.TempDir()
-	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"))
+	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

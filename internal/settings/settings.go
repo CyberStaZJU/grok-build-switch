@@ -29,6 +29,7 @@ type Settings struct {
 	AgentDefaultCwd   string   `json:"agent_default_cwd,omitempty"`
 	ProviderOrder     []string `json:"provider_order"`
 	PinnedProviderIDs []string `json:"pinned_provider_ids"`
+	OAuthClientID     string   `json:"oauth_client_id,omitempty"`
 }
 
 type Store struct {

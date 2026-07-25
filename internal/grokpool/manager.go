@@ -18,13 +18,14 @@ import (
 	"grok_switch/internal/netproxy"
 )
 
-func NewManager(dir string) (*Manager, error) {
+func NewManager(dir, clientID string) (*Manager, error) {
 	m := &Manager{
 		dir:         dir,
 		indexPath:   filepath.Join(dir, "pool.json"),
 		accountsDir: filepath.Join(dir, "accounts"),
 		client:      &http.Client{Timeout: 25 * time.Second},
 		upstreamURL: grokauth.UpstreamURL(),
+		clientID:    strings.TrimSpace(clientID),
 		wake:        make(chan struct{}, 1),
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
@@ -58,6 +59,15 @@ func (m *Manager) Start() {
 	go m.scheduler()
 	go m.watchLoop()
 	m.signalWake()
+}
+
+func (m *Manager) SetClientID(clientID string) {
+	m.mu.Lock()
+	m.clientID = strings.TrimSpace(clientID)
+	for _, store := range m.stores {
+		store.SetClientID(m.clientID)
+	}
+	m.mu.Unlock()
 }
 
 // SetOnAuthDirImport registers a callback invoked after a successful hot-load import.
@@ -146,7 +156,7 @@ func (m *Manager) importFiles(files []ImportFile, onlyMissing bool) (ImportResul
 	result := ImportResult{}
 	changed := 0
 	for _, file := range files {
-		credentials, err := grokauth.ParseCredentials([]byte(file.Content))
+		credentials, err := grokauth.ParseCredentials([]byte(file.Content), m.clientID)
 		if err != nil {
 			result.Failed = append(result.Failed, fmt.Sprintf("%s: %v", firstNonEmpty(file.Name, "未命名文件"), err))
 			continue
@@ -492,6 +502,7 @@ func (m *Manager) accountStore(id string) *grokauth.Store {
 	}
 	store := grokauth.NewStore(m.accountPath(id))
 	_ = store.SetProxyURL(m.state.Settings.ProxyURL)
+	store.SetClientID(m.clientID)
 	m.stores[id] = store
 	return store
 }

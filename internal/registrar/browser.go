@@ -176,7 +176,7 @@ func registerWithBrowser(parent context.Context, config Config, mailbox Mailbox,
 // the normal path (SSO obtained after profile submission).
 func finalizeRegistration(ctx context.Context, session *browserSession, config Config, mailbox Mailbox, sso, password, authDir string, log func(string)) (registrationOutcome, error) {
 	log("已获取 SSO，开始 CPA 铸造")
-	tokens, method, err := mintFromSSO(ctx, session, sso, config.ProxyURL, config.PreferProtocolMint, config.ProtocolOnly, log)
+	tokens, method, err := mintFromSSO(ctx, session, sso, config.ProxyURL, config.ClientID, config.PreferProtocolMint, config.ProtocolOnly, log)
 	if err != nil {
 		return registrationOutcome{}, err
 	}

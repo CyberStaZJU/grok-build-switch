@@ -30,6 +30,7 @@ type Config struct {
 	PreferProtocolMint     bool   `json:"prefer_protocol_mint"`
 	ProtocolOnly           bool   `json:"protocol_only"`
 	LastJobID              string `json:"last_job_id,omitempty"`
+	ClientID               string `json:"client_id"`
 }
 
 type JobStatus string

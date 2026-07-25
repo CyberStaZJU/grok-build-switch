@@ -117,6 +117,7 @@ type Manager struct {
 	client      *http.Client
 	transport   *http.Transport
 	upstreamURL string
+	clientID    string
 
 	mu             sync.Mutex
 	state          persistedState

@@ -76,6 +76,13 @@ func (s *Service) SetOnFinished(fn func(Job)) {
 	s.mu.Unlock()
 }
 
+func (s *Service) SetClientID(clientID string) {
+	s.mu.Lock()
+	s.config.ClientID = strings.TrimSpace(clientID)
+	_ = s.saveConfigLocked()
+	s.mu.Unlock()
+}
+
 func (s *Service) Get() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()

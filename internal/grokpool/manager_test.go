@@ -13,7 +13,7 @@ import (
 )
 
 func TestImportPersistsMetadataWithoutTokensAndKeepsStableKey(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T
 	}))
 	defer upstream.Close()
 
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestNewManagerRecoversCorruptPoolIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	manager, err := NewManager(dir)
+	manager, err := NewManager(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestGeneric429DoesNotIsolateAccount(t *testing.T) {
 }
 
 func TestObserveResponseReactivelyIsolatesExhaustedAccount(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestObserveResponseReactivelyIsolatesExhaustedAccount(t *testing.T) {
 }
 
 func TestSettingsValidation(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestSettingsValidation(t *testing.T) {
 }
 
 func TestBulkDisableAndDeleteOnlyInspectedAbnormalAccounts(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestInspectionUsesConfiguredHTTPProxy(t *testing.T) {
 	}))
 	defer proxy.Close()
 
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestEmptyProxyInspectionDoesNotPanic(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestEmptyProxyInspectionDoesNotPanic(t *testing.T) {
 }
 
 func TestEnsureMigratesMissingCredentialWithoutResettingExistingResult(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	manager, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

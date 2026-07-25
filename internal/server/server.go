@@ -308,6 +308,21 @@ func (s *Server) bindHostFor(enabled bool) string {
 	return "127.0.0.1"
 }
 
+func (s *Server) propagateClientID(clientID string) {
+	if s.CpaMint != nil {
+		s.CpaMint.SetClientID(clientID)
+	}
+	if s.Registrar != nil {
+		s.Registrar.SetClientID(clientID)
+	}
+	if s.GrokAuth != nil {
+		s.GrokAuth.SetClientID(clientID)
+	}
+	if s.GrokPool != nil {
+		s.GrokPool.SetClientID(clientID)
+	}
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -847,6 +862,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				writeError(w, fmt.Errorf("撤销局域网会话失败: %w", err), http.StatusInternalServerError)
 				return
 			}
+		}
+		if next.OAuthClientID != current.OAuthClientID {
+			s.propagateClientID(next.OAuthClientID)
 		}
 		updated, err := s.Settings.Update(next)
 		if err != nil {

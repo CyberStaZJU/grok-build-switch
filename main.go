@@ -78,9 +78,16 @@ func main() {
 	}
 	exePath, _ = filepath.Abs(exePath)
 
+	currentSettings, err := settingsStore.Get()
+	if err != nil {
+		fatal(err)
+	}
+	oauthClientID := currentSettings.OAuthClientID
+
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
 	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
-	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir)
+	grokAuthStore.SetClientID(oauthClientID)
+	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir, oauthClientID)
 	if err != nil {
 		fatal(err)
 	}
@@ -101,6 +108,7 @@ func main() {
 		fatal(err)
 	}
 	defer registrarService.Close()
+	registrarService.SetClientID(oauthClientID)
 	sw := &switcher.Switcher{
 		ConfigPath: resolved.GrokConfig,
 		BackupsDir: resolved.BackupsDir,
@@ -132,10 +140,6 @@ func main() {
 		}
 	}
 
-	currentSettings, err := settingsStore.Get()
-	if err != nil {
-		fatal(err)
-	}
 	if err := autostart.Sync(currentSettings.Autostart, exePath, currentSettings.SilentAutostart); err != nil {
 		crash.Logf("autostart sync failed: %v", err)
 	}
@@ -154,7 +158,7 @@ func main() {
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		GrokAuth:          grokAuthStore,
 		GrokPool:          grokPool,
-		CpaMint:           cpamint.NewService(),
+		CpaMint:           cpamint.NewService(oauthClientID),
 		Registrar:         registrarService,
 		Switcher:          sw,
 		Agent:             agent,

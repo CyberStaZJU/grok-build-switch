@@ -54,6 +54,7 @@ type StartOptions struct {
 type Service struct {
 	mu       sync.Mutex
 	sessions map[string]*liveSession
+	clientID string
 }
 
 type liveSession struct {
@@ -62,8 +63,20 @@ type liveSession struct {
 	raw    []byte
 }
 
-func NewService() *Service {
-	return &Service{sessions: make(map[string]*liveSession)}
+func NewService(clientID string) *Service {
+	return &Service{sessions: make(map[string]*liveSession), clientID: strings.TrimSpace(clientID)}
+}
+
+func (s *Service) SetClientID(clientID string) {
+	s.mu.Lock()
+	s.clientID = strings.TrimSpace(clientID)
+	s.mu.Unlock()
+}
+
+func (s *Service) ClientID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientID
 }
 
 func (s *Service) Start(opts StartOptions) (Session, error) {
@@ -75,7 +88,7 @@ func (s *Service) Start(opts StartOptions) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	device, err := requestDeviceCode(context.Background(), client)
+	device, err := s.requestDeviceCode(context.Background(), client)
 	if err != nil {
 		return Session{}, err
 	}
@@ -167,7 +180,7 @@ func (s *Service) RawCredential(id string) ([]byte, string, error) {
 }
 
 func (s *Service) poll(ctx context.Context, id string, client *http.Client, device deviceCodeResponse, opts StartOptions) {
-	token, err := pollDeviceToken(ctx, client, device)
+	token, err := s.pollDeviceToken(ctx, client, device)
 	if err != nil {
 		s.fail(id, err)
 		return
@@ -242,9 +255,9 @@ type tokenResult struct {
 	ExpiresIn    int
 }
 
-func requestDeviceCode(ctx context.Context, client *http.Client) (deviceCodeResponse, error) {
+func (s *Service) requestDeviceCode(ctx context.Context, client *http.Client) (deviceCodeResponse, error) {
 	form := url.Values{
-		"client_id": {ClientID},
+		"client_id": {s.clientID},
 		"scope":     {Scope},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DeviceCodeURL, strings.NewReader(form.Encode()))
@@ -300,7 +313,7 @@ func requestDeviceCode(ctx context.Context, client *http.Client) (deviceCodeResp
 	}, nil
 }
 
-func pollDeviceToken(ctx context.Context, client *http.Client, device deviceCodeResponse) (tokenResult, error) {
+func (s *Service) pollDeviceToken(ctx context.Context, client *http.Client, device deviceCodeResponse) (tokenResult, error) {
 	deadline := time.Now().Add(time.Duration(device.ExpiresIn-5) * time.Second)
 	if deadline.Before(time.Now().Add(30 * time.Second)) {
 		deadline = time.Now().Add(30 * time.Second)
@@ -313,7 +326,7 @@ func pollDeviceToken(ctx context.Context, client *http.Client, device deviceCode
 		form := url.Values{
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 			"device_code": {device.DeviceCode},
-			"client_id":   {ClientID},
+			"client_id":   {s.clientID},
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
 		if err != nil {

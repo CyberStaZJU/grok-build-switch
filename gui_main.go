@@ -70,9 +70,16 @@ func main() {
 	}
 	exePath, _ = filepath.Abs(exePath)
 
+	guiSettings, err := settingsStore.Get()
+	if err != nil {
+		guiFatal(err)
+	}
+	oauthClientID := guiSettings.OAuthClientID
+
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
 	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
-	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir)
+	grokAuthStore.SetClientID(oauthClientID)
+	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir, oauthClientID)
 	if err != nil {
 		guiFatal(err)
 	}
@@ -93,6 +100,7 @@ func main() {
 		guiFatal(err)
 	}
 	defer registrarService.Close()
+	registrarService.SetClientID(oauthClientID)
 
 	sw := &switcher.Switcher{
 		ConfigPath: resolved.GrokConfig,
@@ -143,7 +151,7 @@ func main() {
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		GrokAuth:          grokAuthStore,
 		GrokPool:          grokPool,
-		CpaMint:           cpamint.NewService(),
+		CpaMint:           cpamint.NewService(oauthClientID),
 		Registrar:         registrarService,
 		Switcher:          sw,
 		Agent:             agent,

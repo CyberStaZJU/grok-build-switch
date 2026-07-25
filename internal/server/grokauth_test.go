@@ -110,7 +110,7 @@ func TestGrokProxyRejectsWrongLocalKeyWithoutCallingUpstream(t *testing.T) {
 func TestGrokAuthImportAlsoAddsCredentialToUnifiedPool(t *testing.T) {
 	dir := t.TempDir()
 	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
-	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"))
+	pool, err := grokpool.NewManager(filepath.Join(dir, "pool"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

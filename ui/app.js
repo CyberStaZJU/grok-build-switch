@@ -3037,6 +3037,7 @@ function renderSettings(settings) {
   $("autoOpenBrowser").checked = !!settings.auto_open_browser;
   $("lanAccessEnabled").checked = !!settings.lan_access_enabled;
   $("port").value = settings.port;
+  $("oauthClientID").value = settings.oauth_client_id || "";
   const actual = state.status?.port;
   const hint = $("portHint");
   if (actual && settings.port && actual !== settings.port) {
@@ -4948,6 +4949,7 @@ $("settingsForm").onsubmit = (event) => {
       silent_autostart: $("silentAutostart").checked,
       auto_open_browser: $("autoOpenBrowser").checked,
       lan_access_enabled: $("lanAccessEnabled").checked,
+      oauth_client_id: $("oauthClientID").value.trim(),
       theme: "light",
       port: Number($("port").value || 17878),
     };
