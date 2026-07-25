@@ -21,7 +21,7 @@
 
 ## 1. 产品定位
 
-Grok Build Switch 是一个本地 macOS / Windows 托盘工具，用于管理 [Grok CLI](https://x.ai) 的 `~/.grok/config.toml` 配置。核心能力：
+Grok Build Switch 是一个本地 macOS 托盘工具，用于管理 [Grok CLI](https://x.ai) 的 `~/.grok/config.toml` 配置。核心能力：
 
 - **多供应商管理**：以 "Profile" 为单位管理不同上游 LLM 供应商（OpenAI 兼容接口），一键切换 `base_url`、默认模型、联网搜索模型、subagents 配置。
 - **路由策略引擎**：将多个 Profile 投影为统一的多供应商路由表，支持 `default`、`web_search`、`subagents.explore`、`subagents.plan` 四个路由维度。
@@ -30,6 +30,8 @@ Grok Build Switch 是一个本地 macOS / Windows 托盘工具，用于管理 [G
 - **CodeBuddy 集成**：将本地安装的 CodeBuddy CLI 暴露为 OpenAI 兼容的推理端点。
 - **Grok 号池**：批量导入 Grok CLI `auth.json`，支持定时巡检、健康分类、坏号隔离与健康号轮换。
 - **局域网访问**：可选开启 `0.0.0.0` 监听，支持手机扫码配对后远程管理。
+- **会话图谱**：跨供应商的逻辑会话与分支管理。
+- **对话整理**：AI 分析会话主题、建议标题、标记可删除的一次性对话。
 
 ---
 
@@ -38,13 +40,13 @@ Grok Build Switch 是一个本地 macOS / Windows 托盘工具，用于管理 [G
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                       用户界面层                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
-│  │  Web UI       │  │  macOS 菜单栏 │  │  Windows 系统托盘 │   │
-│  │  (ui/app.js)  │  │  (gui_tray_  │  │  (systray)       │   │
-│  │              │  │   darwin_)   │  │                  │   │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘   │
-│         │                 │                    │             │
-│         └─────────────────┴────────────────────┘             │
+│  ┌──────────────┐  ┌──────────────┐                        │
+│  │  Web UI       │  │  macOS 菜单栏 │                        │
+│  │  (ui/app.js)  │  │  (gui_tray_  │                        │
+│  │              │  │   darwin_)   │                        │
+│  └──────┬───────┘  └──────┬───────┘                        │
+│         │                 │                                 │
+│         └─────────────────┘                                 │
 │                           │ HTTP (127.0.0.1:17878)          │
 ├───────────────────────────┼─────────────────────────────────┤
 │                      服务层  │ (internal/server)               │
@@ -105,17 +107,14 @@ grok-build-switch/
 ├── gui_main.go                      # Wails GUI 入口（wailsgui build tag）
 ├── gui_frameworks_darwin.go         # macOS 菜单栏框架初始化
 ├── gui_options_darwin.go            # macOS 菜单栏菜单构建
-├── gui_options_windows.go           # Windows 托盘菜单构建
 ├── gui_tray.go                      # 托盘应用抽象层
 ├── gui_tray_darwin.go               # macOS 菜单栏实现
 ├── gui_tray_darwin_provider.go      # macOS 菜单栏数据提供者（HTTP 客户端）
 ├── gui_tray_provider.go             # 托盘数据提供者接口
 ├── instance_url.go                  # 单实例 URL 发现逻辑
 ├── assets/                          # 应用图标资源
-│   ├── icon-macos.png
-│   └── icon.ico
+│   └── icon-macos.png
 ├── build-macos.sh                   # macOS 构建脚本
-├── build.ps1 / build-gui.ps1        # Windows 构建脚本
 ├── go.mod / go.sum                  # Go 模块定义
 ├── vendor/                          #  vendored 依赖（含 CLIProxyAPI 压缩包）
 ├── ui/                              # Web UI 前端（原生 HTML/JS）
@@ -126,7 +125,7 @@ grok-build-switch/
 ├── docs/                            # 文档站（MkDocs）
 │   ├── index.md / usage.md / plan.md / status.md / agent.md
 │   └── product.md                   # 本文档
-└── internal/                        # 核心业务逻辑（23 个子模块）
+└── internal/                        # 核心业务逻辑（20+ 个子模块）
     ├── server/                      # HTTP 服务器与 API 处理器
     ├── switcher/                    # 配置切换引擎
     ├── profiles/                    # 供应商档案存储
@@ -173,7 +172,7 @@ grok-build-switch/
 | 浏览器 MCP | 为非 Grok 模型提供 web_search/web_fetch 工具 | `browseruse/`, `agentbridge/` |
 | 局域网访问 | 扫码配对后远程管理 | `remoteaccess/`, `server/` |
 | SSH 远程 | SSH 连接管理与远程文件操作 | `ssh/` |
-| 菜单栏/托盘 | macOS 菜单栏常驻 / Windows 系统托盘 | `tray/`, `gui_tray_darwin*` |
+| 菜单栏/托盘 | macOS 菜单栏常驻 | `tray/`, `gui_tray_darwin*` |
 | 缓存统计 | Token 缓存命中率统计 | `cachestats/`, `server/` |
 | 会话图谱 | 跨供应商会话分支管理 | `server/session_graph.go` |
 
@@ -239,7 +238,7 @@ grok-build-switch/
 | `agentbridge/notification_filter.go` | 通知队列溢出过滤 |
 | `agentbridge/resolve.go` | Grok CLI 路径解析 |
 | `agentbridge/subscriptions.go` | 事件订阅管理 |
-| `agentbridge/process_other.go` / `process_windows.go` | 跨平台进程管理 |
+| `agentbridge/process_other.go` | 跨平台进程管理 |
 
 ### 5.7 cliproxy — CLIProxyAPI 集成
 
@@ -313,14 +312,14 @@ grok-build-switch/
 
 | 文件 | 职责 |
 |------|------|
-| `notify/notify.go` | `Info`：跨平台桌面通知（macOS `osascript`、Windows toast、Linux `notify-send`）；`OpenPath`：跨平台打开文件/目录 |
+| `notify/notify.go` | `Info`：macOS `osascript` 桌面通知；`OpenPath`：跨平台打开文件/目录 |
 
 ### 5.16 autostart — 开机自启
 
 | 文件 | 职责 |
 |------|------|
 | `autostart/autostart_darwin.go` | macOS LaunchAgent plist 生成与安装（`~/Library/LaunchAgents/com.grokbuildswitch.app.plist`） |
-| `autostart/autostart_windows.go` | Windows 注册表自启 |
+| `autostart/autostart_darwin.go` | macOS LaunchAgent 自启 |
 | `autostart/autostart_other.go` | 其他平台空实现 |
 
 ### 5.17 crash — 崩溃恢复与日志
@@ -328,7 +327,7 @@ grok-build-switch/
 | 文件 | 职责 |
 |------|------|
 | `crash/crash.go` | `Setup`：打开日志文件，重定向 `os.Stderr` 和标准 `log` 包；`RecoverMainThread`：主线程 panic 恢复；`ReportFatal`：致命错误对话框 |
-| `crash/dialog_other.go` / `dialog_windows.go` | 跨平台错误对话框实现 |
+| `crash/dialog_other.go` | 错误对话框实现 |
 
 ### 5.18 recovery — 损坏文件恢复
 
@@ -341,7 +340,7 @@ grok-build-switch/
 | 文件 | 职责 |
 |------|------|
 | `singleinstance/singleinstance_darwin.go` | macOS：基于 `unix.Flock` 的排他文件锁 |
-| `singleinstance/singleinstance_windows.go` | Windows：基于 mutex 或文件锁 |
+| `singleinstance/singleinstance_darwin.go` | macOS：基于 `unix.Flock` 的排他文件锁 |
 | `singleinstance/singleinstance_other.go` | 其他平台空实现 |
 
 ### 5.20 remoteaccess — 局域网会话管理
@@ -410,29 +409,7 @@ grok-build-switch/
 
 > **迁移逻辑**：首次运行时，`paths.Resolve()` 检测到 `~/Library/Application Support/Grok Build Switch/` 不存在时，会从 `~/.grok_switch/` 迁移旧数据，并写入 `.migrated-from-dot-grok-switch` 标记文件。
 
-### 6.2 Windows 路径
-
-| 用途 | 路径 | 文件 | 敏感 |
-|------|------|------|------|
-| **DataDir`$LOCALAPPDATA\Grok Build Switch\` | — | 是 |
-| Grok Home | `%USERPROFILE%\.grok\`（`$GROK_HOME`） | — | 是 |
-| Grok Config | `%USERPROFILE%\.grok\config.toml` | 生效配置 | **是** |
-| Profiles | DataDir | `profiles.json` | **是** |
-| Routing | DataDir | `routing.json` | **是** |
-| Settings | DataDir | `settings.json` | 否 |
-| Remote Access | DataDir | `remote_access.json` | 是 |
-| Grok Auth | DataDir | `grok_auth.json` | **是** |
-| Grok Pool | DataDir | `grok_pool\pool.json` + `accounts\` | **是** |
-| Backups | DataDir | `backups\config-*.toml` | **是** |
-| Session Graph | DataDir | `session_graph.json` | 否 |
-| CLIProxyAPI | DataDir | `cliproxy\bin\CLIProxyAPI.exe`、`config.yaml`、`auth\`、`logs\` | **是** |
-| Registrar | DataDir | `registrar\registrar.json`、`jobs\`、`accounts_cli.txt` | **是** |
-| Agent Log | DataDir | `agent.log` | 否 |
-| App Log | DataDir | `grok_switch.log` | 否 |
-| Single Instance | 命名 Mutex | — | 否 |
-| 开机自启 | 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` | — | 否 |
-
-### 6.3 路径环境变量覆盖
+### 6.2 路径环境变量覆盖
 
 | 变量 | 作用 |
 |------|------|
@@ -619,14 +596,6 @@ go run -mod=vendor . --no-tray
 
 # 静默启动（不自动打开浏览器）
 go run -mod=vendor . --silent
-```
-
-### 8.3 从源码构建（Windows）
-
-```powershell
-# PowerShell
-.\build.ps1          # 构建托盘版
-.\build-gui.ps1      # 构建 GUI 版
 ```
 
 ---
