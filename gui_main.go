@@ -27,6 +27,7 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/registrar"
 	"grok_switch/internal/remoteaccess"
+	"grok_switch/internal/routing"
 	"grok_switch/internal/server"
 	"grok_switch/internal/settings"
 	"grok_switch/internal/singleinstance"
@@ -101,6 +102,28 @@ func main() {
 	if err := sw.EnsureDefaultProfile(); err != nil {
 		crash.Logf("default profile import skipped: %v", err)
 	}
+	routingStore := routing.NewStore(resolved.RoutingFile)
+	routingSnapshot, err := routingStore.Initialize(profileStore)
+	if err != nil {
+		guiFatal(err)
+	}
+	profileList, err := profileStore.List()
+	if err != nil {
+		guiFatal(err)
+	}
+	startupPolicy := routing.RepairPolicy(profileList, routingSnapshot.Policy)
+	hydratedRouting, err := routing.ProjectWithPolicy(profileList, startupPolicy)
+	if err != nil {
+		guiFatal(err)
+	}
+	if err := sw.ApplyRouting(hydratedRouting); err != nil {
+		guiFatal(fmt.Errorf("应用启动路由配置失败: %w", err))
+	}
+	if startupPolicy != routingSnapshot.Policy {
+		if _, err := routingStore.UpdatePolicy(startupPolicy); err != nil {
+			guiFatal(fmt.Errorf("修复启动路由策略失败: %w", err))
+		}
+	}
 	currentSettings, err := settingsStore.Get()
 	if err != nil {
 		guiFatal(err)
@@ -115,6 +138,7 @@ func main() {
 	appServer := &server.Server{
 		Paths:             resolved,
 		Profiles:          profileStore,
+		Routing:           routingStore,
 		Settings:          settingsStore,
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		GrokAuth:          grokAuthStore,
@@ -132,6 +156,17 @@ func main() {
 	httpServer, port, err := appServer.Listen(currentSettings.Port)
 	if err != nil {
 		guiFatal(err)
+	}
+	if err := appServer.EnsureSubscriptionProxyRoutes(); err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		guiFatal(fmt.Errorf("更新订阅代理路由失败: %w", err))
+	}
+	if err := appServer.EnsureCodeBuddyProfile(); err != nil {
+		crash.Logf("CodeBuddy managed profile skipped: %v", err)
+	}
+	if err := appServer.ApplyCurrentRouting(); err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		guiFatal(fmt.Errorf("最终应用组合路由失败: %w", err))
 	}
 	if crashFile := resolved.LogFile; crashFile != "" {
 		if f, ferr := os.OpenFile(crashFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); ferr == nil {
@@ -176,7 +211,7 @@ func runWailsWindow(url, dataDir string) error {
 		OnBeforeClose:     trayController.beforeClose,
 		OnShutdown:        func(context.Context) { trayController.shutdown() },
 		WindowStartState:  options.Normal,
-		HideWindowOnClose: false,
+		HideWindowOnClose: true,
 	}
 	configurePlatformOptions(appOptions, dataDir)
 	return wails.Run(appOptions)

@@ -1,0 +1,75 @@
+package server
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	grokconfig "grok_switch/internal/config"
+	"grok_switch/internal/routing"
+)
+
+type subscriptionProfileRoutingFake struct {
+	subscriptionProxyServiceFake
+}
+
+func (*subscriptionProfileRoutingFake) Accounts(context.Context) ([]SubscriptionProxyAccount, error) {
+	return []SubscriptionProxyAccount{
+		{ID: "codex-account", Provider: "codex"},
+		{ID: "gemini-account", Provider: "gemini"},
+		{ID: "grok-account", Provider: "grok"},
+	}, nil
+}
+
+func (*subscriptionProfileRoutingFake) Models(context.Context) ([]SubscriptionProxyModel, error) {
+	return []SubscriptionProxyModel{
+		{ID: "gpt-sub", Provider: "codex", Label: "subscription/codex/gpt-sub"},
+		{ID: "gemini-sub", Provider: "gemini", Label: "subscription/gemini/gemini-sub"},
+		{ID: "grok-sub", Provider: "grok", Label: "subscription/grok/grok-sub"},
+	}, nil
+}
+
+func TestSubscriptionProviderCreationRefreshesCombinedRouting(t *testing.T) {
+	s := newRoutingTestServer(t)
+	s.SubscriptionProxy = &subscriptionProfileRoutingFake{}
+	s.ActualPort = 17878
+
+	request := loopbackRequest(http.MethodPost, "/api/subscription-proxy/providers", `{}`)
+	response := httptest.NewRecorder()
+	s.handleSubscriptionProxyProviders(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileList, err := s.Profiles.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrated, err := routing.ProjectWithPolicy(profileList, stored.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hydrated.Providers) != 5 {
+		t.Fatalf("providers = %d, want 5", len(hydrated.Providers))
+	}
+	matches, err := grokconfig.CurrentMatchesRouting(s.Paths.GrokConfig, hydrated)
+	if err != nil || !matches {
+		t.Fatalf("combined config matches=%v err=%v", matches, err)
+	}
+	config, err := os.ReadFile(s.Paths.GrokConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"upstream-one", "upstream-two", "gpt-sub", "gemini-sub", "grok-sub"} {
+		if !strings.Contains(string(config), model) {
+			t.Fatalf("combined config missing %q: %s", model, config)
+		}
+	}
+}

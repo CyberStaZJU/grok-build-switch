@@ -632,9 +632,11 @@ function showView(name) {
   const home = $("viewHome");
   const edit = $("viewEdit");
   const settings = $("viewSettings");
+  const routing = $("viewRouting");
   const subscriptionProxy = $("viewSubscriptionProxy");
   const chat = $("viewChat");
   const ssh = $("viewSSH");
+  const sessionGraph = $("viewSessionGraph");
   if (home) {
     home.hidden = name !== "home";
     home.style.display = name === "home" ? "" : "none";
@@ -646,6 +648,10 @@ function showView(name) {
   if (settings) {
     settings.hidden = name !== "settings";
     settings.style.display = name === "settings" ? "" : "none";
+  }
+  if (routing) {
+    routing.hidden = name !== "routing";
+    routing.style.display = name === "routing" ? "" : "none";
   }
   if (subscriptionProxy) {
     subscriptionProxy.hidden = name !== "subscriptionProxy";
@@ -659,6 +665,10 @@ function showView(name) {
     ssh.hidden = name !== "ssh";
     ssh.style.display = name === "ssh" ? "" : "none";
   }
+  if (sessionGraph) {
+    sessionGraph.hidden = name !== "sessionGraph";
+    sessionGraph.style.display = name === "sessionGraph" ? "" : "none";
+  }
   if ($("navHomeBtn")) $("navHomeBtn").hidden = name === "home";
   document.querySelectorAll("[data-home-only]").forEach((el) => {
     el.hidden = name !== "home";
@@ -666,7 +676,7 @@ function showView(name) {
   // Keep header add/import only on home list.
   if ($("headerSubtitle")) {
     $("headerSubtitle").textContent =
-      name === "settings" ? "设置" : name === "subscriptionProxy" ? "订阅代理" : name === "ssh" ? "SSH 远程文件" : name === "edit" ? ( $("profileId")?.value ? "编辑供应商" : "添加供应商") : name === "chat" ? "对话" : "供应商";
+      name === "settings" ? "设置" : name === "routing" ? "模型路由" : name === "subscriptionProxy" ? "订阅代理" : name === "ssh" ? "SSH 远程文件" : name === "sessionGraph" ? "会话图谱" : name === "edit" ? ( $("profileId")?.value ? "编辑供应商" : "添加供应商") : name === "chat" ? "对话" : "供应商";
   }
   if (name === "settings") {
     loadConfigEditor().catch((err) => toast(err.message, "error"));
@@ -674,6 +684,12 @@ function showView(name) {
   }
   if (name === "ssh") {
     loadSSHConnections().catch((err) => toast(err.message, "error"));
+  }
+  if (name === "routing") {
+    loadRoutingView().catch(() => {});
+  }
+  if (name === "sessionGraph") {
+    loadSessionGraph().catch((err) => toast(err.message, "error"));
   }
   if (name === "subscriptionProxy") {
     loadSubscriptionProxy().catch((err) => toast(err.message, "error"));
@@ -2856,21 +2872,11 @@ function renderProfiles() {
 				</div>
 			</div>
 			<div class="providerActions">
-				<button type="button" class="btn sm primary" data-action="enable">${profile.is_active ? "当前启用" : "启用"}</button>
 				<button type="button" class="btn sm ghost" data-action="pin">${profile.pinned ? "取消置顶" : "置顶"}</button>
 				${official ? "" : '<button type="button" class="btn sm" data-action="edit">编辑</button><button type="button" class="btn sm ghost" data-action="copy">复制</button><button type="button" class="btn sm ghost" data-action="export">导出</button><button type="button" class="btn sm danger" data-action="delete">删除</button>'}
 			</div>
 		`;
 
-    const enableBtn = el.querySelector('[data-action="enable"]');
-    if (profile.is_active) {
-      enableBtn.disabled = true;
-      enableBtn.classList.add("current");
-		} else {
-			enableBtn.onclick = () => official
-				? activateOfficial(enableBtn)
-				: activateProfile(profile.id, enableBtn, profile.name);
-		}
 		el.querySelector('[data-action="pin"]').onclick = () => toggleProviderPin(profile.key);
 		bindProviderDrag(el, profile.key);
 
@@ -4630,6 +4636,7 @@ async function saveSSHConnection() {
 // Navigation
 $("navHomeBtn").onclick = () => showView("home");
 $("navSettingsBtn").onclick = () => showView("settings");
+$("navRoutingBtn").onclick = () => showView("routing");
 $("navSubscriptionProxyBtn").onclick = () => showView("subscriptionProxy");
 $("navSSHBtn").onclick = () => showView("ssh");
 if ($("refreshCacheStatsBtn")) {
@@ -4706,6 +4713,7 @@ $("openConfigFromDriftBtn").onclick = () => showView("settings");
 
 $("agentStartBtn").onclick = () => run(startAgent, { button: $("agentStartBtn"), busyLabel: "连接中…" });
 $("agentNewSessionBtn").onclick = () => run(newAgentSession, { button: $("agentNewSessionBtn"), busyLabel: "创建中…" });
+$("agentOrganizeSessionsBtn").onclick = () => openOrganizePanel();
 $("agentStopBtn").onclick = () => run(stopAgent, { button: $("agentStopBtn"), busyLabel: "停止中…" });
 $("agentSessionSearch").oninput = () => {
   clearTimeout(agentSessionSearchTimer);
@@ -5340,6 +5348,397 @@ document.addEventListener("keydown", (event) => {
     showView("home");
   }
 });
+
+// ——— Session Graph ———
+const sessionGraph = { logicalSessions: [], loading: false };
+
+async function loadSessionGraph() {
+  sessionGraph.loading = true;
+  const container = $("sessionGraphContent");
+  if (container) container.innerHTML = '<p class="muted tiny">加载会话图谱…</p>';
+  try {
+    const response = await api("/api/agent/sessions");
+    const sessions = response.sessions || [];
+    const byLogicalId = {};
+    sessions.forEach((session) => {
+      const logicalId = session.logical_id || session.id.split("-").slice(0, 2).join("-") || session.id;
+      if (!byLogicalId[logicalId]) {
+        byLogicalId[logicalId] = { id: logicalId, title: session.title || `会话 ${logicalId.slice(0, 8)}`, branches: [], created_at: session.created_at, updated_at: session.updated_at };
+      }
+      byLogicalId[logicalId].branches.push({ native_session_id: session.id, provider: session.model || "unknown", model: session.model || "—", cwd: session.cwd || "", health: session.health || "healthy", updated_at: session.updated_at, title: session.title || session.id });
+      if (session.updated_at && (!byLogicalId[logicalId].updated_at || session.updated_at > byLogicalId[logicalId].updated_at)) {
+        byLogicalId[logicalId].updated_at = session.updated_at;
+      }
+    });
+    sessionGraph.logicalSessions = Object.values(byLogicalId).sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    renderSessionGraph();
+  } catch (err) {
+    if (container) container.innerHTML = `<div class="routingUnavailable"><strong>无法加载会话图谱</strong><p>${escapeHtml(err.message)}</p></div>`;
+  } finally {
+    sessionGraph.loading = false;
+  }
+}
+
+function renderSessionGraph() {
+  const container = $("sessionGraphContent");
+  if (!container) return;
+  if ($("sessionGraphCount")) $("sessionGraphCount").textContent = `${sessionGraph.logicalSessions.length} 个`;
+  if (!sessionGraph.logicalSessions.length) {
+    container.innerHTML = '<div class="routingUnavailable"><strong>暂无会话分支</strong><p>开始使用 Agent 对话后，跨供应商的会话分支会在此展示。</p></div>';
+    return;
+  }
+  container.innerHTML = sessionGraph.logicalSessions.map((logical) => `
+    <section class="sessionGraphGroup">
+      <div class="sessionGraphHead"><strong>${escapeHtml(logical.title)}</strong><span class="muted tiny">${escapeHtml(formatSessionTime(logical.updated_at))} · ${logical.branches.length} 个分支</span></div>
+      <div class="sessionGraphBranches">
+        ${logical.branches.map((branch) => `
+          <div class="sessionGraphBranch" data-session-id="${escapeAttr(branch.native_session_id)}">
+            <div class="sessionGraphBranchInfo"><strong>${escapeHtml(branch.title)}</strong><div class="sessionGraphBranchMeta"><code>${escapeHtml(branch.model)}</code><span class="muted tiny">${escapeHtml(branch.cwd || "默认目录")}</span><span class="badge ${branch.health === "healthy" ? "active" : "warn"}">${escapeHtml(branch.health === "healthy" ? "健康" : "异常")}</span></div></div>
+            <div class="sessionGraphBranchActions"><span class="muted tiny">${escapeHtml(formatSessionTime(branch.updated_at))}</span><button type="button" class="btn sm" data-action="switch" data-session-id="${escapeAttr(branch.native_session_id)}">切换分支</button></div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `).join("");
+  container.querySelectorAll('[data-action="switch"]').forEach((btn) => {
+    btn.onclick = () => run(async () => { await api("/api/agent/session/load", { method: "POST", body: JSON.stringify({ id: btn.dataset.sessionId }) }); toast("已切换会话分支", "success"); showView("chat"); }, { busyLabel: "切换中…" });
+  });
+}
+
+// ——— Browser-use Status ———
+function isGrokModelUI(model) {
+  if (!model) return false;
+  const m = model.trim().toLowerCase();
+  return m.startsWith("grok") || m.startsWith("grok-");
+}
+
+function renderBrowserUseStatus(snapshot) {
+  const container = $("browserUseStatus");
+  if (!container) return;
+  if (!snapshot || !snapshot.policy) { container.innerHTML = '<p class="muted tiny">加载路由策略后可查看 browser-use 注入状态。</p>'; return; }
+  const policy = snapshot.policy;
+  const items = [];
+  if (policy.default && snapshot.model_routes) {
+    const route = snapshot.model_routes.find((r) => r.name === policy.default || r.id === policy.default);
+    if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `默认对话 (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
+  }
+  if (policy.web_search && snapshot.model_routes) {
+    const route = snapshot.model_routes.find((r) => r.name === policy.web_search || r.id === policy.web_search);
+    if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `联网搜索 (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
+  }
+  for (const subagent of ["explore", "plan"]) {
+    const routeName = policy.subagents?.[subagent] || policy[subagent];
+    if (routeName && snapshot.model_routes) {
+      const route = snapshot.model_routes.find((r) => r.name === routeName || r.id === routeName);
+      if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `子代理 ${subagent} (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
+    }
+  }
+  if (!items.length) { container.innerHTML = '<p class="muted tiny">未配置路由目标。</p>'; return; }
+  container.innerHTML = `<div class="browserUseStatus"><div class="browserUseList">${items.map((item) => `<div class="browserUseItem ${item.injected ? "injected" : "native"}"><span class="browserUseLabel">${escapeHtml(item.label)}</span><code>${escapeHtml(item.model || "—")}</code><span class="badge ${item.injected ? "warn" : "active"}">${item.injected ? "已注入 MCP" : "原生支持"}</span><span class="muted tiny">${escapeHtml(item.reason)}</span></div>`).join("")}</div></div>`;
+}
+
+// ——— Routing View ———
+async function loadRoutingView() {
+  const routingStatus = $("routingStatus");
+  const catalog = $("routingCatalog");
+  const codeBuddyStatus = $("codeBuddyStatus");
+  const codeBuddyBadge = $("codeBuddyBadge");
+  const browserUseStatus = $("browserUseStatus");
+  const browserUseBadge = $("browserUseBadge");
+  if (routingStatus) routingStatus.textContent = "加载中…";
+  if (catalog) catalog.innerHTML = '<p class="muted tiny">加载中…</p>';
+  if (codeBuddyStatus) codeBuddyStatus.innerHTML = '<p class="muted tiny">检测中…</p>';
+  if (codeBuddyBadge) { codeBuddyBadge.textContent = "检测中"; codeBuddyBadge.dataset.state = "loading"; }
+  if (browserUseStatus) browserUseStatus.innerHTML = '<p class="muted tiny">检测中…</p>';
+  if (browserUseBadge) browserUseBadge.textContent = "检测中";
+
+  const [snapshot, cbStatus] = await Promise.all([
+    api("/api/routing"),
+    api("/api/codebuddy/status").catch(() => ({ available: false, error: "无法获取状态" })),
+  ]);
+  renderRouting(snapshot);
+  renderCodeBuddyStatus(cbStatus);
+  renderBrowserUseStatus(snapshot);
+}
+
+function renderRouting(snapshot) {
+  if (!snapshot) return;
+  const routingStatus = $("routingStatus");
+  const catalog = $("routingCatalog");
+  const modelCount = $("routingModelCount");
+  const browserUseBadge = $("browserUseBadge");
+  const policy = snapshot.policy || {};
+  const modelRoutes = snapshot.model_routes || [];
+  const providers = snapshot.providers || [];
+
+  if (browserUseBadge) browserUseBadge.textContent = snapshot.web_search_capable ? "已就绪" : "未配置";
+
+  // Populate policy dropdowns
+  const dropdownIds = { routingDefault: "", routingWebSearch: "web_search", routingExplore: "explore", routingPlan: "plan" };
+  for (const [selectId, policyKey] of Object.entries(dropdownIds)) {
+    const sel = $(selectId);
+    if (!sel) continue;
+    const current = sel.value || policy[policyKey] || "";
+    sel.innerHTML = '<option value="">（未设置）</option>';
+    for (const route of modelRoutes) {
+      const opt = document.createElement("option");
+      opt.value = route.name;
+      opt.textContent = `${route.name} — ${route.model}`;
+      sel.appendChild(opt);
+    }
+    sel.value = current;
+  }
+
+  // Populate reasoning effort
+  const effortSel = $("routingReasoningEffort");
+  if (effortSel) effortSel.value = policy.default_reasoning_effort || "none";
+
+  if (routingStatus) {
+    routingStatus.textContent = `更新于 ${snapshot.updated_at ? new Date(snapshot.updated_at).toLocaleTimeString("zh-CN") : "—"} · ${providers.length} 个供应商 · ${modelRoutes.length} 个模型`;
+  }
+
+  // Render unified model catalog
+  if (modelCount) modelCount.textContent = `${modelRoutes.length} 个`;
+  if (catalog) {
+    if (!modelRoutes.length) {
+      catalog.innerHTML = '<div class="routingUnavailable"><strong>暂无可用模型</strong><p>添加并启用供应商后，模型会在此展示。</p></div>';
+    } else {
+      const byProvider = {};
+      for (const route of modelRoutes) {
+        const pName = route.provider_id || "其他";
+        if (!byProvider[pName]) byProvider[pName] = [];
+        byProvider[pName].push(route);
+      }
+      catalog.innerHTML = Object.entries(byProvider).map(([pName, routes]) => `
+        <section class="routingCatalogGroup">
+          <div class="routingCatalogHead"><strong>${escapeHtml(pName)}</strong><span class="muted tiny">${routes.length} 个模型</span></div>
+          <div class="routingCatalogModels">
+            ${routes.map((r) => `
+              <div class="routingCatalogModel">
+                <div class="routingCatalogModelInfo">
+                  <strong>${escapeHtml(r.name)}</strong>
+                  <code>${escapeHtml(r.model)}</code>
+                  ${r.api_backend ? `<span class="muted tiny">backend: ${escapeHtml(r.api_backend)}</span>` : ""}
+                </div>
+                <div class="routingCatalogModelMeta">
+                  ${r.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}
+                  ${r.supports_reasoning_effort ? '<span class="badge active">推理</span>' : ''}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </section>
+      `).join("");
+    }
+  }
+}
+
+function renderCodeBuddyStatus(status) {
+  const badge = $("codeBuddyBadge");
+  const container = $("codeBuddyStatus");
+  const modelsContainer = $("codeBuddyModels");
+  if (!container) return;
+  if (!status || !status.available) {
+    if (badge) { badge.textContent = "未安装"; badge.dataset.state = "stopped"; }
+    container.innerHTML = `<div class="routingUnavailable"><strong>CodeBuddy 未安装</strong><p>${escapeHtml(status?.error || "本机未检测到 codebuddy 可执行文件。")}</p></div>`;
+    if (modelsContainer) modelsContainer.innerHTML = "";
+    return;
+  }
+  if (badge) { badge.textContent = "已就绪"; badge.dataset.state = "running"; }
+  container.innerHTML = `<div class="codeBuddyStatus"><span class="muted tiny">版本 ${escapeHtml(status.version || "未知")}</span></div>`;
+  if (modelsContainer) {
+    const models = (status.models || []).filter((m) => m && m.trim());
+    modelsContainer.innerHTML = models.length
+      ? `<div class="codeBuddyModelsList">${models.map((m) => `<span class="chip">${escapeHtml(m)}</span>`).join("")}</div>`
+      : '<p class="muted tiny">无可用模型。</p>';
+  }
+}
+
+function saveRoutingPolicy() {
+  const policy = {
+    default: $("routingDefault")?.value || "",
+    default_reasoning_effort: $("routingReasoningEffort")?.value || "none",
+    web_search: $("routingWebSearch")?.value || "",
+    explore: $("routingExplore")?.value || "",
+    plan: $("routingPlan")?.value || "",
+  };
+  run(async () => {
+    await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(policy) });
+    toast("路由策略已保存", "success");
+    await loadRoutingView();
+  }, { button: $("saveRoutingPolicyBtn"), busyLabel: "保存中…" });
+}
+
+// ——— Routing Event Handlers ———
+$("refreshRoutingBtn").onclick = () => run(loadRoutingView, { button: $("refreshRoutingBtn"), busyLabel: "刷新中…" });
+$("backFromRoutingBtn").onclick = () => showView("home");
+$("saveRoutingPolicyBtn").onclick = () => saveRoutingPolicy();
+
+// ——— Session Graph Event Handlers ———
+$("navSessionGraphBtn").onclick = () => showView("sessionGraph");
+$("refreshSessionGraphBtn").onclick = () => run(loadSessionGraph, { button: $("refreshSessionGraphBtn"), busyLabel: "刷新中…" });
+$("backFromSessionGraphBtn").onclick = () => showView("home");
+
+// ——— 对话整理 (Organize Sessions) ———
+let organizeState = { taskID: null, results: [], selected: new Set(), timer: null };
+
+function openOrganizePanel() {
+  organizeState = { taskID: null, results: [], selected: new Set(), timer: null };
+  const panel = $("organizePanel");
+  if (!panel) return;
+  panel.hidden = false;
+  panel.style.display = "";
+  $("organizeProgress").hidden = false;
+  $("organizeResults").hidden = true;
+  $("organizePanelFoot").hidden = true;
+  $("organizeProgressBarFill").style.width = "0%";
+  $("organizeProgressText").textContent = "正在分析…";
+  startOrganizeAnalysis();
+}
+
+function closeOrganizePanel() {
+  const panel = $("organizePanel");
+  if (panel) { panel.hidden = true; panel.style.display = "none"; }
+  if (organizeState.timer) { clearInterval(organizeState.timer); organizeState.timer = null; }
+}
+
+async function startOrganizeAnalysis() {
+  try {
+    const resp = await api("/api/agent/sessions/analyze", { method: "POST" });
+    organizeState.taskID = resp.task_id;
+    organizeState.timer = setInterval(() => pollOrganizeProgress(), 2000);
+  } catch (err) {
+    $("organizeProgressText").textContent = "分析失败: " + err.message;
+  }
+}
+
+async function pollOrganizeProgress() {
+  if (!organizeState.taskID) return;
+  try {
+    const task = await api("/api/agent/sessions/analyze?task_id=" + encodeURIComponent(organizeState.taskID));
+    const pct = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
+    $("organizeProgressBarFill").style.width = pct + "%";
+    $("organizeProgressText").textContent = `分析中… ${task.completed} / ${task.total}`;
+    if (task.status === "completed" || task.status === "failed") {
+      if (organizeState.timer) { clearInterval(organizeState.timer); organizeState.timer = null; }
+      if (task.status === "failed") {
+        $("organizeProgressText").textContent = "分析失败: " + (task.error || "未知错误");
+        return;
+      }
+      organizeState.results = task.results || [];
+      renderOrganizeResults();
+    }
+  } catch (err) {
+    if (organizeState.timer) { clearInterval(organizeState.timer); organizeState.timer = null; }
+    $("organizeProgressText").textContent = "查询进度失败: " + err.message;
+  }
+}
+
+function renderOrganizeResults() {
+  $("organizeProgress").hidden = true;
+  const container = $("organizeResults");
+  container.hidden = false;
+  $("organizePanelFoot").hidden = false;
+  if (!organizeState.results.length) {
+    container.innerHTML = '<p class="muted tiny">暂无会话。</p>';
+    return;
+  }
+  container.innerHTML = organizeState.results.map((item) => {
+    const deleteMarkerClass = item.should_delete ? "organizeSessionDeleteMarker marked" : "organizeSessionDeleteMarker";
+    const reasonClass = item.should_delete ? "organizeSessionReason delete-warn" : "organizeSessionReason";
+    return `
+      <div class="organizeSessionItem" data-id="${escapeAttr(item.id)}">
+        <div class="${deleteMarkerClass}" title="${item.should_delete ? "建议删除: " + escapeAttr(item.reason || "") : "保留"}"></div>
+        <div class="organizeSessionTitle">
+          <code title="${escapeAttr(item.current_title)}">${escapeHtml(item.current_title || "未命名")}</code>
+          <span class="meta">${escapeHtml(item.model || "—")} · ${item.message_count || 0} 条消息</span>
+        </div>
+        <input type="text" class="organizeSessionTitleInput" data-id="${escapeAttr(item.id)}" value="${escapeAttr(item.suggested_title || "")}" placeholder="输入标题…">
+        <div class="${reasonClass}">${escapeHtml(item.reason || "")}</div>
+      </div>
+    `;
+  }).join("");
+  // Bind input events.
+  container.querySelectorAll(".organizeSessionTitleInput").forEach((input) => {
+    input.oninput = () => {
+      const id = input.dataset.id;
+      const res = organizeState.results.find((r) => r.id === id);
+      if (res) res.suggested_title = input.value;
+    };
+  });
+  updateOrganizeSelectedCount();
+}
+
+function updateOrganizeSelectedCount() {
+  const el = $("organizeSelectedCount");
+  if (el) el.textContent = `已选 ${organizeState.selected.size} 项`;
+}
+
+function toggleOrganizeDeleteSelection(forceCheck) {
+  const container = $("organizeResults");
+  container.querySelectorAll(".organizeSessionItem").forEach((item) => {
+    const id = item.dataset.id;
+    const res = organizeState.results.find((r) => r.id === id);
+    if (!res) return;
+    const marker = item.querySelector(".organizeSessionDeleteMarker");
+    const shouldCheck = forceCheck !== undefined ? forceCheck : !organizeState.selected.has(id);
+    if (shouldCheck) {
+      organizeState.selected.add(id);
+      marker.classList.add("marked");
+    } else {
+      organizeState.selected.delete(id);
+      marker.classList.remove("marked");
+    }
+  });
+  updateOrganizeSelectedCount();
+}
+
+async function applyOrganizeChanges() {
+  const renames = [];
+  const deletions = [];
+  organizeState.results.forEach((res) => {
+    const suggested = (res.suggested_title || "").trim();
+    if (suggested && suggested !== res.current_title) {
+      renames.push({ id: res.id, title: suggested });
+    }
+  });
+  organizeState.selected.forEach((id) => deletions.push(id));
+  try {
+    if (renames.length) {
+      await api("/api/agent/sessions/bulk-rename", { method: "POST", body: JSON.stringify({ items: renames }) });
+    }
+    if (deletions.length) {
+      await api("/api/agent/sessions/bulk-delete", { method: "POST", body: JSON.stringify({ ids: deletions }) });
+    }
+    const msg = [];
+    if (renames.length) msg.push(`重命名 ${renames.length} 个`);
+    if (deletions.length) msg.push(`删除 ${deletions.length} 个`);
+    toast(msg.length ? msg.join("，") : "无更改", "success");
+    closeOrganizePanel();
+    loadAgentSessions().catch(() => {});
+  } catch (err) {
+    toast("应用失败: " + err.message, "error");
+  }
+}
+
+$("organizePanelCloseBtn").onclick = () => closeOrganizePanel();
+$("organizeCancelBtn").onclick = () => closeOrganizePanel();
+$("organizeApplyBtn").onclick = () => run(applyOrganizeChanges, { button: $("organizeApplyBtn"), busyLabel: "应用中…" });
+$("organizeSelectDeleteBtn").onclick = () => {
+  const allMarked = organizeState.results.filter((r) => r.should_delete).every((r) => organizeState.selected.has(r.id));
+  // Toggle: if all recommended are marked, unmark all; otherwise mark all recommended.
+  if (allMarked) {
+    organizeState.selected.clear();
+    document.querySelectorAll(".organizeSessionDeleteMarker").forEach((m) => m.classList.remove("marked"));
+  } else {
+    organizeState.results.filter((r) => r.should_delete).forEach((r) => {
+      organizeState.selected.add(r.id);
+      const marker = document.querySelector(`.organizeSessionItem[data-id="${CSS.escape(r.id)}"] .organizeSessionDeleteMarker`);
+      if (marker) marker.classList.add("marked");
+    });
+  }
+  updateOrganizeSelectedCount();
+};
 
 initialiseChatThemes();
 showView("home");

@@ -20,7 +20,10 @@ type Runtime struct {
 	Paths Paths
 	Home  string
 }
-type Status struct{ Running, Healthy, PortConflict bool }
+type Status struct {
+	Running, Healthy, PortConflict bool
+	PID                           int
+}
 
 func (Runtime) Start(context.Context) error   { return fmt.Errorf("LaunchAgent 仅支持 macOS") }
 func (Runtime) Stop(context.Context) error    { return fmt.Errorf("LaunchAgent 仅支持 macOS") }

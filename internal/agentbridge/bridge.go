@@ -98,6 +98,7 @@ type Bridge struct {
 	closeJob           func()
 	conn               *acp.ClientSideConnection
 	outputFilter       *sessionLoadNotificationFilter
+	mcpServers         []acp.McpServer
 	processCtx         context.Context
 
 	subscribers map[string]chan Event
@@ -344,7 +345,7 @@ func (b *Bridge) newSessionLocked(ctx context.Context, cwd string) error {
 	if busy {
 		return ErrBusy
 	}
-	response, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: []acp.McpServer{}})
+	response, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: b.mcpServers})
 	if err != nil {
 		return fmt.Errorf("创建 Grok 会话失败: %w", err)
 	}
@@ -391,7 +392,7 @@ func (b *Bridge) loadSessionLocked(ctx context.Context, sessionID, cwd string) e
 	b.mu.Unlock()
 	b.suppressUpdates.Store(true)
 	response, err := conn.LoadSession(ctx, acp.LoadSessionRequest{
-		SessionId: acp.SessionId(sessionID), Cwd: cwd, McpServers: []acp.McpServer{},
+		SessionId: acp.SessionId(sessionID), Cwd: cwd, McpServers: b.mcpServers,
 	})
 	b.suppressUpdates.Store(false)
 	if outputFilter != nil {
@@ -534,6 +535,27 @@ func (b *Bridge) SetSessionAutoApprove(enabled bool) {
 	b.sessionAutoApprove = enabled
 	b.mu.Unlock()
 	b.broadcastStatus()
+}
+
+// SetMcpServers updates the MCP servers injected into new sessions.
+// Pass an empty slice to disable browser-use fallback.
+func (b *Bridge) SetMcpServers(servers []acp.McpServer) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if servers == nil {
+		b.mcpServers = nil
+		return
+	}
+	b.mcpServers = append([]acp.McpServer(nil), servers...)
+}
+
+// McpServers returns a copy of the currently configured MCP servers.
+func (b *Bridge) McpServers() []acp.McpServer {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]acp.McpServer, len(b.mcpServers))
+	copy(out, b.mcpServers)
+	return out
 }
 
 func (b *Bridge) runPrompt(ctx context.Context, turnCancel context.CancelFunc, generation uint64, conn *acp.ClientSideConnection, sessionID string, blocks []acp.ContentBlock) {

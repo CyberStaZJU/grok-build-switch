@@ -17,13 +17,6 @@ type ModelDef struct {
 	MaxCompletionTokens     int64             `json:"max_completion_tokens"`
 }
 
-// SubagentsModels maps built-in subagent types to model IDs written under
-// [subagents.models] in Grok config.toml.
-type SubagentsModels struct {
-	Explore string `json:"explore,omitempty"`
-	Plan    string `json:"plan,omitempty"`
-}
-
 type Profile struct {
 	ID                     string          `json:"id"`
 	Name                   string          `json:"name"`
@@ -35,15 +28,9 @@ type Profile struct {
 	AvailableModels        []string        `json:"available_models"`
 	DefaultModel           string          `json:"default_model"`
 	DefaultReasoningEffort string          `json:"default_reasoning_effort"`
-	WebSearchModel         string          `json:"web_search_model"`
-	SubagentsModels        SubagentsModels `json:"subagents_models"`
-	// SubagentsDefaultModel is deprecated (legacy profiles / old config key).
-	// Normalize migrates a non-empty value into SubagentsModels when explore/plan are empty.
-	SubagentsDefaultModel string     `json:"subagents_default_model,omitempty"`
-	Models                []ModelDef `json:"models"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	IsActive              bool       `json:"is_active"`
+	Models                 []ModelDef      `json:"models"`
+	CreatedAt              time.Time       `json:"created_at"`
+	UpdatedAt              time.Time       `json:"updated_at"`
 }
 
 func (p Profile) Matches(other Profile) bool {
@@ -51,10 +38,7 @@ func (p Profile) Matches(other Profile) bool {
 	other = Normalize(other)
 	if p.BaseURL != other.BaseURL ||
 		p.DefaultModel != other.DefaultModel ||
-		p.DefaultReasoningEffort != other.DefaultReasoningEffort ||
-		p.WebSearchModel != other.WebSearchModel ||
-		p.SubagentsModels.Explore != other.SubagentsModels.Explore ||
-		p.SubagentsModels.Plan != other.SubagentsModels.Plan {
+		p.DefaultReasoningEffort != other.DefaultReasoningEffort {
 		return false
 	}
 	// config.toml only stores keys on [model.*] entries. A profile with no
@@ -130,20 +114,11 @@ func Normalize(p Profile) Profile {
 	if p.APIKey == "" {
 		p.APIKey = effectiveAPIKey(p)
 	}
-	// Migrate legacy single subagents_default_model into per-type fields.
-	if p.SubagentsModels.Explore == "" && p.SubagentsModels.Plan == "" && p.SubagentsDefaultModel != "" {
-		p.SubagentsModels.Explore = p.SubagentsDefaultModel
-		p.SubagentsModels.Plan = p.SubagentsDefaultModel
-	}
-	p.SubagentsDefaultModel = ""
 	// Profiles with only default model names (no models[]) still need a
 	// writable [model.*] entry so config.toml can store the API key.
 	if len(p.Models) == 0 {
 		names := uniqueStrings([]string{
 			p.DefaultModel,
-			p.WebSearchModel,
-			p.SubagentsModels.Explore,
-			p.SubagentsModels.Plan,
 		})
 		for _, name := range names {
 			if name == "" {

@@ -7,7 +7,9 @@ cd "$SCRIPT_DIR"
 APP_NAME="${APP_NAME:-Grok Build Switch}"
 BUNDLE_ID="${BUNDLE_ID:-com.grokbuildswitch.app}"
 VERSION="${VERSION:-${GITHUB_REF_NAME:-0.0.0-dev}}"
-VERSION="${VERSION#v}"
+if [[ "$VERSION" =~ ^v[0-9] ]]; then
+  VERSION="${VERSION#v}"
+fi
 EXECUTABLE_NAME="grok_switch"
 ARCH="arm64"
 BUILD_DIR="${BUILD_DIR:-dist/macos}"
@@ -44,21 +46,37 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 printf 'Building %s %s (%s)...\n' "$APP_NAME" "$VERSION" "$ARCH"
-go test -mod=readonly ./...
-CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" go build -mod=readonly \
+go test -mod=vendor ./...
+CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" go build -mod=vendor \
   -tags "wailsgui,desktop,production" \
   -trimpath -ldflags "-s -w" \
   -o "$CONTENTS/MacOS/$EXECUTABLE_NAME" .
 
 CLIPROXY_VERSION="7.2.94"
 CLIPROXY_ARCHIVE="vendor/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
+CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
 CLIPROXY_SHA256="e3be2bc37e115a73a1a5bb11f67e6ddb72f313c4377261312b7551e58b428cef"
+CLIPROXY_SIZE=14243376
 if [[ ! -f "$CLIPROXY_ARCHIVE" ]]; then
-  printf 'error: required CLIProxyAPI archive not found: %s\n' "$CLIPROXY_ARCHIVE" >&2
-  exit 1
+  printf 'Downloading pinned CLIProxyAPI v%s archive...\n' "$CLIPROXY_VERSION"
+  mkdir -p "$(dirname "$CLIPROXY_ARCHIVE")"
+  CLIPROXY_DOWNLOAD="$(mktemp "${CLIPROXY_ARCHIVE}.XXXXXX")"
+  if ! curl --fail --location --retry 3 --output "$CLIPROXY_DOWNLOAD" "$CLIPROXY_URL"; then
+    rm -f "$CLIPROXY_DOWNLOAD"
+    printf 'error: failed to download CLIProxyAPI archive.\n' >&2
+    exit 1
+  fi
+  if [[ "$(stat -f%z "$CLIPROXY_DOWNLOAD")" != "$CLIPROXY_SIZE" ]] ||
+     [[ "$(shasum -a 256 "$CLIPROXY_DOWNLOAD" | awk '{print $1}')" != "$CLIPROXY_SHA256" ]]; then
+    rm -f "$CLIPROXY_DOWNLOAD"
+    printf 'error: downloaded CLIProxyAPI archive failed size or SHA-256 verification.\n' >&2
+    exit 1
+  fi
+  mv "$CLIPROXY_DOWNLOAD" "$CLIPROXY_ARCHIVE"
 fi
-if [[ "$(shasum -a 256 "$CLIPROXY_ARCHIVE" | awk '{print $1}')" != "$CLIPROXY_SHA256" ]]; then
-  printf 'error: CLIProxyAPI archive SHA-256 mismatch.\n' >&2
+if [[ "$(stat -f%z "$CLIPROXY_ARCHIVE")" != "$CLIPROXY_SIZE" ]] ||
+   [[ "$(shasum -a 256 "$CLIPROXY_ARCHIVE" | awk '{print $1}')" != "$CLIPROXY_SHA256" ]]; then
+  printf 'error: CLIProxyAPI archive failed size or SHA-256 verification.\n' >&2
   exit 1
 fi
 CLIPROXY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/gbs-cliproxy.XXXXXX")"

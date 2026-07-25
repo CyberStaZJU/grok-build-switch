@@ -121,16 +121,17 @@ func (t *Tray) buildMenu(stop <-chan struct{}) {
 	drifted := false
 	list, err := t.Profiles.List()
 	if err == nil {
-		activeName = "官方账号"
-		for _, profile := range list {
-			if profile.IsActive {
-				activeName = profile.Name
-				activeID = profile.ID
-				if _, matches, mErr := t.Switcher.ActiveStatus(); mErr == nil {
-					drifted = !matches && activeID != ""
-				}
-				break
+		// With routing as the single source of truth, there is no "active profile".
+		// Show the first profile name if available.
+		if len(list) > 0 {
+			activeName = list[0].Name
+			activeID = list[0].ID
+		}
+		for range list {
+			if _, matches, mErr := t.Switcher.ActiveStatus(); mErr == nil {
+				drifted = !matches && activeID != ""
 			}
+			break
 		}
 	}
 	tip := "grok_switch · 当前：" + activeName
@@ -176,11 +177,7 @@ func (t *Tray) buildMenu(stop <-chan struct{}) {
 			empty.Disable()
 		} else {
 			for _, profile := range list {
-				label := profile.Name
-				if profile.IsActive {
-					label = "✓ " + label
-				}
-				item := providers.AddSubMenuItem(label, profile.BaseURL)
+				item := providers.AddSubMenuItem(profile.Name, profile.BaseURL)
 				p := profile
 				t.watch(stop, item, "activate:"+p.ID, func() {
 					if _, err := t.Switcher.Activate(p.ID); err != nil {

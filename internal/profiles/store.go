@@ -85,7 +85,6 @@ func (s *Store) Update(id string, next Profile) (Profile, error) {
 			next.ID = id
 			next.CreatedAt = profiles[i].CreatedAt
 			next.UpdatedAt = time.Now()
-			next.IsActive = profiles[i].IsActive
 			next = Normalize(next)
 			profiles[i] = next
 			if err := s.writeLocked(profiles); err != nil {
@@ -119,49 +118,68 @@ func (s *Store) Delete(id string) error {
 	return s.writeLocked(next)
 }
 
-func (s *Store) SetActive(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	profiles, err := s.readLocked()
-	if err != nil {
-		return err
-	}
-	found := false
-	for i := range profiles {
-		profiles[i].IsActive = profiles[i].ID == id
-		if profiles[i].IsActive {
-			profiles[i].UpdatedAt = time.Now()
-			found = true
-		}
-	}
-	if !found {
-		return os.ErrNotExist
-	}
-	return s.writeLocked(profiles)
-}
 
-func (s *Store) ClearActive() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	profiles, err := s.readLocked()
-	if err != nil {
-		return err
-	}
-	changed := false
-	for i := range profiles {
-		if profiles[i].IsActive {
-			profiles[i].IsActive = false
-			changed = true
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return s.writeLocked(profiles)
-}
 
 func (s *Store) EnsureDir() error {
 	return os.MkdirAll(filepath.Dir(s.path), 0o700)
+}
+
+// LegacyRoutingFields holds routing-related values that were previously stored
+// on the Profile struct. These are now owned by the routing policy, but old
+// profiles.json files may still carry them and need one-time migration.
+type LegacyRoutingFields struct {
+	WebSearch   string `json:"web_search_model"`
+	SubagentsExplore string `json:"subagents_explore_model"`
+	SubagentsPlan    string `json:"subagents_plan_model"`
+}
+
+// ReadLegacyRoutingFields reads the raw profiles.json and returns the legacy
+// routing fields from the first profile that has any. Returns nil when no
+// legacy fields are present or the file does not exist.
+func (s *Store) ReadLegacyRoutingFields() (*LegacyRoutingFields, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, err
+	}
+	var rawProfiles []map[string]any
+	if err := json.Unmarshal(data, &rawProfiles); err != nil {
+		return nil, err
+	}
+	for _, raw := range rawProfiles {
+		fields := &LegacyRoutingFields{}
+		hasAny := false
+		if v, ok := raw["web_search_model"].(string); ok && v != "" {
+			fields.WebSearch = v
+			hasAny = true
+		}
+		if sub, ok := raw["subagents_models"].(map[string]any); ok {
+			if v, ok := sub["explore"].(string); ok && v != "" {
+				fields.SubagentsExplore = v
+				hasAny = true
+			}
+			if v, ok := sub["plan"].(string); ok && v != "" {
+				fields.SubagentsPlan = v
+				hasAny = true
+			}
+		}
+		if v, ok := raw["subagents_default_model"].(string); ok && v != "" {
+			if fields.SubagentsExplore == "" {
+				fields.SubagentsExplore = v
+				hasAny = true
+			}
+			if fields.SubagentsPlan == "" {
+				fields.SubagentsPlan = v
+				hasAny = true
+			}
+		}
+		if hasAny {
+			return fields, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Store) readLocked() ([]Profile, error) {

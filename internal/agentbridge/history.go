@@ -14,14 +14,39 @@ import (
 )
 
 type SessionSummary struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Cwd          string    `json:"cwd"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Model        string    `json:"model,omitempty"`
-	AgentName    string    `json:"agent_name,omitempty"`
-	MessageCount int       `json:"message_count"`
+	ID               string    `json:"id"`
+	Title            string    `json:"title"`
+	Cwd              string    `json:"cwd"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	Model            string    `json:"model,omitempty"`
+	AgentName        string    `json:"agent_name,omitempty"`
+	MessageCount     int       `json:"message_count"`
+	ProviderID       string    `json:"provider_id,omitempty"`
+	ProviderName     string    `json:"provider_name,omitempty"`
+	ProviderBackend  string    `json:"provider_backend,omitempty"`
+	ProviderBaseURL  string    `json:"provider_base_url,omitempty"`
+	LogicalSessionID string    `json:"logical_session_id,omitempty"`
+	ParentSessionID  string    `json:"parent_session_id,omitempty"`
+	MigrationMode    string    `json:"migration_mode,omitempty"`
+	BranchHealth     string    `json:"branch_health,omitempty"`
+}
+
+// SessionProvider is grok_switch-owned metadata. Grok CLI does not currently
+// record the active profile ID in summary.json, so a sidecar is required to
+// distinguish safe same-provider resume from cross-provider migration.
+type SessionProvider struct {
+	ID               string `json:"id,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Backend          string `json:"backend,omitempty"`
+	Model            string `json:"model,omitempty"`
+	BaseURL          string `json:"base_url,omitempty"`
+	Official         bool   `json:"official,omitempty"`
+	LogicalSessionID string `json:"logical_session_id,omitempty"`
+	ParentSessionID  string `json:"parent_session_id,omitempty"`
+	MigrationMode    string `json:"migration_mode,omitempty"`
+	Health           string `json:"health,omitempty"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
 }
 
 type HistoryMessage struct {
@@ -50,9 +75,10 @@ type storedSummary struct {
 	AgentName      string    `json:"agent_name"`
 	NumChatMessage int       `json:"num_chat_messages"`
 
-	// CustomTitle is loaded from a grok_switch sidecar file and overrides the
-	// Grok-generated title when set. It is not part of summary.json.
-	CustomTitle string `json:"-"`
+	// CustomTitle and Provider are loaded from grok_switch sidecar files. They
+	// are not part of Grok CLI's summary.json.
+	CustomTitle string          `json:"-"`
+	Provider    SessionProvider `json:"-"`
 }
 
 func (b *Bridge) ListStoredSessions(query string, limit int) ([]SessionSummary, error) {
@@ -153,7 +179,8 @@ func readStoredSummary(path string) (storedSummary, error) {
 	}
 	// Prefer a user-defined title stored in a sidecar file next to summary.json,
 	// so renaming survives Grok regenerating its own summary metadata.
-	if side, sideErr := os.ReadFile(filepath.Join(filepath.Dir(path), "grok_switch_title.json")); sideErr == nil {
+	dir := filepath.Dir(path)
+	if side, sideErr := os.ReadFile(filepath.Join(dir, "grok_switch_title.json")); sideErr == nil {
 		var override struct {
 			Title string `json:"title"`
 		}
@@ -161,7 +188,61 @@ func readStoredSummary(path string) (storedSummary, error) {
 			summary.CustomTitle = strings.TrimSpace(override.Title)
 		}
 	}
+	if side, sideErr := os.ReadFile(filepath.Join(dir, "grok_switch_provider.json")); sideErr == nil {
+		_ = json.Unmarshal(side, &summary.Provider)
+	}
 	return summary, nil
+}
+
+func (b *Bridge) findStoredSessionDir(id string) (string, error) {
+	root := filepath.Join(b.grokHome, "sessions")
+	for attempt := 0; attempt < 20; attempt++ {
+		cwdEntries, err := os.ReadDir(root)
+		if err == nil {
+			for _, cwdEntry := range cwdEntries {
+				if !cwdEntry.IsDir() {
+					continue
+				}
+				dir := filepath.Join(root, cwdEntry.Name(), id)
+				if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+					return dir, nil
+				}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return "", os.ErrNotExist
+}
+
+func (b *Bridge) SetStoredSessionProvider(id string, provider SessionProvider) error {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, `/\\`) {
+		return errors.New("会话 ID 无效")
+	}
+	dir, err := b.findStoredSessionDir(id)
+	if err != nil {
+		return err
+	}
+	provider.ID = strings.TrimSpace(provider.ID)
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.Backend = strings.TrimSpace(provider.Backend)
+	provider.Model = strings.TrimSpace(provider.Model)
+	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
+	provider.LogicalSessionID = strings.TrimSpace(provider.LogicalSessionID)
+	provider.ParentSessionID = strings.TrimSpace(provider.ParentSessionID)
+	provider.MigrationMode = strings.TrimSpace(provider.MigrationMode)
+	provider.Health = strings.TrimSpace(provider.Health)
+	provider.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	data, err := json.MarshalIndent(provider, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "grok_switch_provider.json"), data, 0o600); err != nil {
+		return fmt.Errorf("写入会话供应商元数据失败: %w", err)
+	}
+	return nil
 }
 
 // RenameStoredSession persists a user-chosen title for a stored session in a
@@ -241,8 +322,50 @@ func (s storedSummary) toSessionSummary() SessionSummary {
 	return SessionSummary{
 		ID: s.Info.ID, Title: title, Cwd: s.Info.Cwd, CreatedAt: s.CreatedAt,
 		UpdatedAt: updated, Model: s.CurrentModelID, AgentName: s.AgentName,
-		MessageCount: s.NumChatMessage,
+		MessageCount: s.NumChatMessage, ProviderID: s.Provider.ID,
+		ProviderName: s.Provider.Name, ProviderBackend: s.Provider.Backend,
+		ProviderBaseURL: s.Provider.BaseURL, LogicalSessionID: s.Provider.LogicalSessionID,
+		ParentSessionID: s.Provider.ParentSessionID, MigrationMode: s.Provider.MigrationMode,
+		BranchHealth: s.Provider.Health,
 	}
+}
+
+// StoredSessionTransferText produces a provider-neutral handoff. It deliberately
+// excludes reasoning, tool calls, tool results, IDs, and protocol metadata.
+// The resulting text can be sent as a normal user message to a fresh session.
+func (b *Bridge) StoredSessionTransferText(id string, maxChars int) (string, error) {
+	history, err := b.StoredSessionHistory(id)
+	if err != nil {
+		return "", err
+	}
+	if maxChars <= 0 || maxChars > 120000 {
+		maxChars = 48000
+	}
+	parts := make([]string, 0, len(history.Messages)+4)
+	parts = append(parts,
+		"以下是从另一供应商安全迁移的旧会话纯文本上下文。",
+		"请继续完成原任务；不要假设旧工具调用仍然存在，需要时重新检查文件和环境。",
+	)
+	if title := strings.TrimSpace(history.Session.Title); title != "" {
+		parts = append(parts, "旧会话标题："+title)
+	}
+	for _, message := range history.Messages {
+		content := strings.TrimSpace(message.Content)
+		if content == "" || (message.Role != "user" && message.Role != "assistant") {
+			continue
+		}
+		label := "用户"
+		if message.Role == "assistant" {
+			label = "助手"
+		}
+		parts = append(parts, label+"："+content)
+	}
+	text := strings.Join(parts, "\n\n")
+	if len([]rune(text)) > maxChars {
+		runes := []rune(text)
+		text = "（较早内容已截断）\n\n" + string(runes[len(runes)-maxChars:])
+	}
+	return text, nil
 }
 
 func readChatHistory(path string) ([]HistoryMessage, error) {

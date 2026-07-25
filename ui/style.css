@@ -1407,6 +1407,40 @@ body {
   flex-wrap: wrap;
 }
 
+/* Model routing */
+.routingPolicyGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.routingCatalog, .codeBuddyModels { display: grid; gap: 12px; }
+.routingProviderGroup { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.routingProviderHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.routingProviderHead span { color: var(--muted); font-size: 11px; }
+.routingModelList { display: grid; }
+.routingModelRow { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.25fr) auto; align-items: center; gap: 12px; padding: 10px 12px; }
+.routingModelRow + .routingModelRow { border-top: 1px solid var(--line); }
+.routingModelRow strong, .routingModelRow code { min-width: 0; overflow-wrap: anywhere; }
+.routingModelRow code { color: var(--muted); font: 12px/1.35 var(--mono); }
+.routingBackend { justify-self: end; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: 11px/1.35 var(--mono); }
+.routingUnavailable { padding: 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); text-align: center; background: var(--surface-2); }
+.routingUnavailable p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.codeBuddyStatus { display: grid; gap: 8px; }
+.codeBuddyStatus p { margin: 0; }
+.codeBuddyInstall { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.codeBuddyInstall span { color: var(--muted); font-size: 11px; }
+.codeBuddyModelRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.codeBuddyModelRow > div { min-width: 0; display: grid; gap: 3px; }
+.codeBuddyModelRow code { color: var(--muted); overflow-wrap: anywhere; font: 12px/1.35 var(--mono); }
+
+/* New routing catalog classes */
+.routingCatalogGroup { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.routingCatalogHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.routingCatalogHead span { color: var(--muted); font-size: 11px; }
+.routingCatalogModels { display: grid; }
+.routingCatalogModel { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.routingCatalogModel + .routingCatalogModel { border-top: 1px solid var(--line); }
+.routingCatalogModelInfo { display: grid; gap: 3px; min-width: 0; }
+.routingCatalogModelInfo code { color: var(--muted); font: 12px/1.35 var(--mono); overflow-wrap: anywhere; }
+.routingCatalogModelMeta { display: flex; gap: 6px; flex-shrink: 0; }
+.codeBuddyModelsList { display: flex; flex-wrap: wrap; gap: 6px; }
+
 /* Subscription proxy */
 .subscriptionSectionTitle { margin: 4px 0 10px; }
 .subscriptionLoginGrid, .subscriptionProviderGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -1461,6 +1495,11 @@ body {
 .promptDialog input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .promptActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 @media (max-width: 600px) {
+  .routingPolicyGrid { grid-template-columns: 1fr; }
+  .routingModelRow { grid-template-columns: 1fr; gap: 4px; }
+  .routingBackend { justify-self: start; }
+  .codeBuddyModelRow { align-items: stretch; flex-direction: column; }
+  .codeBuddyModelRow .btn { width: 100%; }
   .subscriptionLoginGrid, .subscriptionProviderGrid, .subscriptionConnection { grid-template-columns: 1fr; }
   .subscriptionAccount { grid-template-columns: minmax(0, 1fr) auto; }
   .subscriptionAccount .inlineActions { grid-column: 1 / -1; }
@@ -1468,8 +1507,8 @@ body {
   .subscriptionModels fieldset { grid-template-columns: 1fr; }
 }
 @media (max-width: 375px) {
-  .subscriptionProxyView .pageHead { flex-direction: column; }
-  .subscriptionProxyView .pageHead .btn { width: 100%; }
+  .routingView .pageHead, .subscriptionProxyView .pageHead { flex-direction: column; }
+  .routingView .pageHead .inlineActions, .routingView .pageHead .btn, .subscriptionProxyView .pageHead .btn { width: 100%; }
 }
 
 /* Forms */
@@ -2628,6 +2667,160 @@ body.resizingChatPanels * {
 .newChatBtn:hover { border-color: var(--primary-border); background: var(--primary-soft); }
 .newChatBtn::before { content: "+"; color: var(--primary); font-size: 16px; font-weight: 400; }
 
+.organizeSessionsBtn {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px/1 var(--font);
+  cursor: pointer;
+  margin-top: 6px;
+}
+.organizeSessionsBtn:hover { border-color: var(--primary-border); color: var(--text); background: var(--surface); }
+.organizeSessionsBtn::before { content: "✦"; color: var(--muted); font-size: 12px; }
+.organizeSessionsBtn:hover::before { color: var(--primary); }
+
+/* 对话整理面板 */
+.organizePanel {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+.organizePanelCard {
+  width: min(720px, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.organizePanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.organizePanelHead h3 { margin: 0; font-size: 16px; }
+.organizePanelHead .muted { font-size: 12px; }
+.organizePanelClose {
+  width: 28px; height: 28px;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 18px; cursor: pointer; border-radius: 4px;
+}
+.organizePanelClose:hover { background: var(--surface-2); color: var(--text); }
+
+.organizePanelBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+}
+
+.organizeProgress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+}
+.organizeProgressBar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.organizeProgressBarFill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.organizeSessionItem {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.organizeSessionItem:last-child { border-bottom: none; }
+
+.organizeSessionDeleteMarker {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--danger);
+  background: transparent;
+  flex-shrink: 0;
+}
+.organizeSessionDeleteMarker.marked {
+  background: var(--danger);
+  box-shadow: 0 0 6px rgba(220, 38, 38, 0.4);
+}
+
+.organizeSessionTitle {
+  min-width: 0;
+}
+.organizeSessionTitle code {
+  display: block;
+  font: 11px/1.3 var(--mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.organizeSessionTitle .meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.organizeSessionTitleInput {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 11px/1.3 var(--font);
+}
+.organizeSessionTitleInput:focus { border-color: var(--primary-border); outline: none; }
+
+.organizeSessionReason {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+}
+.organizeSessionReason.delete-warn { color: var(--danger); }
+
+.organizePanelFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  gap: 12px;
+}
+.organizePanelFoot .inlineActions { display: flex; gap: 8px; }
+.organizeSelectDeleteBtn {
+  font-size: 11px;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.organizeSelectDeleteBtn:hover { background: rgba(220, 38, 38, 0.1); }
+
 .sessionSearchWrap {
   min-height: 34px;
   display: grid;
@@ -3521,3 +3714,55 @@ body.resizingChatPanels * {
 .sshEmpty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
 
 .sshConnRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ——— Browser-use Status ——— */
+.browserUseCard .badge { text-transform: uppercase; font-size: 11px; }
+.browserUseStatus { margin-top: 8px; }
+.browserUseList { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.browserUseItem { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); flex-wrap: wrap; }
+.browserUseItem.injected { border-color: var(--warn, #f59e0b); }
+.browserUseItem.native { border-color: var(--primary); }
+.browserUseLabel { font-weight: 600; font-size: 13px; flex: 1; min-width: 120px; }
+.browserUseItem code { font-size: 12px; color: var(--muted); }
+.browserUseItem .badge { font-size: 11px; }
+.browserUseItem .muted { width: 100%; }
+
+/* ——— Session Graph ——— */
+.sessionGraphView .formCard { margin-bottom: 16px; }
+.sessionGraphContent { margin-top: 12px; }
+.sessionGraphGroup { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.sessionGraphHead { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.sessionGraphHead strong { font-size: 14px; }
+.sessionGraphBranches { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.sessionGraphBranch { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.sessionGraphBranch:hover { border-color: var(--primary); }
+.sessionGraphBranchInfo { flex: 1; }
+.sessionGraphBranchInfo strong { display: block; font-size: 13px; margin-bottom: 4px; }
+.sessionGraphBranchMeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sessionGraphBranchMeta code { font-size: 11px; }
+.sessionGraphBranchActions { display: flex; align-items: center; gap: 8px; }
+
+/* ——— Browser-use Status ——— */
+.browserUseStatus { margin-top: 8px; }
+.browserUseList { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.browserUseItem { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); flex-wrap: wrap; }
+.browserUseItem.injected { border-color: #f59e0b; }
+.browserUseItem.native { border-color: var(--primary); }
+.browserUseLabel { font-weight: 600; font-size: 13px; flex: 1; min-width: 120px; }
+.browserUseItem code { font-size: 12px; color: var(--muted); }
+.browserUseItem .badge { font-size: 11px; }
+.browserUseItem .muted { width: 100%; }
+
+/* ——— Session Graph ——— */
+.sessionGraphContent { margin-top: 12px; }
+.sessionGraphGroup { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.sessionGraphHead { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.sessionGraphHead strong { font-size: 14px; }
+.sessionGraphBranches { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.sessionGraphBranch { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.sessionGraphBranch:hover { border-color: var(--primary); }
+.sessionGraphBranchInfo { flex: 1; }
+.sessionGraphBranchInfo strong { display: block; font-size: 13px; margin-bottom: 4px; }
+.sessionGraphBranchMeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sessionGraphBranchMeta code { font-size: 11px; }
+.sessionGraphBranchActions { display: flex; align-items: center; gap: 8px; }

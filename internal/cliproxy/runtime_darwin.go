@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -51,7 +52,10 @@ type Runtime struct {
 	Home   string
 	Runner Runner
 }
-type Status struct{ Running, Healthy, PortConflict bool }
+type Status struct {
+	Running, Healthy, PortConflict bool
+	PID                           int
+}
 
 func (r Runtime) runner() Runner {
 	if r.Runner != nil {
@@ -149,10 +153,27 @@ func (r Runtime) Restart(ctx context.Context) error {
 	return r.Start(ctx)
 }
 func (r Runtime) Status(ctx context.Context) (Status, error) {
-	_, err := r.runner().Run(ctx, "/bin/launchctl", "print", r.domain()+"/"+Label)
+	out, err := r.runner().Run(ctx, "/bin/launchctl", "print", r.domain()+"/"+Label)
 	running := err == nil
 	healthy := Healthy(ctx, nil)
-	return Status{Running: running, Healthy: running && healthy, PortConflict: !running && healthy}, nil
+	pid := parseLaunchctlPID(string(out))
+	return Status{Running: running, Healthy: running && healthy, PortConflict: !running && healthy, PID: pid}, nil
+}
+
+// parseLaunchctlPID extracts the PID from `launchctl print` output.
+// Looks for a line like "pid = 12345" in the service state.
+func parseLaunchctlPID(output string) int {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "pid = ") {
+			s := strings.TrimSpace(strings.TrimPrefix(line, "pid = "))
+			s = strings.TrimSuffix(s, ",")
+			if pid, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+				return pid
+			}
+		}
+	}
+	return 0
 }
 func truncate(path string) error {
 	if info, err := os.Stat(path); err == nil && info.Size() <= 1<<20 {

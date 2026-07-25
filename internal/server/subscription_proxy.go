@@ -15,15 +15,19 @@ import (
 	"grok_switch/internal/profiles"
 )
 
-const subscriptionProxyBaseURL = "http://127.0.0.1:8317/v1"
-
 var errSubscriptionProxyUnavailable = errors.New("订阅代理不可用")
 
 type SubscriptionProxyStatus struct {
-	Installed bool   `json:"installed"`
-	Running   bool   `json:"running"`
-	Healthy   bool   `json:"healthy"`
-	Version   string `json:"version,omitempty"`
+	Installed    bool   `json:"installed"`
+	Running      bool   `json:"running"`
+	Healthy      bool   `json:"healthy"`
+	Version      string `json:"version,omitempty"`
+	State        string `json:"state"`
+	PID          int    `json:"pid"`
+	ConfigPath   string `json:"config_path,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	BaseURL      string `json:"base_url,omitempty"`
+	APIKeyMasked string `json:"api_key_masked,omitempty"`
 }
 
 type SubscriptionProxyLogin struct {
@@ -372,14 +376,19 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
 	}
+	s.routingMu.Lock()
+	defer s.routingMu.Unlock()
 	list, err := s.Profiles.List()
 	if err != nil {
 		subscriptionProxyError(w, err, http.StatusInternalServerError)
 		return
 	}
 	created := make([]profiles.Profile, 0, 3)
+	createdNew := make([]string, 0, 3)
+	updatedPrevious := make([]profiles.Profile, 0, 3)
+	baseURL := s.SubscriptionProxyBaseURL()
 	for _, def := range []struct{ provider, name string }{{"codex", "订阅代理 · ChatGPT/Codex"}, {"gemini", "订阅代理 · Google Gemini"}, {"grok", "订阅代理 · Grok Build"}} {
-		profile := subscriptionProfile(def.provider, def.name, key, accounts, models)
+		profile := subscriptionProfile(def.provider, def.name, key, accounts, models, baseURL)
 		var stored *profiles.Profile
 		for i := range list {
 			if list[i].Source == "subscription-proxy:"+def.provider {
@@ -389,21 +398,46 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		}
 		if stored == nil {
 			profile, err = s.Profiles.Create(profile)
+			if err == nil {
+				createdNew = append(createdNew, profile.ID)
+			}
 		} else {
+			previous := *stored
 			profile, err = s.Profiles.Update(stored.ID, profile)
+			if err == nil {
+				updatedPrevious = append(updatedPrevious, previous)
+			}
 		}
 		if err != nil {
+			rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
 			subscriptionProxyError(w, err, http.StatusInternalServerError)
 			return
 		}
 		created = append(created, profile)
 	}
+	if s.Routing != nil {
+		if err := s.applyCurrentRoutingLocked(); err != nil {
+			rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
+			subscriptionProxyError(w, err, http.StatusInternalServerError)
+			return
+		}
+	}
 	s.changed()
 	writeJSON(w, map[string]any{"providers": created})
 }
 
-func subscriptionProfile(provider, name, key string, accounts []SubscriptionProxyAccount, models []SubscriptionProxyModel) profiles.Profile {
-	p := profiles.Profile{Name: name, Source: "subscription-proxy:" + provider, UpstreamFormat: "openai_chat", BaseURL: subscriptionProxyBaseURL, APIKey: key, DefaultReasoningEffort: "low"}
+func rollbackSubscriptionProfiles(store *profiles.Store, createdIDs []string, updatedPrevious []profiles.Profile) {
+	for i := len(createdIDs) - 1; i >= 0; i-- {
+		_ = store.Delete(createdIDs[i])
+	}
+	for i := len(updatedPrevious) - 1; i >= 0; i-- {
+		previous := updatedPrevious[i]
+		_, _ = store.Update(previous.ID, previous)
+	}
+}
+
+func subscriptionProfile(provider, name, key string, accounts []SubscriptionProxyAccount, models []SubscriptionProxyModel, baseURL string) profiles.Profile {
+	p := profiles.Profile{Name: name, Source: "subscription-proxy:" + provider, UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: key, DefaultReasoningEffort: "low"}
 	hasAccount := false
 	for _, account := range accounts {
 		if canonicalProvider(account.Provider) == provider && !account.Disabled && !account.Unavailable {
@@ -419,7 +453,7 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 			continue
 		}
 		p.AvailableModels = append(p.AvailableModels, model.ID)
-		p.Models = append(p.Models, profiles.ModelDef{Name: model.Label, Model: model.ID, BaseURL: subscriptionProxyBaseURL, APIKey: key, APIBackend: "chat_completions", ReasoningEffortsSource: "default"})
+		p.Models = append(p.Models, profiles.ModelDef{Name: model.Label, Model: model.ID, BaseURL: baseURL, APIKey: key, APIBackend: "chat_completions", ReasoningEffortsSource: "default"})
 	}
 	return p
 }

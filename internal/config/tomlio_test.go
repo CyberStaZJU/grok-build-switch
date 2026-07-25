@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,13 +48,8 @@ max_turns = 2
 		t.Fatal(err)
 	}
 	profile := profiles.Profile{
-		BaseURL:        "https://new.example/v1",
-		DefaultModel:   "new-default",
-		WebSearchModel: "new-search",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "new-agent",
-			Plan:    "new-agent",
-		},
+		BaseURL:      "https://new.example/v1",
+		DefaultModel: "new-default",
 		Models: []profiles.ModelDef{{
 			Name:                  "new",
 			Model:                 "new-model",
@@ -115,9 +111,14 @@ max_turns = 2
 			}
 		}
 	}
-	subModels := tableAt(tableAt(doc, "subagents"), "models")
-	if stringAt(subModels, "explore") != "new-agent" || stringAt(subModels, "plan") != "new-agent" {
-		t.Fatalf("subagents.models not written: %#v", tableAt(doc, "subagents"))
+	// subagents.models and web_search are now owned exclusively by routing
+	// policy, not by profile activation. ApplyProfile must NOT touch them.
+	// If they exist in the file, they should be preserved as unrelated sections.
+	if tableAt(doc, "models")["web_search"] != "old-search" {
+		t.Fatalf("web_search should be preserved from original file:\n%s", string(data))
+	}
+	if _, ok := tableAt(tableAt(doc, "subagents"), "models")["explore"]; ok {
+		t.Fatalf("subagents.models should not be written by profile activation:\n%s", string(data))
 	}
 	if _, ok := tableAt(doc, "subagents")["default_model"]; ok {
 		t.Fatalf("legacy default_model should not be written: %#v", tableAt(doc, "subagents"))
@@ -250,18 +251,12 @@ func TestApplyProfileOmitsZeroTokenLimits(t *testing.T) {
 models_base_url = "https://old.example/v1"
 [models]
 default = "m"
-web_search = "m"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	profile := profiles.Profile{
-		BaseURL:        "https://new.example/v1",
-		DefaultModel:   "m",
-		WebSearchModel: "m",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "m",
-			Plan:    "m",
-		},
+		BaseURL:      "https://new.example/v1",
+		DefaultModel: "m",
 		Models: []profiles.ModelDef{{
 			Name:                "m",
 			Model:               "m",
@@ -347,14 +342,11 @@ default_model = "old-agent"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// web_search is now owned by routing policy, not by profile. ApplyProfile
+	// must preserve the existing value rather than removing or replacing it.
 	profile := profiles.Profile{
-		BaseURL:        "https://new.example/v1",
-		DefaultModel:   "new-default",
-		WebSearchModel: "new-search",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "new-agent",
-			Plan:    "new-agent",
-		},
+		BaseURL:      "https://new.example/v1",
+		DefaultModel: "new-default",
 	}
 	if err := ApplyProfileToFile(path, profile); err != nil {
 		t.Fatal(err)
@@ -373,15 +365,13 @@ default_model = "old-agent"
 	if tableAt(doc, "models")["default"] != profile.DefaultModel {
 		t.Fatalf("default model was not replaced: %#v", tableAt(doc, "models"))
 	}
-	if tableAt(doc, "models")["web_search"] != profile.WebSearchModel {
-		t.Fatalf("web search model was not replaced: %#v", tableAt(doc, "models"))
+	// web_search and subagents.models are owned by routing policy, not by
+	// profile activation. ApplyProfile must preserve the existing value.
+	if tableAt(doc, "models")["web_search"] != "old-search" {
+		t.Fatalf("web_search should be preserved from original file:\n%s", string(data))
 	}
-	subModels := tableAt(tableAt(doc, "subagents"), "models")
-	if stringAt(subModels, "explore") != profile.SubagentsModels.Explore {
-		t.Fatalf("subagents.models explore was not replaced: %#v", tableAt(doc, "subagents"))
-	}
-	if stringAt(subModels, "plan") != profile.SubagentsModels.Plan {
-		t.Fatalf("subagents.models plan was not replaced: %#v", tableAt(doc, "subagents"))
+	if _, ok := tableAt(tableAt(doc, "subagents"), "models")["explore"]; ok {
+		t.Fatalf("subagents.models should not be written by profile activation:\n%s", string(data))
 	}
 	if _, ok := tableAt(doc, "subagents")["default_model"]; ok {
 		t.Fatalf("legacy default_model should be removed: %#v", tableAt(doc, "subagents"))
@@ -403,15 +393,10 @@ web_search = "old"
 	}
 	// Profile stores empty per-model base_url/api_key; Apply fills them into config.
 	profile := profiles.Profile{
-		Name:           "Test",
-		BaseURL:        "https://new.example/v1",
-		APIKey:         "sk-test",
-		DefaultModel:   "m1",
-		WebSearchModel: "m1",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "m1",
-			Plan:    "m1",
-		},
+		Name:         "Test",
+		BaseURL:      "https://new.example/v1",
+		APIKey:       "sk-test",
+		DefaultModel: "m1",
 		Models: []profiles.ModelDef{{
 			Name:       "m1",
 			Model:      "m1",
@@ -427,6 +412,44 @@ web_search = "old"
 	}
 	if !ok {
 		t.Fatal("expected profile to match config after apply (normalized comparison)")
+	}
+}
+
+func TestCurrentMatchesIgnoresRuntimeReasoningEffortDrift(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	profile := profiles.Profile{
+		Name:                   "runtime-effort",
+		BaseURL:                "https://api.example/v1",
+		APIKey:                 "sk-test",
+		DefaultModel:           "m1",
+		DefaultReasoningEffort: "low",
+		Models: []profiles.ModelDef{{
+			Name:       "m1",
+			Model:      "m1",
+			APIBackend: "chat_completions",
+		}},
+	}
+	if err := os.WriteFile(path, []byte("[models]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`default_reasoning_effort = "low"`), []byte(`default_reasoning_effort = "medium"`), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := CurrentMatches(path, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("runtime reasoning effort change should not be reported as provider drift")
 	}
 }
 
@@ -447,16 +470,11 @@ plan = "x"
 	}
 	// Like the user's "cc" profile: key + defaults, empty models[].
 	profile := profiles.Profile{
-		Name:           "cc",
-		BaseURL:        "https://api.example/v1",
-		APIKey:         "sk-only-on-profile",
-		DefaultModel:   "x",
-		WebSearchModel: "x",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "x",
-			Plan:    "x",
-		},
-		Models: nil,
+		Name:         "cc",
+		BaseURL:      "https://api.example/v1",
+		APIKey:       "sk-only-on-profile",
+		DefaultModel: "x",
+		Models:       nil,
 	}
 	if err := ApplyProfileToFile(path, profile); err != nil {
 		t.Fatal(err)
@@ -519,7 +537,7 @@ func TestApplyProfileWritesReasoningEffortDefaults(t *testing.T) {
 	}
 }
 
-func TestImportLegacySubagentsDefaultModelMigrates(t *testing.T) {
+func TestImportProfileDoesNotReadRoutingPolicyKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(path, []byte(`
@@ -530,34 +548,21 @@ default = "m"
 web_search = "m"
 [subagents]
 default_model = "legacy-agent"
+[subagents.models]
+explore = "legacy-agent"
+plan = "legacy-agent"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// ImportProfile reads only provider-owned keys. web_search and
+	// subagents.models are owned by routing policy and must NOT be imported
+	// into the profile.
 	profile, err := ImportProfile(path, "legacy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.SubagentsModels.Explore != "legacy-agent" || profile.SubagentsModels.Plan != "legacy-agent" {
-		t.Fatalf("legacy default_model not migrated: %#v", profile.SubagentsModels)
-	}
-	// Re-apply should write correct keys and drop legacy key.
-	if err := ApplyProfileToFile(path, profile); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "default_model") {
-		t.Fatalf("legacy key still present after apply:\n%s", string(data))
-	}
-	doc := map[string]any{}
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	subModels := tableAt(tableAt(doc, "subagents"), "models")
-	if stringAt(subModels, "explore") != "legacy-agent" || stringAt(subModels, "plan") != "legacy-agent" {
-		t.Fatalf("subagents.models missing after migrate apply: %#v", tableAt(doc, "subagents"))
+	if profile.DefaultModel != "m" {
+		t.Fatalf("default model = %q", profile.DefaultModel)
 	}
 }
 

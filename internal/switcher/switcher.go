@@ -12,6 +12,7 @@ import (
 
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/profiles"
+	"grok_switch/internal/routing"
 )
 
 type Switcher struct {
@@ -45,10 +46,6 @@ func (s *Switcher) Activate(id string) (profiles.Profile, error) {
 	if err := grokconfig.ApplyProfileToFile(s.ConfigPath, profile); err != nil {
 		return profiles.Profile{}, err
 	}
-	if err := s.Profiles.SetActive(id); err != nil {
-		return profiles.Profile{}, err
-	}
-	profile.IsActive = true
 	return profile, nil
 }
 
@@ -63,10 +60,7 @@ func (s *Switcher) ActivateOfficial() error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := grokconfig.UseOfficialAuthToFile(s.ConfigPath); err != nil {
-		return err
-	}
-	return s.Profiles.ClearActive()
+	return grokconfig.UseOfficialAuthToFile(s.ConfigPath)
 }
 
 func (s *Switcher) ApplyPrivacyProtection() error {
@@ -83,7 +77,36 @@ func (s *Switcher) ApplyPrivacyProtection() error {
 	return grokconfig.ApplyPrivacyProtectionToFile(s.ConfigPath)
 }
 
-func (s *Switcher) ImportCurrent(name string, active bool) (profiles.Profile, error) {
+// ApplyRouting backs up the current config and atomically applies a hydrated
+// multi-provider routing snapshot while holding the switcher mutation lock.
+func (s *Switcher) ApplyRouting(snapshot routing.Snapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := os.Stat(s.ConfigPath); err == nil {
+		if _, err := s.Backup(); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return grokconfig.ApplyRoutingToFile(s.ConfigPath, snapshot)
+}
+
+// RestoreConfigState is the rollback half of a failed routing transaction.
+func (s *Switcher) RestoreConfigState(content []byte, existed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !existed {
+		if err := os.Remove(s.ConfigPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return atomicWrite(s.ConfigPath, content)
+}
+
+func (s *Switcher) ImportCurrent(name string, _ bool) (profiles.Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,16 +114,9 @@ func (s *Switcher) ImportCurrent(name string, active bool) (profiles.Profile, er
 	if err != nil {
 		return profiles.Profile{}, err
 	}
-	profile.IsActive = active
 	created, err := s.Profiles.Create(profile)
 	if err != nil {
 		return profiles.Profile{}, err
-	}
-	if active {
-		if err := s.Profiles.SetActive(created.ID); err != nil {
-			return profiles.Profile{}, err
-		}
-		created.IsActive = true
 	}
 	return created, nil
 }
@@ -116,7 +132,7 @@ func (s *Switcher) EnsureDefaultProfile() error {
 	if _, err := os.Stat(s.ConfigPath); err != nil {
 		return err
 	}
-	_, err = s.ImportCurrent("Default", true)
+	_, err = s.ImportCurrent("Default", false)
 	return err
 }
 
@@ -217,12 +233,12 @@ func (s *Switcher) ActiveStatus() (profiles.Profile, bool, error) {
 		return profiles.Profile{}, false, err
 	}
 	for _, profile := range profilesList {
-		if profile.IsActive {
-			matches, err := grokconfig.CurrentMatches(s.ConfigPath, profile)
-			if err != nil {
-				return profile, false, err
-			}
-			return profile, matches, nil
+		matches, err := grokconfig.CurrentMatches(s.ConfigPath, profile)
+		if err != nil {
+			return profiles.Profile{}, false, err
+		}
+		if matches {
+			return profiles.Profile{}, true, nil
 		}
 	}
 	return profiles.Profile{}, false, nil

@@ -269,21 +269,13 @@ func (s *Server) upsertGrokAuthProfile() (profiles.Profile, error) {
 		AvailableModels:        modelNames(defaultGrokAuthModels),
 		DefaultModel:           "grok-4.5",
 		DefaultReasoningEffort: "low",
-		WebSearchModel:         "grok-4.5",
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: "grok-4.5",
-			Plan:    "grok-composer-2.5-fast",
-		},
-		Models: cloneModelDefs(defaultGrokAuthModels, baseURL, apiKey),
+		Models:                 cloneModelDefs(defaultGrokAuthModels, baseURL, apiKey),
 	}
 	if existing == nil {
 		return s.Profiles.Create(profile)
 	}
 	profile.DefaultModel = firstNonEmptyServer(existing.DefaultModel, profile.DefaultModel)
 	profile.DefaultReasoningEffort = firstNonEmptyServer(existing.DefaultReasoningEffort, profile.DefaultReasoningEffort)
-	profile.WebSearchModel = firstNonEmptyServer(existing.WebSearchModel, profile.WebSearchModel)
-	profile.SubagentsModels.Explore = firstNonEmptyServer(existing.SubagentsModels.Explore, profile.SubagentsModels.Explore)
-	profile.SubagentsModels.Plan = firstNonEmptyServer(existing.SubagentsModels.Plan, profile.SubagentsModels.Plan)
 	if len(existing.Models) > 0 {
 		profile.Models = cloneModelDefs(existing.Models, baseURL, apiKey)
 		profile.AvailableModels = uniqueModelNames(append(existing.AvailableModels, modelNames(profile.Models)...))
@@ -293,7 +285,7 @@ func (s *Server) upsertGrokAuthProfile() (profiles.Profile, error) {
 		return profiles.Profile{}, err
 	}
 	connectionChanged := existing.BaseURL != updated.BaseURL || existing.EffectiveAPIKey() != updated.EffectiveAPIKey()
-	if existing.IsActive && connectionChanged {
+	if connectionChanged && s.Switcher != nil {
 		return s.Switcher.Activate(updated.ID)
 	}
 	return updated, nil
@@ -307,11 +299,6 @@ func (s *Server) removeGrokAuthProfile() error {
 	for _, profile := range list {
 		if profile.Name != grokAuthProfileName {
 			continue
-		}
-		if profile.IsActive {
-			if err := s.Switcher.ActivateOfficial(); err != nil {
-				return fmt.Errorf("清理当前 Grok Auth 配置: %w", err)
-			}
 		}
 		return s.Profiles.Delete(profile.ID)
 	}

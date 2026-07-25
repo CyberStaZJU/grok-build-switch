@@ -7,7 +7,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/highlight-github.min.css?v=11.11.1">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.18.0">
-  <link rel="stylesheet" href="/style.css?v=39">
+  <link rel="stylesheet" href="/style.css?v=41">
 </head>
 <body>
   <div class="shell">
@@ -25,8 +25,10 @@
       <div class="headerRight">
         <button type="button" id="chatBtn" class="btn" data-home-only>聊天</button>
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
+        <button type="button" id="navRoutingBtn" class="btn">模型路由</button>
         <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
+        <button type="button" id="navSessionGraphBtn" class="btn">会话图谱</button>
         <button type="button" id="navSSHBtn" class="btn">SSH</button>
       </div>
     </header>
@@ -120,11 +122,6 @@
             <p class="muted tiny">拉取列表后点 chip 启用；不会自动设置默认模型。每个已启用模型可单独测试连通。</p>
 
             <div class="formGrid">
-              <label class="field">默认模型
-                <select id="defaultModel" class="mono">
-                  <option value="">（请先启用模型）</option>
-                </select>
-              </label>
               <label class="field reasoningEffortField">默认推理强度
                 <div class="reasoningEffortControl">
                   <select id="defaultReasoningEffort">
@@ -145,21 +142,6 @@
                   <option value="openai_chat">OpenAI Chat</option>
                   <option value="openai_responses">OpenAI Responses</option>
                   <option value="anthropic">Anthropic Messages</option>
-                </select>
-              </label>
-              <label class="field">联网搜索模型
-                <select id="webSearchModel" class="mono">
-                  <option value="">（可选）</option>
-                </select>
-              </label>
-              <label class="field">explore 子代理模型
-                <select id="subagentsExploreModel" class="mono" title="写入 [subagents.models] explore">
-                  <option value="">（继承主模型）</option>
-                </select>
-              </label>
-              <label class="field">plan 子代理模型
-                <select id="subagentsPlanModel" class="mono" title="写入 [subagents.models] plan">
-                  <option value="">（继承主模型）</option>
                 </select>
               </label>
             </div>
@@ -224,6 +206,7 @@
             <button type="button" id="closeSessionSidebarBtn" class="nativeIconBtn" aria-label="隐藏会话列表">×</button>
           </div>
           <button type="button" id="agentNewSessionBtn" class="newChatBtn">新对话</button>
+          <button type="button" id="agentOrganizeSessionsBtn" class="organizeSessionsBtn">对话整理</button>
           <label class="sessionSearchWrap">
             <span aria-hidden="true">⌕</span>
             <input id="agentSessionSearch" type="search" placeholder="搜索对话、目录、模型" autocomplete="off">
@@ -363,6 +346,89 @@
           </div>
         </aside>
         <div id="nativeChatScrim" class="nativeChatScrim" hidden></div>
+      </section>
+    </main>
+
+    <!-- 对话整理面板 -->
+    <div id="organizePanel" class="organizePanel" hidden>
+      <div class="organizePanelCard">
+        <div class="organizePanelHead">
+          <div><h3>对话整理</h3><span class="muted" id="organizeSubTitle">分析会话主题并建议标题</span></div>
+          <button type="button" id="organizePanelCloseBtn" class="organizePanelClose" aria-label="关闭">×</button>
+        </div>
+        <div class="organizePanelBody" id="organizePanelBody">
+          <div class="organizeProgress" id="organizeProgress">
+            <div class="organizeProgressBar"><div class="organizeProgressBarFill" id="organizeProgressBarFill" style="width:0%"></div></div>
+            <span class="muted tiny" id="organizeProgressText">准备中…</span>
+          </div>
+          <div id="organizeResults" hidden></div>
+        </div>
+        <div class="organizePanelFoot" id="organizePanelFoot" hidden>
+          <div class="inlineActions">
+            <button type="button" id="organizeSelectDeleteBtn" class="btn sm ghost organizeSelectDeleteBtn">勾选建议删除</button>
+            <span class="muted tiny" id="organizeSelectedCount">已选 0 项</span>
+          </div>
+          <div class="inlineActions">
+            <button type="button" id="organizeCancelBtn" class="btn sm">取消</button>
+            <button type="button" id="organizeApplyBtn" class="btn sm primary">应用更改</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODEL ROUTING -->
+    <main id="viewRouting" class="view routingView" hidden>
+      <div class="pageHead">
+        <div><h1 class="pageTitle">模型路由</h1><p class="pageDesc">查看统一模型目录，并为不同任务选择默认路由</p></div>
+        <div class="inlineActions">
+          <button type="button" id="refreshRoutingBtn" class="btn">刷新</button>
+          <button type="button" id="backFromRoutingBtn" class="btn">返回</button>
+        </div>
+      </div>
+
+      <section class="formCard routingPolicyCard">
+        <div class="rowBetween">
+          <div><h2 class="sectionTitle">路由策略</h2><p class="muted tiny">保存后用于默认对话、联网搜索及子代理任务。</p></div>
+          <button type="button" id="saveRoutingPolicyBtn" class="btn primary">保存策略</button>
+        </div>
+        <div class="routingPolicyGrid">
+          <label class="field">default<select id="routingDefault" class="mono"><option value="">（未设置）</option></select></label>
+          <label class="field">默认推理强度
+            <select id="routingReasoningEffort" class="mono">
+              <option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option>
+              <option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>
+            </select>
+          </label>
+          <label class="field">web_search<select id="routingWebSearch" class="mono"><option value="">（未设置）</option></select></label>
+          <label class="field">explore<select id="routingExplore" class="mono"><option value="">（未设置）</option></select></label>
+          <label class="field">plan<select id="routingPlan" class="mono"><option value="">（未设置）</option></select></label>
+        </div>
+        <p id="routingStatus" class="muted tiny" role="status">加载中…</p>
+      </section>
+
+      <section class="formCard">
+        <div class="rowBetween">
+          <div><h2 class="sectionTitle">统一模型目录</h2><p class="muted tiny">按供应商分组展示模型 route、upstream ID 与 backend。</p></div>
+          <span id="routingModelCount" class="muted tiny">0 个</span>
+        </div>
+        <div id="routingCatalog" class="routingCatalog"><p class="muted tiny">加载中…</p></div>
+      </section>
+
+      <section class="formCard codeBuddyCard">
+        <div class="rowBetween">
+          <div><h2 class="sectionTitle">CodeBuddy</h2><p class="muted tiny">只读发现本机安装与公开模型参数，不读取认证、会话或配置文件。</p></div>
+          <span id="codeBuddyBadge" class="badge" data-state="stopped">检测中</span>
+        </div>
+        <div id="codeBuddyStatus" class="codeBuddyStatus"><p class="muted tiny">加载中…</p></div>
+        <div id="codeBuddyModels" class="codeBuddyModels"></div>
+      </section>
+
+      <section class="formCard browserUseCard">
+        <div class="rowBetween">
+          <div><h2 class="sectionTitle">Browser-use 注入</h2><p class="muted tiny">为非 Grok 模型自动注入 web_search / web_fetch 工具</p></div>
+          <span id="browserUseBadge" class="badge">检测中</span>
+        </div>
+        <div id="browserUseStatus" class="browserUseStatus"><p class="muted tiny">加载中…</p></div>
       </section>
     </main>
 
@@ -818,6 +884,24 @@
         </section>
       </div>
     </main>
+
+    <!-- SESSION GRAPH -->
+    <main id="viewSessionGraph" class="view sessionGraphView" hidden>
+      <div class="pageHead">
+        <div><h1 class="pageTitle">会话图谱</h1><p class="pageDesc">跨供应商的逻辑会话与分支管理</p></div>
+        <div class="inlineActions">
+          <button type="button" id="refreshSessionGraphBtn" class="btn">刷新</button>
+          <button type="button" id="backFromSessionGraphBtn" class="btn">返回</button>
+        </div>
+      </div>
+      <section class="formCard">
+        <div class="rowBetween">
+          <div><h2 class="sectionTitle">逻辑会话</h2><p class="muted tiny">同一逻辑会话在不同供应商下的分支。点击「切换分支」恢复对应供应商的会话。</p></div>
+          <span id="sessionGraphCount" class="muted tiny">0 个</span>
+        </div>
+        <div id="sessionGraphContent" class="sessionGraphContent"><p class="muted tiny">加载中…</p></div>
+      </section>
+    </main>
   </div>
 
   <!-- SSH Connection Dialog -->
@@ -939,6 +1023,6 @@
   <script src="/vendor/katex/katex.min.js?v=0.18.0"></script>
   <script src="/vendor/katex/contrib/auto-render.min.js?v=0.18.0"></script>
   <script src="/vendor/mermaid.min.js?v=11.16.0"></script>
-  <script src="/app.js?v=42"></script>
+  <script src="/app.js?v=45"></script>
 </body>
 </html>

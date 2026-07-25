@@ -12,6 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"grok_switch/internal/profiles"
+	"grok_switch/internal/routing"
 )
 
 func ImportProfile(path, name string) (profiles.Profile, error) {
@@ -19,28 +20,13 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 	if err != nil {
 		return profiles.Profile{}, err
 	}
-	subagents := tableAt(doc, "subagents")
-	// [subagents.models] unmarshals as nested table under subagents.models
-	subModels := tableAt(subagents, "models")
-	explore := stringAt(subModels, "explore")
-	plan := stringAt(subModels, "plan")
-	// Legacy unrecognized key (kept only for migration on import).
-	legacy := stringAt(subagents, "default_model")
-	if explore == "" && plan == "" && legacy != "" {
-		explore, plan = legacy, legacy
-	}
 	profile := profiles.Profile{
 		Name:                   name,
 		UpstreamFormat:         "openai",
 		BaseURL:                stringAt(tableAt(doc, "endpoints"), "models_base_url"),
 		DefaultModel:           stringAt(tableAt(doc, "models"), "default"),
 		DefaultReasoningEffort: stringAt(tableAt(doc, "models"), "default_reasoning_effort"),
-		WebSearchModel:         stringAt(tableAt(doc, "models"), "web_search"),
-		SubagentsModels: profiles.SubagentsModels{
-			Explore: explore,
-			Plan:    plan,
-		},
-		Models: readModels(doc),
+		Models:                 readModels(doc),
 	}
 	if profile.Name == "" {
 		profile.Name = "Default"
@@ -188,14 +174,7 @@ func SnippetForProfile(profile profiles.Profile) (string, error) {
 	b.WriteString("models_base_url = " + quote(profile.BaseURL) + "\n\n")
 	b.WriteString("[models]\n")
 	b.WriteString("default = " + quote(profile.DefaultModel) + "\n")
-	b.WriteString("web_search = " + quote(profile.WebSearchModel) + "\n")
-	b.WriteString("default_reasoning_effort = " + quote(profile.DefaultReasoningEffort) + "\n\n")
-	if snippet := formatSubagentsModelsSnippet(profile); snippet != "" {
-		b.WriteString(snippet)
-		if !strings.HasSuffix(snippet, "\n\n") {
-			b.WriteString("\n")
-		}
-	}
+	b.WriteString("default_reasoning_effort = " + quote(profile.DefaultReasoningEffort) + "\n")
 	modelData, err := marshalModelSection(profile)
 	if err != nil {
 		return "", err
@@ -214,10 +193,7 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 
 	models := ensureTable(doc, "models")
 	models["default"] = profile.DefaultModel
-	models["web_search"] = profile.WebSearchModel
 	models["default_reasoning_effort"] = profile.DefaultReasoningEffort
-
-	applySubagentsModelsToDoc(doc, profile)
 
 	modelTable := make(map[string]any, len(profile.Models))
 	effectiveKey := profile.EffectiveAPIKey()
@@ -271,7 +247,6 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 	lines := splitLines(string(data))
 	var out []string
 	seen := map[string]bool{}
-	seenSubagentsModels := false
 	for i := 0; i < len(lines); {
 		header := parseHeader(lines[i])
 		if header == "" {
@@ -283,13 +258,10 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 			i = skipSection(lines, i+1)
 			continue
 		}
+		// subagents.models is managed exclusively by routing policy, not by
+		// profile activation. Skip it here so routing policy stays authoritative.
 		if header == "subagents.models" {
-			end := skipSection(lines, i+1)
-			if rewritten := rewriteSubagentsModelsSection(lines[i:end], profile); len(rewritten) > 0 {
-				out = append(out, rewritten...)
-			}
-			seenSubagentsModels = true
-			i = end
+			i = skipSection(lines, i+1)
 			continue
 		}
 		if header == "subagents" {
@@ -319,14 +291,6 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 			out = append(out, rewriteSection([]string{"[" + section + "]"}, section, profile)...)
 		}
 	}
-	if !seenSubagentsModels {
-		if rewritten := rewriteSubagentsModelsSection([]string{"[subagents.models]"}, profile); len(rewritten) > 0 {
-			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
-				out = append(out, "")
-			}
-			out = append(out, rewritten...)
-		}
-	}
 	if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
 		out = append(out, "")
 	}
@@ -343,6 +307,12 @@ func CurrentMatches(path string, profile profiles.Profile) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Grok may persist the reasoning effort selected in a conversation back to
+	// config.toml. That is a runtime preference, not a provider-routing change,
+	// so it must not make the UI permanently claim that the active supplier is
+	// mismatched. Keep strict comparison for endpoints, models, API keys,
+	// backends, search/subagent routing, and model capabilities.
+	current.DefaultReasoningEffort = profile.DefaultReasoningEffort
 	// Compare normalized views: ApplyProfile fills per-model base_url/api_key
 	// into config.toml, while stored profiles may keep those fields empty.
 	return profiles.Normalize(profile).Matches(profiles.Normalize(current)), nil
@@ -404,15 +374,21 @@ func marshalModelSection(profile profiles.Profile) ([]byte, error) {
 	return toml.Marshal(doc)
 }
 
-func applySubagentsModelsToDoc(doc map[string]any, profile profiles.Profile) {
+// applyRoutingPolicyToDoc writes routing-policy-managed TOML keys into a
+// document map. These keys are owned by the routing layer, not by individual
+// profiles: [models].web_search and [subagents.models].explore/plan.
+func applyRoutingPolicyToDoc(doc map[string]any, policy routing.RoutingPolicy) {
+	if policy.WebSearch != "" {
+		ensureTable(doc, "models")["web_search"] = policy.WebSearch
+	}
 	sub := ensureTable(doc, "subagents")
 	delete(sub, "default_model")
 	models := map[string]any{}
-	if profile.SubagentsModels.Explore != "" {
-		models["explore"] = profile.SubagentsModels.Explore
+	if strings.TrimSpace(policy.Subagents.Explore) != "" {
+		models["explore"] = policy.Subagents.Explore
 	}
-	if profile.SubagentsModels.Plan != "" {
-		models["plan"] = profile.SubagentsModels.Plan
+	if strings.TrimSpace(policy.Subagents.Plan) != "" {
+		models["plan"] = policy.Subagents.Plan
 	}
 	if len(models) > 0 {
 		sub["models"] = models
@@ -424,59 +400,86 @@ func applySubagentsModelsToDoc(doc map[string]any, profile profiles.Profile) {
 	}
 }
 
-func formatSubagentsModelsSnippet(profile profiles.Profile) string {
-	lines := rewriteSubagentsModelsSection([]string{"[subagents.models]"}, profile)
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n\n"
-}
-
-// rewriteSubagentsModelsSection rewrites or creates [subagents.models].
-// Empty explore/plan means omit that key. If both empty, the section is removed.
-func rewriteSubagentsModelsSection(lines []string, profile profiles.Profile) []string {
+// rewriteRoutingPolicySections rewrites the routing-policy-managed TOML
+// sections ([models].web_search and [subagents.models].*) from a routing policy.
+func rewriteRoutingPolicySections(lines []string, policy routing.RoutingPolicy) []string {
 	values := map[string]string{}
-	if strings.TrimSpace(profile.SubagentsModels.Explore) != "" {
-		values["explore"] = quote(strings.TrimSpace(profile.SubagentsModels.Explore))
+	webSearch := strings.TrimSpace(policy.WebSearch)
+	if webSearch != "" {
+		values["web_search"] = quote(webSearch)
 	}
-	if strings.TrimSpace(profile.SubagentsModels.Plan) != "" {
-		values["plan"] = quote(strings.TrimSpace(profile.SubagentsModels.Plan))
+	if v := strings.TrimSpace(policy.Subagents.Explore); v != "" {
+		values["explore"] = quote(v)
+	}
+	if v := strings.TrimSpace(policy.Subagents.Plan); v != "" {
+		values["plan"] = quote(v)
 	}
 	if len(values) == 0 {
 		return nil
 	}
-	managed := map[string]bool{"explore": true, "plan": true}
+	sectionManaged := map[string]bool{}
+	for key := range values {
+		if key == "web_search" {
+			sectionManaged["models"] = true
+		} else {
+			sectionManaged["subagents.models"] = true
+		}
+	}
+	sectionValues := map[string]map[string]string{}
+	for key, val := range values {
+		section := "models"
+		if key != "web_search" {
+			section = "subagents.models"
+		}
+		if sectionValues[section] == nil {
+			sectionValues[section] = map[string]string{}
+		}
+		sectionValues[section][key] = val
+	}
+
 	seen := map[string]bool{}
 	out := make([]string, 0, len(lines)+len(values))
-	if len(lines) == 0 {
-		out = append(out, "[subagents.models]")
-	} else {
-		out = append(out, "[subagents.models]")
-	}
-	start := 1
-	if len(lines) > 0 && parseHeader(lines[0]) == "" {
-		start = 0
-	}
-	for _, line := range lines[start:] {
-		key := assignmentKey(line)
-		if managed[key] {
-			if val, ok := values[key]; ok {
-				out = append(out, key+" = "+val)
-				seen[key] = true
-			}
+	for i := 0; i < len(lines); {
+		header := parseHeader(lines[i])
+		if header == "" || !sectionManaged[header] {
+			out = append(out, lines[i])
+			i++
 			continue
 		}
-		out = append(out, line)
-	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		if !seen[key] {
-			keys = append(keys, key)
+		end := skipSection(lines, i+1)
+		sv := sectionValues[header]
+		if sv != nil {
+			out = append(out, rewriteValues(lines[i:end], sv)...)
+			for key := range sv {
+				seen[key] = true
+			}
+		} else {
+			out = append(out, lines[i:end]...)
 		}
+		i = end
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		out = append(out, key+" = "+values[key])
+	for _, section := range []string{"models", "subagents.models"} {
+		sv := sectionValues[section]
+		if sv == nil {
+			continue
+		}
+		missing := make([]string, 0, len(sv))
+		for key := range sv {
+			if !seen[key] {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		sort.Strings(missing)
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+		out = append(out, "["+section+"]")
+		for _, key := range missing {
+			out = append(out, key+" = "+sv[key])
+		}
 	}
 	return out
 }
@@ -517,7 +520,6 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 		values["models_base_url"] = quote(profile.BaseURL)
 	case "models":
 		values["default"] = quote(profile.DefaultModel)
-		values["web_search"] = quote(profile.WebSearchModel)
 		values["default_reasoning_effort"] = quote(profile.DefaultReasoningEffort)
 	}
 	seen := map[string]bool{}

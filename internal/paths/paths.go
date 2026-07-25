@@ -15,6 +15,7 @@ type Paths struct {
 	GrokHome         string
 	DataDir          string
 	ProfilesFile     string
+	RoutingFile      string
 	SettingsFile     string
 	RemoteAccessFile string
 	GrokAuthFile     string
@@ -53,6 +54,7 @@ func Resolve() (Paths, error) {
 		GrokHome:         grokHome,
 		DataDir:          dataDir,
 		ProfilesFile:     filepath.Join(dataDir, "profiles.json"),
+		RoutingFile:      filepath.Join(dataDir, "routing.json"),
 		SettingsFile:     filepath.Join(dataDir, "settings.json"),
 		RemoteAccessFile: filepath.Join(dataDir, "remote_access.json"),
 		GrokAuthFile:     filepath.Join(dataDir, "grok_auth.json"),

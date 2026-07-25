@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"debug/macho"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -175,6 +177,60 @@ func ensureKey(store KeyStore, account string) (string, error) {
 
 var ErrNotFound = errors.New("key not found")
 
+func modelAliasesPath(p Paths) string {
+	return filepath.Join(p.Root, "oauth-model-aliases.json")
+}
+
+func saveModelAliases(p Paths, aliases oauthModelAliases) error {
+	raw, err := json.Marshal(aliases)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(modelAliasesPath(p), raw, 0o600)
+}
+
+func loadModelAliases(p Paths) oauthModelAliases {
+	raw, err := os.ReadFile(modelAliasesPath(p))
+	if err != nil {
+		return nil
+	}
+	var aliases oauthModelAliases
+	if json.Unmarshal(raw, &aliases) != nil {
+		return nil
+	}
+	return aliases
+}
+
+func modelAliasesYAML(aliases oauthModelAliases) string {
+	if len(aliases) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("oauth-model-alias:\n")
+	channels := make([]string, 0, len(aliases))
+	for channel := range aliases {
+		channels = append(channels, channel)
+	}
+	sort.Strings(channels)
+	for _, channel := range channels {
+		entries := aliases[channel]
+		if len(entries) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s:\n", channel)
+		for _, entry := range entries {
+			fmt.Fprintf(&b, "    - name: %q\n      alias: %q\n      fork: %t\n", entry.Name, entry.Alias, entry.Fork)
+			if entry.DisplayName != "" {
+				fmt.Fprintf(&b, "      display-name: %q\n", entry.DisplayName)
+			}
+			if entry.ForceMapping {
+				b.WriteString("      force-mapping: true\n")
+			}
+		}
+	}
+	return b.String()
+}
+
 func WriteConfig(p Paths, keys Keys) error {
 	if err := p.Ensure(); err != nil {
 		return err
@@ -206,7 +262,7 @@ debug: false
 commercial-mode: true
 logging-to-file: false
 usage-statistics: false
-`, DefaultPort, keys.Management, p.AuthDir, keys.Inference, proxyURL)
+%s`, DefaultPort, keys.Management, p.AuthDir, keys.Inference, proxyURL, modelAliasesYAML(loadModelAliases(p)))
 	return atomicWrite(p.Config, []byte(data), 0o600)
 }
 

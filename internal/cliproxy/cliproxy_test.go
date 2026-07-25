@@ -68,6 +68,41 @@ func TestWriteConfigPermissions(t *testing.T) {
 	}
 }
 
+func TestWriteConfigPersistsModelAliases(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	aliases := oauthModelAliases{
+		"codex":       {{Name: "gpt-5", Alias: "subscription/codex/gpt-5", Fork: true, DisplayName: "gpt-5"}},
+		"antigravity": {{Name: "gemini-2.5-pro", Alias: "subscription/gemini/gemini-2.5-pro", Fork: true}},
+		"kimi":        {{Name: "moonshot-v1", Alias: "user/kimi", Fork: true}},
+		"vertex":      {{Name: "vertex-model", Alias: "user/vertex", Fork: true}},
+	}
+	if err := p.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveModelAliases(p, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteConfig(p, Keys{Inference: "infer-secret", Management: "manage-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{"oauth-model-alias:", "codex:", "antigravity:", "kimi:", "vertex:", `alias: "subscription/codex/gpt-5"`, `alias: "user/kimi"`, "fork: true"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("持久配置缺少 %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "  antigravity:") > strings.Index(text, "  codex:") || strings.Index(text, "  codex:") > strings.Index(text, "  kimi:") || strings.Index(text, "  kimi:") > strings.Index(text, "  vertex:") {
+		t.Fatalf("channel 未按稳定顺序输出:\n%s", text)
+	}
+	if info, err := os.Stat(modelAliasesPath(p)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("alias 持久文件权限错误: %v %v", info, err)
+	}
+}
+
 func TestConfigErrorDoesNotLeakKeys(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	if err := os.WriteFile(p.Root, []byte("x"), 0o600); err != nil {

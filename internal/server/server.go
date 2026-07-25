@@ -32,14 +32,16 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/registrar"
 	"grok_switch/internal/remoteaccess"
-	"grok_switch/internal/ssh"
+	"grok_switch/internal/routing"
 	"grok_switch/internal/settings"
+	"grok_switch/internal/ssh"
 	"grok_switch/internal/switcher"
 )
 
 type Server struct {
 	Paths                  paths.Paths
 	Profiles               *profiles.Store
+	Routing                *routing.Store
 	Settings               *settings.Store
 	RemoteAccess           *remoteaccess.Store
 	GrokAuth               *grokauth.Store
@@ -48,6 +50,7 @@ type Server struct {
 	Registrar              *registrar.Service
 	Switcher               *switcher.Switcher
 	Agent                  AgentService
+	CodeBuddy              CodeBuddyRunner
 	SubscriptionProxy      SubscriptionProxy
 	SSH                    *ssh.Handler
 	BrowserOpener          BrowserOpener
@@ -62,10 +65,46 @@ type Server struct {
 	loginMu                sync.Mutex
 	loginFails             map[string]loginFailure
 	subscriptionProxyState *subscriptionProxySelection
+	providerMu             sync.Mutex
+	providerHandoff        *providerHandoff
+	sessionGraph           *sessionGraphStore
+	routingMu              sync.Mutex
+}
+
+type providerIdentity struct {
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	Model    string `json:"model,omitempty"`
+	BaseURL  string `json:"base_url,omitempty"`
+	Official bool   `json:"official,omitempty"`
+}
+
+type providerHandoff struct {
+	LogicalSessionID    string                 `json:"logical_session_id"`
+	SourceSessionID     string                 `json:"source_session_id"`
+	TargetSessionID     string                 `json:"target_session_id,omitempty"`
+	Source              providerIdentity       `json:"source"`
+	Target              providerIdentity       `json:"target"`
+	TransferText        string                 `json:"transfer_text,omitempty"`
+	Mode                string                 `json:"mode"`
+	SourceAlwaysApprove bool                   `json:"-"`
+	SourceRoutingPolicy *routing.RoutingPolicy `json:"-"`
+	SourceActiveProfile string                 `json:"-"`
+	CreatedAt           time.Time              `json:"created_at"`
 }
 
 func (s *Server) SetOnChanged(fn func()) {
 	s.onChanged = fn
+}
+
+func (s *Server) sessionGraphStore() *sessionGraphStore {
+	s.providerMu.Lock()
+	defer s.providerMu.Unlock()
+	if s.sessionGraph == nil {
+		s.sessionGraph = newSessionGraphStore(s.Paths.DataDir)
+	}
+	return s.sessionGraph
 }
 
 func (s *Server) Listen(preferred int) (*http.Server, int, error) {
@@ -196,6 +235,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/pair", s.handlePair)
 	mux.HandleFunc("/api/lan-access", s.handleLANAccess)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/routing", s.handleRouting)
+	mux.HandleFunc("/api/routing/policy", s.handleRoutingPolicy)
+	mux.HandleFunc("/api/routing/reapply", s.handleRoutingReapply)
 	mux.HandleFunc("/api/cache-stats", s.handleCacheStats)
 	mux.HandleFunc("/api/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/profiles/", s.handleProfileByID)
@@ -232,9 +274,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/session", s.handleAgentSession)
 	mux.HandleFunc("/api/agent/session/load", s.handleAgentSessionLoad)
 	mux.HandleFunc("/api/agent/sessions", s.handleAgentSessions)
+	mux.HandleFunc("/api/agent/sessions/analyze", s.handleAgentSessionsAnalyze)
+	mux.HandleFunc("/api/agent/sessions/bulk-rename", s.handleAgentSessionsBulkRename)
+	mux.HandleFunc("/api/agent/sessions/bulk-delete", s.handleAgentSessionsBulkDelete)
 	mux.HandleFunc("/api/agent/sessions/", s.handleAgentSessionHistory)
 	mux.HandleFunc("/api/agent/session/rename", s.handleAgentRename)
 	mux.HandleFunc("/api/agent/ws", s.handleAgentWebSocket)
+	mux.HandleFunc("/api/codebuddy/status", s.handleCodeBuddyStatus)
+	mux.HandleFunc("/codebuddy/v1", s.handleCodeBuddyInference)
+	mux.HandleFunc("/codebuddy/v1/", s.handleCodeBuddyInference)
 	mux.HandleFunc("/api/subscription-proxy", s.handleSubscriptionProxy)
 	mux.HandleFunc("/api/subscription-proxy/service", s.handleSubscriptionProxyService)
 	mux.HandleFunc("/api/subscription-proxy/login", s.handleSubscriptionProxyLogin)
@@ -243,6 +291,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/subscription-proxy/models", s.handleSubscriptionProxyModels)
 	mux.HandleFunc("/api/subscription-proxy/providers", s.handleSubscriptionProxyProviders)
 	mux.HandleFunc("/api/subscription-proxy/diagnostics", s.handleSubscriptionProxyDiagnostics)
+	mux.HandleFunc("/subscription-proxy/v1", s.handleSubscriptionInference)
+	mux.HandleFunc("/subscription-proxy/v1/", s.handleSubscriptionInference)
 	mux.HandleFunc("/grok/v1", s.handleGrokProxy)
 	mux.HandleFunc("/grok/v1/", s.handleGrokProxy)
 	if s.SSH != nil {
@@ -268,18 +318,290 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	var activeRouting any
+	routingMatches := false
+	if s.Routing != nil {
+		dto, hydrated, routingErr := s.currentRouting()
+		if routingErr != nil && !os.IsNotExist(routingErr) {
+			writeError(w, routingErr, http.StatusInternalServerError)
+			return
+		}
+		if routingErr == nil {
+			activeRouting = dto
+			routingMatches, routingErr = grokconfig.CurrentMatchesRouting(s.Paths.GrokConfig, hydrated)
+			if routingErr != nil && !os.IsNotExist(routingErr) {
+				writeError(w, routingErr, http.StatusInternalServerError)
+				return
+			}
+			if routingMatches {
+				matches = true
+			}
+		}
+	}
 	currentSettings, _ := s.Settings.Get()
 	_, authErr := os.Stat(filepath.Join(s.Paths.GrokHome, "auth.json"))
+	activeSafe := active
+	activeSafe.APIKey = ""
+	for i := range activeSafe.Models {
+		activeSafe.Models[i].APIKey = ""
+		activeSafe.Models[i].ExtraHeaders = nil
+	}
+	officialActive := false
+	if s.Routing != nil {
+		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
+			officialActive = stored.Policy.Official
+		}
+	}
+	// Build routing policy display fields for menu bar.
+	activeID := active.ID
+	var defaultModel, webSearchModel, exploreModel, planModel string
+	if s.Routing != nil {
+		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
+			policy := stored.Policy
+			if route, ok := stored.Route(policy.Default); ok {
+				defaultModel = route.Name
+			}
+			if route, ok := stored.Route(policy.WebSearch); ok {
+				webSearchModel = route.Name
+			}
+			if route, ok := stored.Route(policy.Subagents.Explore); ok {
+				exploreModel = route.Name
+			}
+			if route, ok := stored.Route(policy.Subagents.Plan); ok {
+				planModel = route.Name
+			}
+		}
+	}
 	writeJSON(w, map[string]any{
-		"active_profile":        active,
-		"official_active":       active.ID == "",
-		"official_logged_in":    authErr == nil,
-		"config_path":           s.Paths.GrokConfig,
-		"data_dir":              s.Paths.DataDir,
-		"port":                  s.ActualPort,
-		"settings":              currentSettings,
-		"config_matches_active": matches,
+		"active_profile":         activeSafe,
+		"active_routing":         activeRouting,
+		"official_active":        officialActive,
+		"official_logged_in":     authErr == nil,
+		"config_path":            s.Paths.GrokConfig,
+		"data_dir":               s.Paths.DataDir,
+		"port":                   s.ActualPort,
+		"settings":               currentSettings,
+		"config_matches_active":  matches,
+		"config_matches_routing": routingMatches,
+		"active_id":              activeID,
+		"default_model":          defaultModel,
+		"web_search_model":       webSearchModel,
+		"explore_model":          exploreModel,
+		"plan_model":             planModel,
 	})
+}
+
+func providerFromProfile(profile profiles.Profile) providerIdentity {
+	backend := ""
+	baseURL := profile.BaseURL
+	for _, model := range profile.Models {
+		if model.Name == profile.DefaultModel || model.Model == profile.DefaultModel {
+			backend = model.APIBackend
+			if strings.TrimSpace(model.BaseURL) != "" {
+				baseURL = model.BaseURL
+			}
+			break
+		}
+	}
+	if backend == "" {
+		backend = profiles.APIBackendForUpstreamFormat(profile.UpstreamFormat)
+	}
+	return providerIdentity{ID: profile.ID, Name: profile.Name, Backend: backend, Model: profile.DefaultModel, BaseURL: baseURL}
+}
+
+func (s *Server) activeProviderIdentity() providerIdentity {
+	if s.Routing != nil {
+		if stored, snapshotErr := s.Routing.Snapshot(); snapshotErr == nil {
+			if stored.Policy.Official {
+				return providerIdentity{ID: "official", Name: "官方账号", Backend: "official", Official: true}
+			}
+			if s.Profiles != nil {
+				if profileList, profilesErr := s.Profiles.List(); profilesErr == nil {
+					if hydrated, hydrateErr := routing.ProjectWithPolicy(profileList, stored.Policy); hydrateErr == nil {
+						if provider, ok := providerIdentityForRouting(hydrated); ok {
+							return provider
+						}
+					}
+				}
+			}
+		}
+	}
+	return providerIdentity{ID: "official", Name: "官方账号", Backend: "official", Official: true}
+}
+
+func providerIdentityForRouting(snapshot routing.Snapshot) (providerIdentity, bool) {
+	if snapshot.Policy.Official {
+		return providerIdentity{ID: "official", Name: "官方账号", Backend: "official", Official: true}, true
+	}
+	route, ok := snapshot.Route(snapshot.Policy.Default)
+	if !ok {
+		return providerIdentity{}, false
+	}
+	provider, ok := snapshot.Provider(route.ProviderID)
+	if !ok {
+		return providerIdentity{}, false
+	}
+	baseURL := route.BaseURL
+	if baseURL == "" {
+		baseURL = provider.BaseURL
+	}
+	backend := route.APIBackend
+	if backend == "" {
+		backend = profiles.APIBackendForUpstreamFormat(provider.UpstreamFormat)
+	}
+	return providerIdentity{
+		ID: provider.ID, Name: provider.Name, Backend: backend,
+		Model: route.Name, BaseURL: baseURL,
+	}, true
+}
+
+func normalizedProviderURL(value string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(value)), "/")
+}
+
+func sameProvider(a, b providerIdentity) bool {
+	return a.ID != "" && a.ID == b.ID && a.Backend == b.Backend &&
+		normalizedProviderURL(a.BaseURL) == normalizedProviderURL(b.BaseURL)
+}
+
+func (s *Server) providerIdentityForProfileDefault(profile profiles.Profile) providerIdentity {
+	if s.Routing != nil && s.Profiles != nil {
+		stored, storedErr := s.Routing.Snapshot()
+		profileList, listErr := s.Profiles.List()
+		if storedErr == nil && listErr == nil {
+			catalog := routing.Project(profileList)
+			if route, ok := routeForProfile(catalog, profile.ID, profile.DefaultModel); ok {
+				policy := retainValidRoutingPolicy(stored.Policy, catalog)
+				policy.Default = route.Name
+				policy.DefaultReasoningEffort = profile.DefaultReasoningEffort
+				if hydrated, err := routing.ProjectWithPolicy(profileList, policy); err == nil {
+					if identity, ok := providerIdentityForRouting(hydrated); ok {
+						return identity
+					}
+				}
+			}
+		}
+	}
+	return providerFromProfile(profile)
+}
+
+func (s *Server) prepareAgentForProviderSwitch(target providerIdentity) (*providerHandoff, bool, error) {
+	source := s.activeProviderIdentity()
+	if sameProvider(source, target) {
+		return nil, true, nil
+	}
+	if s.Agent == nil {
+		return nil, false, nil
+	}
+	status := s.Agent.Status()
+	if !status.Running {
+		return nil, false, nil
+	}
+	if status.Busy {
+		return nil, false, errors.New("当前回复或工具调用尚未结束，请等待本轮完成后再切换供应商")
+	}
+	handoff := &providerHandoff{
+		LogicalSessionID:    status.SessionID,
+		SourceSessionID:     status.SessionID,
+		Source:              source,
+		Target:              target,
+		Mode:                "text_migration",
+		SourceAlwaysApprove: status.AlwaysApprove,
+		CreatedAt:           time.Now().UTC(),
+	}
+	if profile, _, err := s.Switcher.ActiveStatus(); err == nil {
+		handoff.SourceActiveProfile = profile.ID
+	}
+	if status.SessionID != "" {
+		history, err := s.Agent.StoredSessionHistory(status.SessionID)
+		if err != nil {
+			return nil, false, fmt.Errorf("读取旧会话元数据失败，未切换供应商: %w", err)
+		}
+		handoff.LogicalSessionID = logicalIDFromHistory(history)
+		text, err := s.Agent.StoredSessionTransferText(status.SessionID, 48000)
+		if err != nil {
+			return nil, false, fmt.Errorf("读取旧会话迁移文本失败，未切换供应商: %w", err)
+		}
+		handoff.TransferText = text
+		if graph := s.sessionGraphStore(); graph != nil {
+			_, err = graph.Record(handoff.LogicalSessionID, sessionBranch{
+				Provider: source, NativeSessionID: status.SessionID, Cwd: status.Cwd,
+				Model: status.Model, Health: "healthy",
+			})
+			if err != nil {
+				return nil, false, fmt.Errorf("保存逻辑会话检查点失败，未切换供应商: %w", err)
+			}
+			if branch, ok, branchErr := graph.Branch(handoff.LogicalSessionID, target); branchErr != nil {
+				return nil, false, fmt.Errorf("读取目标会话分支失败，未切换供应商: %w", branchErr)
+			} else if ok && branch.Health == "healthy" && strings.TrimSpace(branch.NativeSessionID) != "" {
+				handoff.TargetSessionID = branch.NativeSessionID
+				handoff.Mode = "branch_resume"
+				handoff.TransferText = ""
+			}
+		}
+	}
+	return handoff, false, nil
+}
+
+func (s *Server) commitProviderHandoff(handoff *providerHandoff) error {
+	if handoff == nil {
+		return nil
+	}
+	if s.Agent != nil && s.Agent.Status().Running {
+		if err := s.Agent.Stop(); err != nil {
+			return fmt.Errorf("停止旧 Agent 失败，供应商切换未提交: %w", err)
+		}
+	}
+	s.providerMu.Lock()
+	s.providerHandoff = handoff
+	s.providerMu.Unlock()
+	return nil
+}
+
+func (s *Server) rollbackProviderActivation(source providerIdentity) error {
+	if source.Official {
+		return s.Switcher.ActivateOfficial()
+	}
+	if strings.TrimSpace(source.ID) == "" {
+		return nil
+	}
+	if s.Routing != nil {
+		_, err := s.activateProfileRouting(source.ID)
+		return err
+	}
+	_, err := s.Switcher.Activate(source.ID)
+	return err
+}
+
+func (s *Server) rollbackProviderHandoff(handoff *providerHandoff) error {
+	if handoff == nil {
+		return nil
+	}
+	if handoff.Source.Official {
+		if s.Routing != nil && s.Profiles != nil {
+			s.routingMu.Lock()
+			defer s.routingMu.Unlock()
+			profileList, err := s.Profiles.List()
+			if err != nil {
+				return err
+			}
+			policy := routing.RoutingPolicy{Official: true}
+			_, err = s.applyRoutingPolicyTransaction(profileList, policy)
+			return err
+		}
+		return s.Switcher.ActivateOfficial()
+	}
+	if handoff.SourceRoutingPolicy != nil && s.Routing != nil && s.Profiles != nil {
+		s.routingMu.Lock()
+		defer s.routingMu.Unlock()
+		profileList, err := s.Profiles.List()
+		if err != nil {
+			return err
+		}
+		_, err = s.applyRoutingPolicyTransaction(profileList, *handoff.SourceRoutingPolicy)
+		return err
+	}
+	return s.rollbackProviderActivation(handoff.Source)
 }
 
 func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) {
@@ -287,8 +609,40 @@ func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) 
 		methodNotAllowed(w)
 		return
 	}
-	if err := s.Switcher.ActivateOfficial(); err != nil {
+	target := providerIdentity{ID: "official", Name: "官方账号", Backend: "official", Official: true}
+	handoff, same, err := s.prepareAgentForProviderSwitch(target)
+	if handoff != nil && s.Routing != nil {
+		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
+			previousPolicy := stored.Policy
+			handoff.SourceRoutingPolicy = &previousPolicy
+		}
+	}
+	if err != nil {
+		writeError(w, err, http.StatusConflict)
+		return
+	}
+	if s.Routing != nil && s.Profiles != nil {
+		s.routingMu.Lock()
+		profileList, listErr := s.Profiles.List()
+		if listErr == nil {
+			_, listErr = s.applyRoutingPolicyTransaction(profileList, routing.RoutingPolicy{Official: true})
+		}
+		s.routingMu.Unlock()
+		err = listErr
+	} else {
+		err = s.Switcher.ActivateOfficial()
+	}
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := s.commitProviderHandoff(handoff); err != nil {
+		if handoff != nil {
+			if rollbackErr := s.rollbackProviderHandoff(handoff); rollbackErr != nil {
+				err = fmt.Errorf("%v；恢复原供应商失败: %w", err, rollbackErr)
+			}
+		}
+		writeError(w, err, http.StatusConflict)
 		return
 	}
 	authFile := filepath.Join(s.Paths.GrokHome, "auth.json")
@@ -302,9 +656,11 @@ func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) 
 	}
 	s.changed()
 	writeJSON(w, map[string]any{
-		"ok":             true,
-		"login_required": loginRequired,
-		"message":        "已切换到官方账号，新开 grok 会话生效",
+		"ok":                true,
+		"login_required":    loginRequired,
+		"same_provider":     same,
+		"handoff_available": handoff != nil,
+		"message":           "已切换到官方账号",
 	})
 }
 
@@ -323,8 +679,16 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
+		s.routingMu.Lock()
 		created, err := s.Profiles.Create(profile)
+		if err == nil && s.Routing != nil {
+			err = s.applyCurrentRoutingLocked()
+		}
+		s.routingMu.Unlock()
 		if err != nil {
+			if created.ID != "" {
+				_ = s.Profiles.Delete(created.ID)
+			}
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -343,27 +707,6 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parts[0]
-	if len(parts) == 2 && parts[1] == "activate" {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w)
-			return
-		}
-		profile, err := s.Switcher.Activate(id)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if os.IsNotExist(err) {
-				status = http.StatusNotFound
-			}
-			writeError(w, err, status)
-			return
-		}
-		s.changed()
-		writeJSON(w, map[string]any{
-			"profile": profile,
-			"message": "已切换，新开 grok 会话生效",
-		})
-		return
-	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
@@ -375,7 +718,16 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
+		s.routingMu.Lock()
+		previous, previousErr := s.Profiles.Get(id)
 		updated, err := s.Profiles.Update(id, profile)
+		if err == nil && s.Routing != nil {
+			err = s.applyCurrentRoutingLocked()
+		}
+		if err != nil && previousErr == nil {
+			_, _ = s.Profiles.Update(id, previous)
+		}
+		s.routingMu.Unlock()
 		if err != nil {
 			status := http.StatusInternalServerError
 			if os.IsNotExist(err) {
@@ -387,7 +739,18 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		s.changed()
 		writeJSON(w, updated)
 	case http.MethodDelete:
-		if err := s.Profiles.Delete(id); err != nil {
+		s.routingMu.Lock()
+		previous, previousErr := s.Profiles.Get(id)
+		err := s.Profiles.Delete(id)
+		deleted := err == nil
+		if deleted && s.Routing != nil {
+			err = s.applyCurrentRoutingLocked()
+		}
+		if err != nil && deleted && previousErr == nil {
+			_, _ = s.Profiles.Create(previous)
+		}
+		s.routingMu.Unlock()
+		if err != nil {
 			status := http.StatusInternalServerError
 			if os.IsNotExist(err) {
 				status = http.StatusNotFound

@@ -24,6 +24,7 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/registrar"
 	"grok_switch/internal/remoteaccess"
+	"grok_switch/internal/routing"
 	"grok_switch/internal/server"
 	"grok_switch/internal/settings"
 	"grok_switch/internal/singleinstance"
@@ -108,6 +109,28 @@ func main() {
 	if err := sw.EnsureDefaultProfile(); err != nil {
 		crash.Logf("default profile import skipped: %v", err)
 	}
+	routingStore := routing.NewStore(resolved.RoutingFile)
+	routingSnapshot, err := routingStore.Initialize(profileStore)
+	if err != nil {
+		fatal(err)
+	}
+	profileList, err := profileStore.List()
+	if err != nil {
+		fatal(err)
+	}
+	startupPolicy := routing.RepairPolicy(profileList, routingSnapshot.Policy)
+	hydratedRouting, err := routing.ProjectWithPolicy(profileList, startupPolicy)
+	if err != nil {
+		fatal(err)
+	}
+	if err := sw.ApplyRouting(hydratedRouting); err != nil {
+		fatal(fmt.Errorf("应用启动路由配置失败: %w", err))
+	}
+	if startupPolicy != routingSnapshot.Policy {
+		if _, err := routingStore.UpdatePolicy(startupPolicy); err != nil {
+			fatal(fmt.Errorf("修复启动路由策略失败: %w", err))
+		}
+	}
 
 	currentSettings, err := settingsStore.Get()
 	if err != nil {
@@ -126,6 +149,7 @@ func main() {
 	appServer := &server.Server{
 		Paths:             resolved,
 		Profiles:          profileStore,
+		Routing:           routingStore,
 		Settings:          settingsStore,
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		GrokAuth:          grokAuthStore,
@@ -143,6 +167,17 @@ func main() {
 	httpServer, port, err := appServer.Listen(currentSettings.Port)
 	if err != nil {
 		fatal(err)
+	}
+	if err := appServer.EnsureSubscriptionProxyRoutes(); err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		fatal(fmt.Errorf("更新订阅代理路由失败: %w", err))
+	}
+	if err := appServer.EnsureCodeBuddyProfile(); err != nil {
+		crash.Logf("CodeBuddy managed profile skipped: %v", err)
+	}
+	if err := appServer.ApplyCurrentRouting(); err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		fatal(fmt.Errorf("最终应用组合路由失败: %w", err))
 	}
 	// Route net/http's internal panic/error reports into the crash log too.
 	if crashFile := resolved.LogFile; crashFile != "" {
