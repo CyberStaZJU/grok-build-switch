@@ -1442,7 +1442,8 @@ body {
 .codeBuddyModelsList { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Subscription proxy */
-.subscriptionSectionTitle { margin: 4px 0 10px; }
+.subscriptionSectionTitle { margin: 4px 0 6px; }
+.subscriptionStepHint { margin: 0 0 10px; }
 .subscriptionLoginGrid, .subscriptionProviderGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .subscriptionLoginGrid .formCard { box-shadow: none; }
 .subscriptionLoginGrid p { margin: 0; flex: 1; }

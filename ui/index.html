@@ -127,22 +127,7 @@
                   <option value="">（请先启用模型）</option>
                 </select>
               </label>
-              <label class="field">联网搜索模型
-                <select id="webSearchModel">
-                  <option value="">（可选）</option>
-                </select>
-              </label>
-              <label class="field">Explore 子代理模型
-                <select id="subagentsExploreModel">
-                  <option value="">（继承主模型）</option>
-                </select>
-              </label>
-              <label class="field">Plan 子代理模型
-                <select id="subagentsPlanModel">
-                  <option value="">（继承主模型）</option>
-                </select>
-              </label>
-              <p class="muted tiny span2">这些值作为供应商的初始建议；启用后请在“模型路由”中统一管理当前 default、web_search、Explore 和 Plan 路由。</p>
+              <p class="muted tiny">这里只设置该供应商的默认模型；联网搜索、Explore 和 Plan 请在“模型路由”中统一管理。</p>
               <label class="field reasoningEffortField">默认推理强度
                 <div class="reasoningEffortControl">
                   <select id="defaultReasoningEffort">
@@ -461,10 +446,10 @@
         <button type="button" id="backFromSubscriptionProxyBtn" class="btn">返回</button>
       </div>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">代理服务</h2><p id="subscriptionServiceDetail" class="muted tiny">加载中…</p></div><span id="subscriptionServiceBadge" class="badge">未知</span></div><div class="subscriptionConnection"><div><span>Base URL</span><code id="subscriptionBaseUrl">—</code></div><div><span>推理 Key</span><code id="subscriptionApiKey">—</code></div></div><div class="inlineActions"><button id="subscriptionStartBtn" class="btn primary" type="button">启动</button><button id="subscriptionStopBtn" class="btn danger" type="button">停止</button><button id="subscriptionRestartBtn" class="btn" type="button">重启</button><button id="subscriptionRefreshBtn" class="btn ghost" type="button">刷新</button></div></section>
-      <section><h2 class="sectionTitle subscriptionSectionTitle">添加订阅账号</h2><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
-      <section class="formCard"><div class="rowBetween"><h2 class="sectionTitle">账号</h2><span id="subscriptionAccountCount" class="muted tiny">0 个</span></div><div id="subscriptionAccounts" class="subscriptionAccounts"></div></section>
-      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">模型</h2><p class="muted tiny">按供应商选择要暴露的模型。</p></div><button type="button" id="saveSubscriptionModelsBtn" class="btn primary">保存模型</button></div><div id="subscriptionModels" class="subscriptionModels"></div></section>
-      <section class="formCard"><div><h2 class="sectionTitle">创建 / 更新供应商</h2><p class="muted tiny">将订阅代理连接写入供应商列表。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 / 更新 Codex Provider</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 / 更新 Gemini Provider</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 / 更新 Grok Provider</button></div></section>
+      <section><h2 class="sectionTitle subscriptionSectionTitle">第 1 步：添加订阅账号</h2><p class="muted tiny subscriptionStepHint">账号是订阅代理访问官方服务的登录凭据；添加成功后，还需要选择模型并创建对应供应商，才能在“模型路由”中使用。</p><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">已添加账号</h2><p class="muted tiny">禁用会保留凭据但停止使用；删除会移除本地保存的订阅凭据。</p></div><span id="subscriptionAccountCount" class="muted tiny">0 个</span></div><div id="subscriptionAccounts" class="subscriptionAccounts"></div></section>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">第 2 步：选择模型</h2><p class="muted tiny">只勾选希望暴露给 Grok Build 的模型，然后保存。</p></div><button type="button" id="saveSubscriptionModelsBtn" class="btn primary">保存模型选择</button></div><div id="subscriptionModels" class="subscriptionModels"></div></section>
+      <section class="formCard"><div><h2 class="sectionTitle">第 3 步：创建 / 更新供应商</h2><p class="muted tiny">每个按钮只同步对应类型的已登录账号和已保存模型。完成后到“模型路由”选择它，不会自动改变当前路由。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 Codex 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 Gemini 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 Grok 供应商</button></div><p id="subscriptionProviderHint" class="muted tiny">请先完成账号登录和模型选择。</p></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">诊断</h2><p class="muted tiny">检查服务、账号与模型路由。</p></div><button type="button" id="runSubscriptionDiagnosticsBtn" class="btn">运行诊断</button></div><pre id="subscriptionDiagnostics" class="subscriptionDiagnostics mono">尚未运行诊断。</pre></section>
     </main>
 

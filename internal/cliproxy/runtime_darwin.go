@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Runner interface {
@@ -138,7 +139,20 @@ func (r Runtime) Stop(ctx context.Context) error {
 		}
 		return fmt.Errorf("停止 CLIProxyAPI 失败")
 	}
-	return nil
+	// bootout can return before launchd has fully removed the job and released
+	// port 8317. Wait briefly so a following restart cannot race bootstrap.
+	for attempt := 0; attempt < 20; attempt++ {
+		st, _ := r.Status(ctx)
+		if !st.Running {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("停止 CLIProxyAPI 超时")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("停止 CLIProxyAPI 超时")
 }
 func (r Runtime) Restart(ctx context.Context) error {
 	if err := r.Stop(ctx); err != nil {

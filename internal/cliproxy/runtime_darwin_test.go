@@ -12,13 +12,24 @@ import (
 )
 
 type fakeRunner struct {
+	output    []byte
+	err       error
+	calls     [][]string
+	responses []fakeRunnerResponse
+}
+
+type fakeRunnerResponse struct {
 	output []byte
 	err    error
-	calls  [][]string
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
+	if len(f.responses) > 0 {
+		response := f.responses[0]
+		f.responses = f.responses[1:]
+		return response.output, response.err
+	}
 	return f.output, f.err
 }
 
@@ -64,5 +75,23 @@ func TestRuntimeStatusBoundaries(t *testing.T) {
 	st, err = r.Status(context.Background())
 	if err != nil || !st.Running {
 		t.Fatal("已加载应 running")
+	}
+}
+
+func TestRuntimeStopWaitsUntilLaunchAgentIsUnloaded(t *testing.T) {
+	runner := &fakeRunner{responses: []fakeRunnerResponse{
+		{},                                     // bootout
+		{output: []byte("state = running")},    // first status still loaded
+		{err: errors.New("service not found")}, // next status unloaded
+	}}
+	r := Runtime{Paths: NewPaths(t.TempDir()), Home: t.TempDir(), Runner: runner}
+	if err := r.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	if got := strings.Join(runner.calls[0], " "); !strings.Contains(got, "launchctl bootout") {
+		t.Fatalf("first call must boot out the service: %s", got)
 	}
 }

@@ -109,10 +109,16 @@ func (m *Manager) ServiceAction(ctx context.Context, action string) error {
 	case "stop":
 		return sanitize(m.Runtime.Stop(ctx))
 	case "restart":
+		// Stop before replacing the installed executable or LaunchAgent plist.
+		// Updating a running binary first is unnecessary and can leave launchd
+		// supervising stale state when the bundle was upgraded.
+		if err := m.Runtime.Stop(ctx); err != nil {
+			return sanitize(err)
+		}
 		if err := m.prepare(); err != nil {
 			return err
 		}
-		return sanitize(m.Runtime.Restart(ctx))
+		return sanitize(m.Runtime.Start(ctx))
 	default:
 		return fmt.Errorf("无效服务操作")
 	}

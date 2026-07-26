@@ -340,8 +340,6 @@ const TEMPLATES = {
     upstream_format: "openai_chat",
     base_url: "https://api.openai.com/v1",
     default_model: "",
-    web_search_model: "",
-    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
@@ -350,8 +348,6 @@ const TEMPLATES = {
     upstream_format: "openai_responses",
     base_url: "https://api.openai.com/v1",
     default_model: "",
-    web_search_model: "",
-    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
@@ -360,24 +356,10 @@ const TEMPLATES = {
     upstream_format: "anthropic",
     base_url: "https://api.anthropic.com",
     default_model: "",
-    web_search_model: "",
-    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
 };
-
-/** Normalize profile subagents models (supports legacy subagents_default_model). */
-function subagentsModelsOf(profile) {
-  const models = profile?.subagents_models || {};
-  let explore = models.explore || "";
-  let plan = models.plan || "";
-  if (!explore && !plan && profile?.subagents_default_model) {
-    explore = profile.subagents_default_model;
-    plan = profile.subagents_default_model;
-  }
-  return { explore, plan };
-}
 
 const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -3453,13 +3435,9 @@ function fillForm(profile) {
   $("modelsBody").innerHTML = "";
   (profile.models || []).forEach((model) => addModelCard(model));
   renderModelSelect();
-  // Rebuild selects from enabled models, then restore saved values.
-  const sa = subagentsModelsOf(profile);
-  syncEnabledModelList({
-    default_model: profile.default_model || "",
-    web_search_model: profile.web_search_model || "",
-    subagents_models: sa,
-  });
+  // Rebuild the provider-local default selector from enabled models. Global
+  // web_search and subagent choices are owned exclusively by Model Routing.
+  syncEnabledModelList(profile.default_model || "");
   hideConnectionStatus();
   if ($("connectBlock")) $("connectBlock").open = false;
 }
@@ -3479,8 +3457,6 @@ function applyTemplate(key) {
     api_key: keepKey || tpl.api_key || "",
     default_reasoning_effort: $("defaultReasoningEffort").value,
     default_model: "",
-    web_search_model: "",
-    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   });
@@ -3519,8 +3495,6 @@ function stripSecrets(profile, includeKey) {
     base_url: profile.base_url,
     default_model: profile.default_model,
     default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
-    web_search_model: profile.web_search_model,
-    subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
     models: (profile.models || []).map((m) => {
       const item = {
@@ -3579,8 +3553,6 @@ function importProfileJSON(text) {
     api_key: profile.api_key || "",
     default_model: profile.default_model || "",
     default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
-    web_search_model: profile.web_search_model || "",
-    subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
     models: profile.models || [],
   });
@@ -3777,59 +3749,34 @@ async function detectReasoningEfforts() {
   }
 }
 
-function syncEnabledModelList(preferred) {
+function syncEnabledModelList(preferredDefault) {
   const names = unique(readEnabledModelNames());
-  const fields = [
-    { id: "defaultModel", emptyLabel: "（请先启用模型）", required: false },
-    { id: "webSearchModel", emptyLabel: "（可选）", required: false },
-    { id: "subagentsExploreModel", emptyLabel: "（继承主模型）", required: false },
-    { id: "subagentsPlanModel", emptyLabel: "（继承主模型）", required: false },
-  ];
-  const currentSA = preferred?.subagents_models || {
-    explore: $("subagentsExploreModel")?.value || "",
-    plan: $("subagentsPlanModel")?.value || "",
-  };
-  const prefer = preferred || {
-    default_model: $("defaultModel")?.value || "",
-    web_search_model: $("webSearchModel")?.value || "",
-    subagents_models: currentSA,
-  };
-  const sa = prefer.subagents_models || currentSA;
-  const values = {
-    defaultModel: prefer.default_model ?? "",
-    webSearchModel: prefer.web_search_model ?? "",
-    subagentsExploreModel: sa.explore ?? "",
-    subagentsPlanModel: sa.plan ?? "",
-  };
-
-  fields.forEach(({ id, emptyLabel }) => {
-    const sel = $(id);
-    if (!sel) return;
-    const current = values[id] || "";
-    sel.innerHTML = "";
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = names.length ? emptyLabel.replace("请先启用模型", "未选择") : emptyLabel;
-    sel.appendChild(empty);
-    names.forEach((name) => {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      sel.appendChild(opt);
-    });
-    // Keep saved value even if not currently in enabled list (e.g. mid-edit).
-    if (current && !names.includes(current)) {
-      const orphan = document.createElement("option");
-      orphan.value = current;
-      orphan.textContent = `${current}（未启用）`;
-      sel.appendChild(orphan);
-      sel.value = current;
-    } else if (current && names.includes(current)) {
-      sel.value = current;
-    } else {
-      sel.value = "";
-    }
+  const sel = $("defaultModel");
+  if (!sel) return;
+  const current = preferredDefault ?? sel.value ?? "";
+  sel.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = names.length ? "（未选择）" : "（请先启用模型）";
+  sel.appendChild(empty);
+  names.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
   });
+  // Keep the saved provider default visible while the model list is mid-edit.
+  if (current && !names.includes(current)) {
+    const orphan = document.createElement("option");
+    orphan.value = current;
+    orphan.textContent = `${current}（未启用）`;
+    sel.appendChild(orphan);
+    sel.value = current;
+  } else if (current && names.includes(current)) {
+    sel.value = current;
+  } else {
+    sel.value = "";
+  }
   updateReasoningEffortMetadata();
 }
 
@@ -4040,11 +3987,6 @@ function readForm() {
     available_models: state.availableModels,
     default_model: $("defaultModel")?.value?.trim() || "",
     default_reasoning_effort: $("defaultReasoningEffort")?.value || "low",
-    web_search_model: $("webSearchModel")?.value?.trim() || "",
-    subagents_models: {
-      explore: $("subagentsExploreModel")?.value?.trim() || "",
-      plan: $("subagentsPlanModel")?.value?.trim() || "",
-    },
     models: rows.map((row) => {
       const get = (field) => row.querySelector(`[data-field="${field}"]`)?.value.trim() || "";
       const num = (field) => Number(get(field) || 0);
@@ -4130,9 +4072,8 @@ function subscriptionStatusLabel(value) {
   })[value] || value || "未知";
 }
 
-function renderSubscriptionProxy(data) {
-  state.subscriptionProxy = data || {};
-  const service = data?.service || {};
+function renderSubscriptionService(service = {}) {
+  state.subscriptionProxy = { ...(state.subscriptionProxy || {}), service };
   $("subscriptionServiceBadge").textContent = subscriptionStatusLabel(service.state);
   $("subscriptionServiceBadge").dataset.state = service.state || "unknown";
   $("subscriptionServiceDetail").textContent = [service.version, service.pid ? `PID ${service.pid}` : "", service.config_path, service.last_error].filter(Boolean).join(" · ") || "服务未启动";
@@ -4142,13 +4083,32 @@ function renderSubscriptionProxy(data) {
   $("subscriptionStartBtn").disabled = transitioning || service.state === "running";
   $("subscriptionStopBtn").disabled = transitioning || service.state !== "running";
   $("subscriptionRestartBtn").disabled = transitioning || service.state !== "running";
+}
+
+function renderSubscriptionProxy(data) {
+  state.subscriptionProxy = data || {};
+  renderSubscriptionService(data?.service || {});
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
   $("subscriptionAccountCount").textContent = `${accounts.length} 个`;
   $("subscriptionAccounts").innerHTML = accounts.length ? accounts.map((account) => `<article class="subscriptionAccount"><div><strong>${escapeHtml(account.name || account.label || account.email || account.id)}</strong><p>${escapeHtml([account.provider, account.email, account.status_message].filter(Boolean).join(" · "))}</p></div><span class="badge">${escapeHtml(subscriptionStatusLabel(account.status))}</span><div class="inlineActions"><button type="button" class="btn sm subscriptionAccountToggle" data-id="${escapeAttr(account.id)}" data-disabled="${account.disabled ? "1" : "0"}">${account.disabled ? "启用" : "禁用"}</button><button type="button" class="btn sm danger subscriptionAccountDelete" data-id="${escapeAttr(account.id)}">删除</button></div></article>`).join("") : '<p class="muted tiny">尚未登录订阅账号。</p>';
   const models = Array.isArray(data?.models) ? data.models : [];
   const groups = Object.groupBy ? Object.groupBy(models, (model) => model.provider || "其他") : models.reduce((result, model) => { (result[model.provider || "其他"] ||= []).push(model); return result; }, {});
   $("subscriptionModels").innerHTML = Object.entries(groups).map(([provider, items]) => `<fieldset><legend>${escapeHtml(provider)}</legend>${items.map((model) => `<label class="check"><input type="checkbox" value="${escapeAttr(model.id)}" data-provider="${escapeAttr(model.provider)}" ${model.selected ? "checked" : ""}> <span>${escapeHtml(model.label || model.id)}</span></label>`).join("")}</fieldset>`).join("") || '<p class="muted tiny">暂无可用模型。</p>';
-  document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => { button.textContent = `${data?.providers?.[`${button.dataset.provider}_profile_id`] ? "更新" : "创建"} ${button.dataset.provider === "gemini" ? "Gemini" : button.dataset.provider === "grok" ? "Grok" : "Codex"} Provider`; });
+  const accountProviders = new Set(accounts.filter((account) => !account.disabled && !account.unavailable).map((account) => account.provider));
+  const selectedProviders = new Set(models.filter((model) => model.selected).map((model) => model.provider));
+  document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => {
+    const provider = button.dataset.provider;
+    const label = provider === "gemini" ? "Gemini" : provider === "grok" ? "Grok" : "Codex";
+    const exists = !!data?.providers?.[provider];
+    const ready = accountProviders.has(provider) && selectedProviders.has(provider) && data?.service?.state === "running";
+    button.textContent = `${exists ? "更新" : "创建"} ${label} 供应商`;
+    button.disabled = !ready;
+    button.title = ready ? `同步 ${label} 账号和已选模型到供应商列表` : `请先启动代理、添加 ${label} 账号并保存该类型的模型`;
+  });
+  const readyProviders = [...accountProviders].filter((provider) => selectedProviders.has(provider));
+  $("subscriptionProviderHint").textContent = readyProviders.length
+    ? `可同步：${readyProviders.map((provider) => provider === "gemini" ? "Gemini" : provider === "grok" ? "Grok" : "Codex").join("、")}。创建后请到“模型路由”选择模型。`
+    : "请先完成账号登录，并为对应类型勾选和保存至少一个模型。";
   bindSubscriptionDynamicHandlers();
   if (data?.login_session) renderSubscriptionLoginSession(data.login_session);
 }
@@ -4232,7 +4192,14 @@ async function pollSubscriptionLogin(id) {
 
 function bindSubscriptionDynamicHandlers() {
   document.querySelectorAll(".subscriptionAccountToggle").forEach((button) => button.onclick = () => run(async () => { await api(`/api/subscription-proxy/accounts/${encodeURIComponent(button.dataset.id)}`, { method: "PATCH", body: JSON.stringify({ disabled: button.dataset.disabled !== "1" }) }); await loadSubscriptionProxy(); }, { button, busyLabel: "保存中…" }));
-  document.querySelectorAll(".subscriptionAccountDelete").forEach((button) => button.onclick = () => { if (!confirm("确定删除这个订阅账号？")) return; run(async () => { await api(`/api/subscription-proxy/accounts/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); await loadSubscriptionProxy(); }, { button, busyLabel: "删除中…", success: "账号已删除" }); });
+  document.querySelectorAll(".subscriptionAccountDelete").forEach((button) => button.onclick = () => run(async () => {
+    const account = (state.subscriptionProxy?.accounts || []).find((item) => item.id === button.dataset.id);
+    const label = account?.email || account?.label || account?.name || button.dataset.id;
+    const confirmed = await customConfirm(`删除订阅账号「${label}」？\n\n这会移除本地保存的登录凭据；已创建的供应商仍会保留，但可能因没有可用账号而无法调用。`, { okLabel: "删除账号", danger: true });
+    if (!confirmed) return false;
+    await api(`/api/subscription-proxy/accounts/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" });
+    await loadSubscriptionProxy();
+  }, { button, busyLabel: "删除中…", success: "账号已删除" }));
 }
 
 // ——— SSH Remote File Manager ———
@@ -4678,7 +4645,13 @@ if ($("cacheStatsHours")) {
 }
 $("backFromSubscriptionProxyBtn").onclick = () => showView("home");
 $("subscriptionRefreshBtn").onclick = () => run(loadSubscriptionProxy, { button: $("subscriptionRefreshBtn"), busyLabel: "刷新中…" });
-for (const action of ["start", "stop", "restart"]) $("subscription" + action[0].toUpperCase() + action.slice(1) + "Btn").onclick = (event) => run(async () => { await api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) }); await loadSubscriptionProxy(); }, { button: event.currentTarget, busyLabel: "处理中…" });
+for (const action of ["start", "stop", "restart"]) $("subscription" + action[0].toUpperCase() + action.slice(1) + "Btn").onclick = (event) => run(async () => {
+  const result = await api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) });
+  if (result?.service) renderSubscriptionService(result.service);
+  // Account/model endpoints are unavailable while stopped and can briefly lag
+  // during restart. Refresh them only after a successful start/restart.
+  if (action !== "stop") await loadSubscriptionProxy();
+}, { button: event.currentTarget, busyLabel: "处理中…", success: action === "stop" ? "订阅代理已停止" : action === "restart" ? "订阅代理已重启" : "订阅代理已启动" });
 document.querySelectorAll(".subscriptionLoginBtn").forEach((button) => button.onclick = () => {
   if (subscriptionLoginBusy) return;
   subscriptionLoginBusy = true;
@@ -4695,7 +4668,14 @@ document.querySelectorAll(".subscriptionLoginBtn").forEach((button) => button.on
   });
 });
 $("saveSubscriptionModelsBtn").onclick = () => run(async () => { const selected = [...document.querySelectorAll("#subscriptionModels input:checked")].map((input) => ({ id: input.value, provider: input.dataset.provider })); await api("/api/subscription-proxy/models", { method: "PUT", body: JSON.stringify({ models: selected }) }); await loadSubscriptionProxy(); }, { button: $("saveSubscriptionModelsBtn"), busyLabel: "保存中…", success: "模型已保存" });
-document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => button.onclick = () => run(async () => { await api("/api/subscription-proxy/providers", { method: "POST", body: JSON.stringify({}) }); await refreshAll(); await loadSubscriptionProxy(); }, { button, busyLabel: "更新中…", success: "Provider 已更新" }));
+document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => button.onclick = () => run(async () => {
+  const provider = button.dataset.provider;
+  const result = await api("/api/subscription-proxy/providers", { method: "POST", body: JSON.stringify({ provider }) });
+  await refreshAll();
+  await loadSubscriptionProxy();
+  const profile = result?.providers?.[0];
+  toast(`${profile?.name || "订阅代理供应商"}已同步；请到“模型路由”选择要使用的模型`, "success");
+}, { button, busyLabel: "同步中…" }));
 $("runSubscriptionDiagnosticsBtn").onclick = () => run(async () => { const result = await api("/api/subscription-proxy/diagnostics", { method: "POST" }); $("subscriptionDiagnostics").textContent = JSON.stringify(result, null, 2); }, { button: $("runSubscriptionDiagnosticsBtn"), busyLabel: "诊断中…" });
 $("backFromEditBtn").onclick = () => showView("home");
 $("backFromSettingsBtn").onclick = () => showView("home");
@@ -4802,7 +4782,7 @@ if ($("configPreviewBlock")) {
     if ($("configPreviewBlock").open) refreshProviderConfigPreview();
   });
 }
-["name", "baseUrl", "profileApiKey", "defaultModel", "defaultReasoningEffort", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel", "upstreamFormat"].forEach((id) => {
+["name", "baseUrl", "profileApiKey", "defaultModel", "defaultReasoningEffort", "upstreamFormat"].forEach((id) => {
   const el = $(id);
   if (!el) return;
   el.addEventListener("input", scheduleProviderPreview);

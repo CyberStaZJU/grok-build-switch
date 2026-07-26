@@ -113,6 +113,13 @@ func (s *Server) handleSubscriptionProxy(w http.ResponseWriter, r *http.Request)
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
 	}
+	// Management endpoints exist only while CLIProxyAPI is healthy. Stopping or
+	// restarting the service must still leave this status endpoint usable rather
+	// than turning a successful lifecycle action into a follow-up UI failure.
+	if !status.Running || !status.Healthy {
+		writeJSON(w, map[string]any{"service": status, "accounts": []SubscriptionProxyAccount{}, "models": []map[string]any{}})
+		return
+	}
 	accounts, err := s.SubscriptionProxy.Accounts(r.Context())
 	if err != nil {
 		subscriptionProxyError(w, err, http.StatusBadGateway)
@@ -122,6 +129,16 @@ func (s *Server) handleSubscriptionProxy(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
+	}
+	providerProfiles := map[string]string{}
+	if s.Profiles != nil {
+		if profileList, listErr := s.Profiles.List(); listErr == nil {
+			for _, profile := range profileList {
+				if strings.HasPrefix(profile.Source, "subscription-proxy:") {
+					providerProfiles[strings.TrimPrefix(profile.Source, "subscription-proxy:")] = profile.ID
+				}
+			}
+		}
 	}
 	state := s.subscriptionState()
 	state.mu.Lock()
@@ -137,7 +154,7 @@ func (s *Server) handleSubscriptionProxy(w http.ResponseWriter, r *http.Request)
 	for _, model := range models {
 		outModels = append(outModels, map[string]any{"id": model.ID, "provider": canonicalProvider(model.Provider), "label": model.Label, "selected": state.selected[model.Provider+"\x00"+model.ID] || state.selected[canonicalProvider(model.Provider)+"\x00"+model.ID]})
 	}
-	writeJSON(w, map[string]any{"service": status, "accounts": accounts, "models": outModels})
+	writeJSON(w, map[string]any{"service": status, "accounts": accounts, "models": outModels, "providers": providerProfiles})
 }
 
 func (s *Server) handleSubscriptionProxyService(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +175,12 @@ func (s *Server) handleSubscriptionProxyService(w http.ResponseWriter, r *http.R
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, map[string]bool{"ok": true})
+	status, err := s.SubscriptionProxy.Status(r.Context())
+	if err != nil {
+		subscriptionProxyError(w, err, http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "service": status})
 }
 
 func (s *Server) handleSubscriptionProxyLogin(w http.ResponseWriter, r *http.Request) {
@@ -357,8 +379,15 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		subscriptionProxyError(w, fmt.Errorf("Profile 存储不可用"), http.StatusServiceUnavailable)
 		return
 	}
-	var req struct{}
+	var req struct {
+		Provider string `json:"provider"`
+	}
 	if !decodeSubscriptionJSON(w, r, &req) {
+		return
+	}
+	provider := canonicalProvider(req.Provider)
+	if provider != "codex" && provider != "gemini" && provider != "grok" {
+		subscriptionProxyError(w, fmt.Errorf("无效供应商类型"), http.StatusBadRequest)
 		return
 	}
 	key, err := s.SubscriptionProxy.InferenceKey(r.Context())
@@ -376,6 +405,22 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
 	}
+	state := s.subscriptionState()
+	state.mu.Lock()
+	if store, ok := s.SubscriptionProxy.(subscriptionModelSelectionStore); ok && len(state.selected) == 0 {
+		if persisted, loadErr := store.SelectedModels(); loadErr == nil {
+			for _, model := range persisted {
+				state.selected[canonicalProvider(model.Provider)+"\x00"+model.ID] = true
+			}
+		}
+	}
+	selectedModels := make([]SubscriptionProxyModel, 0, len(models))
+	for _, model := range models {
+		if state.selected[canonicalProvider(model.Provider)+"\x00"+model.ID] {
+			selectedModels = append(selectedModels, model)
+		}
+	}
+	state.mu.Unlock()
 	s.routingMu.Lock()
 	defer s.routingMu.Unlock()
 	list, err := s.Profiles.List()
@@ -383,12 +428,17 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		subscriptionProxyError(w, err, http.StatusInternalServerError)
 		return
 	}
-	created := make([]profiles.Profile, 0, 3)
-	createdNew := make([]string, 0, 3)
-	updatedPrevious := make([]profiles.Profile, 0, 3)
+	created := make([]profiles.Profile, 0, 1)
+	createdNew := make([]string, 0, 1)
+	updatedPrevious := make([]profiles.Profile, 0, 1)
 	baseURL := s.SubscriptionProxyBaseURL()
-	for _, def := range []struct{ provider, name string }{{"codex", "订阅代理 · ChatGPT/Codex"}, {"gemini", "订阅代理 · Google Gemini"}, {"grok", "订阅代理 · Grok Build"}} {
-		profile := subscriptionProfile(def.provider, def.name, key, accounts, models, baseURL)
+	providerName := map[string]string{"codex": "订阅代理 · ChatGPT/Codex", "gemini": "订阅代理 · Google Gemini", "grok": "订阅代理 · Grok Build"}[provider]
+	for _, def := range []struct{ provider, name string }{{provider, providerName}} {
+		profile := subscriptionProfile(def.provider, def.name, key, accounts, selectedModels, baseURL)
+		if len(profile.Models) == 0 {
+			subscriptionProxyError(w, fmt.Errorf("请先添加并启用 %s 订阅账号，然后保存至少一个该类型的模型", subscriptionProviderLabel(provider)), http.StatusBadRequest)
+			return
+		}
 		var stored *profiles.Profile
 		for i := range list {
 			if list[i].Source == "subscription-proxy:"+def.provider {
@@ -433,6 +483,19 @@ func rollbackSubscriptionProfiles(store *profiles.Store, createdIDs []string, up
 	for i := len(updatedPrevious) - 1; i >= 0; i-- {
 		previous := updatedPrevious[i]
 		_, _ = store.Update(previous.ID, previous)
+	}
+}
+
+func subscriptionProviderLabel(provider string) string {
+	switch provider {
+	case "codex":
+		return "Codex/ChatGPT"
+	case "gemini":
+		return "Gemini"
+	case "grok":
+		return "Grok"
+	default:
+		return provider
 	}
 }
 

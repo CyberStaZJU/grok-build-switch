@@ -106,7 +106,7 @@ func TestOrganizePanelRespectsHiddenAttribute(t *testing.T) {
 	}
 }
 
-func TestProfileModelRoutingControlsExist(t *testing.T) {
+func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 	data, err := assets.ReadFile("ui/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -115,10 +115,29 @@ func TestProfileModelRoutingControlsExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"defaultModel", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel"} {
-		control := htmlElementByID(document, id)
-		if control == nil || control.Data != "select" {
-			t.Fatalf("%s select not found", id)
+	if control := htmlElementByID(document, "defaultModel"); control == nil || control.Data != "select" {
+		t.Fatal("provider-local defaultModel select not found")
+	}
+	for _, id := range []string{"webSearchModel", "subagentsExploreModel", "subagentsPlanModel"} {
+		if control := htmlElementByID(document, id); control != nil {
+			t.Fatalf("profile editor must not duplicate global routing control %s", id)
+		}
+	}
+	for _, id := range []string{"routingDefault", "routingWebSearch", "routingExplore", "routingPlan"} {
+		if control := htmlElementByID(document, id); control == nil || control.Data != "select" {
+			t.Fatalf("global routing select %s not found", id)
+		}
+	}
+	if !bytes.Contains(data, []byte("联网搜索、Explore 和 Plan 请在“模型路由”中统一管理")) {
+		t.Fatal("profile editor must direct users to the single routing source of truth")
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{`$("webSearchModel")`, `$("subagentsExploreModel")`, `$("subagentsPlanModel")`} {
+		if bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("profile editor still reads removed routing control %s", stale)
 		}
 	}
 }
@@ -290,7 +309,7 @@ func TestSubscriptionProxyPageContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"navSubscriptionProxyBtn", "viewSubscriptionProxy", "subscriptionStartBtn", "subscriptionStopBtn", "subscriptionRestartBtn", "subscriptionAccounts", "subscriptionModels", "saveSubscriptionModelsBtn", "runSubscriptionDiagnosticsBtn", "backFromSubscriptionProxyBtn"} {
+	for _, id := range []string{"navSubscriptionProxyBtn", "viewSubscriptionProxy", "subscriptionStartBtn", "subscriptionStopBtn", "subscriptionRestartBtn", "subscriptionAccounts", "subscriptionModels", "saveSubscriptionModelsBtn", "subscriptionProviderHint", "runSubscriptionDiagnosticsBtn", "backFromSubscriptionProxyBtn"} {
 		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
 			t.Fatalf("%s control not found", id)
 		}
@@ -310,6 +329,16 @@ func TestSubscriptionProxyPageContract(t *testing.T) {
 	for _, endpoint := range []string{"/api/subscription-proxy", "/api/subscription-proxy/service", "/api/subscription-proxy/login", "/api/subscription-proxy/login/open", "/api/subscription-proxy/accounts/", "/api/subscription-proxy/models", "/api/subscription-proxy/providers", "/api/subscription-proxy/diagnostics"} {
 		if !bytes.Contains(appData, []byte(endpoint)) {
 			t.Fatalf("client endpoint %s not found", endpoint)
+		}
+	}
+	for _, expected := range []string{"第 1 步：添加订阅账号", "第 2 步：选择模型", "第 3 步：创建 / 更新供应商", "不会自动改变当前路由"} {
+		if !bytes.Contains(htmlData, []byte(expected)) {
+			t.Fatalf("subscription workflow guidance missing: %s", expected)
+		}
+	}
+	for _, expected := range []string{"await customConfirm", `JSON.stringify({ provider })`, "已同步；请到“模型路由”选择要使用的模型"} {
+		if !bytes.Contains(appData, []byte(expected)) {
+			t.Fatalf("subscription account/provider behavior missing: %s", expected)
 		}
 	}
 	for _, marker := range []string{"subscriptionLoginGrid", "subscriptionProviderGrid", "@media (max-width: 375px)"} {
