@@ -49,6 +49,10 @@ func (m *Manager) load() error {
 	}
 	m.state.Version = poolVersion
 	m.state.Settings = normalizeSettings(m.state.Settings)
+	// Automatic account inspection is intentionally disabled. Account health
+	// checks are explicit user actions; importing credentials or starting the
+	// app must not trigger background upstream requests.
+	m.state.Settings.Enabled = false
 	if m.state.Accounts == nil {
 		m.state.Accounts = []Account{}
 	}
@@ -65,6 +69,7 @@ func (m *Manager) load() error {
 func (m *Manager) saveLocked() error {
 	m.state.Version = poolVersion
 	m.state.Settings = normalizeSettings(m.state.Settings)
+	m.state.Settings.Enabled = false
 	data, err := json.MarshalIndent(m.state, "", "  ")
 	if err != nil {
 		return err

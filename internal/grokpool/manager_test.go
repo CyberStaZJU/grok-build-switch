@@ -53,7 +53,7 @@ func TestImportPersistsMetadataWithoutTokensAndKeepsStableKey(t *testing.T) {
 	}
 }
 
-func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T) {
+func TestManualInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -93,6 +93,9 @@ func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T
 
 	manager.Start()
 	t.Cleanup(manager.Close)
+	if err := manager.StartInspection(); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		status := manager.Status()
@@ -103,7 +106,7 @@ func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T
 	}
 	status := manager.Status()
 	if status.LastRun.IsZero() || status.Running {
-		t.Fatalf("automatic inspection did not finish: %#v", status)
+		t.Fatalf("manual inspection did not finish: %#v", status)
 	}
 	classes := map[string]string{}
 	for _, account := range status.Accounts {
@@ -118,6 +121,59 @@ func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T
 	token, _, err := manager.NextToken(t.Context(), "conversation-1")
 	if err != nil || token != "healthy-token" {
 		t.Fatalf("NextToken() = %q, %v", token, err)
+	}
+}
+
+func TestImportAndStartupDoNotAutomaticallyInspect(t *testing.T) {
+	requests := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"grok-4.5"}]}`)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	manager, err := NewManager(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.client = upstream.Client()
+	manager.upstreamURL = upstream.URL
+	expiry := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	if _, err := manager.Import([]ImportFile{{
+		Name: "manual.json", Content: fmt.Sprintf(`{"type":"xai","access_token":"manual-token","expired":%q,"email":"manual@example.com"}`, expiry),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	manager.Start()
+	t.Cleanup(manager.Close)
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-requests:
+		t.Fatal("import or startup triggered an automatic inspection request")
+	default:
+	}
+	status := manager.Status()
+	if status.Settings.Enabled || status.Running || !status.NextRun.IsZero() || !status.LastRun.IsZero() {
+		t.Fatalf("manual-only status = %#v", status)
+	}
+
+	if _, err := manager.UpdateSettings(Settings{Enabled: true, IntervalMinutes: 360, Workers: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.Status().Settings.Enabled {
+		t.Fatal("legacy enabled=true must be coerced to manual-only mode")
+	}
+	reloaded, err := NewManager(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Status().Settings.Enabled {
+		t.Fatal("manual-only mode was not persisted")
 	}
 }
 
@@ -179,10 +235,10 @@ func TestSettingsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.UpdateSettings(Settings{Enabled: true, IntervalMinutes: 1, Workers: 4}); err == nil {
+	if _, err := manager.UpdateSettings(Settings{IntervalMinutes: 1, Workers: 4}); err == nil {
 		t.Fatal("expected interval validation error")
 	}
-	if _, err := manager.UpdateSettings(Settings{Enabled: true, IntervalMinutes: 30, Workers: 17}); err == nil {
+	if _, err := manager.UpdateSettings(Settings{IntervalMinutes: 30, Workers: 17}); err == nil {
 		t.Fatal("expected worker validation error")
 	}
 }

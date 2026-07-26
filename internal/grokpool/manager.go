@@ -187,13 +187,8 @@ func (m *Manager) importFiles(files []ImportFile, onlyMissing bool) (ImportResul
 		return result, fmt.Errorf("没有成功导入账号")
 	}
 	if changed > 0 {
-		m.mu.Lock()
-		if m.running {
-			m.rerunRequested = true
-		} else if m.state.Settings.Enabled {
-			m.nextRun = time.Now().UTC()
-		}
-		m.mu.Unlock()
+		// Importing credentials never starts an inspection. The user can run an
+		// explicit account check from the UI when diagnosis is needed.
 		m.signalWake()
 	}
 	return result, nil
@@ -232,7 +227,7 @@ func (m *Manager) importCredential(fileName string, credential grokauth.Credenti
 		account.ExpiresAt = status.ExpiresAt
 		account.ImportedAt = now
 		account.Classification = "uninspected"
-		account.Reason = "凭据已更新，等待巡检"
+		account.Reason = "凭据已更新，尚未手动检查"
 		account.Action = "keep"
 		account.HTTPStatus = 0
 		account.ErrorCode = ""
@@ -247,7 +242,7 @@ func (m *Manager) importCredential(fileName string, credential grokauth.Credenti
 		Email:          status.Email,
 		Source:         status.Source,
 		Classification: "uninspected",
-		Reason:         "等待首次巡检",
+		Reason:         "尚未手动检查",
 		Action:         "keep",
 		ExpiresAt:      status.ExpiresAt,
 		ImportedAt:     now,
@@ -257,6 +252,8 @@ func (m *Manager) importCredential(fileName string, credential grokauth.Credenti
 }
 
 func (m *Manager) UpdateSettings(settings Settings) (Status, error) {
+	// Keep account checks manual-only even if an older client sends enabled=true.
+	settings.Enabled = false
 	normalizedProxy, transport, err := netproxy.BuildTransport(settings.ProxyURL)
 	if err != nil {
 		return Status{}, err
@@ -273,18 +270,7 @@ func (m *Manager) UpdateSettings(settings Settings) (Status, error) {
 	for _, store := range m.stores {
 		_ = store.SetProxyURL(settings.ProxyURL)
 	}
-	if settings.Enabled && len(m.state.Accounts) > 0 {
-		if m.state.LastRun.IsZero() {
-			m.nextRun = time.Now().UTC()
-		} else {
-			m.nextRun = m.state.LastRun.Add(time.Duration(settings.IntervalMinutes) * time.Minute)
-			if m.nextRun.Before(time.Now()) {
-				m.nextRun = time.Now().UTC()
-			}
-		}
-	} else {
-		m.nextRun = time.Time{}
-	}
+	m.nextRun = time.Time{}
 	// Ensure auth dir exists when configured for hot-load / mint output.
 	authDir := m.resolvedAuthDirLocked()
 	_ = os.MkdirAll(authDir, 0o700)

@@ -116,6 +116,42 @@ func TestRoutingPolicyPUTAppliesCombinedConfig(t *testing.T) {
 	}
 }
 
+func TestRoutingPolicyPUTCanClearSubagentRoutes(t *testing.T) {
+	s := newRoutingTestServer(t)
+	catalog, _, err := s.currentRouting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := catalog.Policy
+	initial.Subagents = routing.SubagentsPolicy{Explore: catalog.ModelRoutes[0].Name, Plan: catalog.ModelRoutes[1].Name}
+	if _, err := s.applyRoutingPolicyTransaction(mustProfiles(t, s), initial); err != nil {
+		t.Fatal(err)
+	}
+
+	request := loopbackRequest(http.MethodPut, "/api/routing/policy", `{"subagents":{"explore":"","plan":""}}`)
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Policy.Subagents.Explore != "" || stored.Policy.Subagents.Plan != "" {
+		t.Fatalf("subagent routes were not cleared: %#v", stored.Policy.Subagents)
+	}
+}
+
+func mustProfiles(t *testing.T, s *Server) []profiles.Profile {
+	t.Helper()
+	items, err := s.Profiles.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
 func TestActiveProviderIdentityUsesRoutingDefaultProvider(t *testing.T) {
 	s := newRoutingTestServer(t)
 	profileList, err := s.Profiles.List()

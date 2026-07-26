@@ -2696,6 +2696,9 @@ body.resizingChatPanels * {
   justify-content: center;
   background: rgba(0, 0, 0, 0.5);
 }
+.organizePanel[hidden] {
+  display: none !important;
+}
 .organizePanelCard {
   width: min(720px, 90vw);
   max-height: 80vh;
@@ -3681,15 +3684,18 @@ body.resizingChatPanels * {
 .sshSidebar { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .sshSidebarHead { padding: 12px 14px; font-weight: 600; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .sshConnections { overflow-y: auto; flex: 1; }
-.sshConnection { padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background 0.1s ease; }
+.sshConnection { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); transition: background 0.1s ease; }
 .sshConnection:hover { background: var(--surface-2); }
-.sshConnection.active { background: var(--primary-soft); border-left: 3px solid var(--primary); }
+.sshConnection.active { background: var(--primary-soft); border-left: 3px solid var(--primary); padding-left: 11px; }
+.sshConnectionMain { min-width: 0; padding: 2px 0; cursor: pointer; }
 .sshConnectionName { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
-.sshConnectionMeta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.sshConnectionMeta { font-size: 11px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 .sshConnectionStatus { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #d1d5db; margin-right: 6px; vertical-align: middle; }
 .sshConnectionStatus.connected { background: #22c55e; }
 .sshConnectionStatus.error { background: #ef4444; }
-.sshConnEditBtn, .sshConnDelBtn { padding: 1px 6px; font-size: 10px; }
+.sshConnectionActions { display: flex; gap: 3px; opacity: 0; transition: opacity 0.12s ease; }
+.sshConnection:hover .sshConnectionActions, .sshConnection:focus-within .sshConnectionActions { opacity: 1; }
+.sshConnEditBtn, .sshConnDelBtn { padding: 2px 5px; font-size: 10px; }
 
 .sshBrowser { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .sshBrowserHead { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 10px; }
@@ -3740,7 +3746,9 @@ body.resizingChatPanels * {
 .sessionGraphBranchInfo strong { display: block; font-size: 13px; margin-bottom: 4px; }
 .sessionGraphBranchMeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sessionGraphBranchMeta code { font-size: 11px; }
-.sessionGraphBranchActions { display: flex; align-items: center; gap: 8px; }
+.sessionGraphBranchActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.sessionGraphBranchActions .btn.danger { color: var(--danger); border-color: #fca5a5; }
+.sessionGraphBranchActions .btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
 
 /* ——— Browser-use Status ——— */
 .browserUseStatus { margin-top: 8px; }
@@ -3765,4 +3773,4 @@ body.resizingChatPanels * {
 .sessionGraphBranchInfo strong { display: block; font-size: 13px; margin-bottom: 4px; }
 .sessionGraphBranchMeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sessionGraphBranchMeta code { font-size: 11px; }
-.sessionGraphBranchActions { display: flex; align-items: center; gap: 8px; }
+.sessionGraphBranchActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }

@@ -105,6 +105,55 @@ func TestApplyRoutingComposesHydratedMultipleProviders(t *testing.T) {
 	}
 }
 
+func TestCurrentMatchesRoutingIgnoresSyntheticProfileKeyOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	// Provider order intentionally differs from the alphabetical route order.
+	// The projected profile derives its aggregate APIKey from z-route, while
+	// TOML import reads a-route first. Only per-model keys are meaningful here.
+	profileList := []profiles.Profile{
+		{
+			ID: "z-provider", Name: "Z", BaseURL: "https://z.example/v1", APIKey: "key-z",
+			DefaultModel: "z-route", Models: []profiles.ModelDef{{Name: "z-route", Model: "upstream-z"}},
+		},
+		{
+			ID: "a-provider", Name: "A", BaseURL: "https://a.example/v1", APIKey: "key-a",
+			DefaultModel: "a-route", Models: []profiles.ModelDef{{Name: "a-route", Model: "upstream-a"}},
+		},
+	}
+	policy := routing.RoutingPolicy{Default: "z-route", DefaultReasoningEffort: "medium"}
+	snapshot, err := routing.ProjectWithPolicy(profileList, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyRoutingToFile(path, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	matched, err := CurrentMatchesRouting(path, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matched {
+		t.Fatal("unchanged combined config should not depend on synthetic profile key order")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), "key-a", "changed-key", 1))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	matched, err = CurrentMatchesRouting(path, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("per-model API key drift must still be detected")
+	}
+}
+
 func TestRoutingPreviewSnippetAndMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

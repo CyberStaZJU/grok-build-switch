@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -231,23 +232,39 @@ func modelAliasesYAML(aliases oauthModelAliases) string {
 	return b.String()
 }
 
+func localProxyURL() string {
+	if proxyURL := strings.TrimSpace(os.Getenv("HTTPS_PROXY")); proxyURL != "" {
+		return proxyURL
+	}
+	if proxyURL := strings.TrimSpace(os.Getenv("HTTP_PROXY")); proxyURL != "" {
+		return proxyURL
+	}
+	// Common local proxy ports used by Clash/Surge. Select the first one that
+	// is actually listening instead of blindly assuming 7890 is available.
+	for _, candidate := range []struct {
+		address string
+		url     string
+	}{
+		{"127.0.0.1:7890", "http://127.0.0.1:7890"},
+		{"127.0.0.1:7897", "http://127.0.0.1:7897"},
+		{"127.0.0.1:7891", "socks5://127.0.0.1:7891"},
+	} {
+		conn, err := net.DialTimeout("tcp", candidate.address, 150*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return candidate.url
+		}
+	}
+	return ""
+}
+
 func WriteConfig(p Paths, keys Keys) error {
 	if err := p.Ensure(); err != nil {
 		return err
 	}
 	// Prefer an explicit proxy so OAuth token exchange reaches OpenAI even when
 	// the process is launched without a shell-level proxy environment.
-	proxyURL := strings.TrimSpace(os.Getenv("HTTPS_PROXY"))
-	if proxyURL == "" {
-		proxyURL = strings.TrimSpace(os.Getenv("HTTP_PROXY"))
-	}
-	if proxyURL == "" {
-		// Common local proxy ports used by Clash/Surge on this machine.
-		for _, candidate := range []string{"http://127.0.0.1:7890", "http://127.0.0.1:7897", "socks5://127.0.0.1:7891"} {
-			proxyURL = candidate
-			break
-		}
-	}
+	proxyURL := localProxyURL()
 	data := fmt.Sprintf(`host: 127.0.0.1
 port: %d
 remote-management:

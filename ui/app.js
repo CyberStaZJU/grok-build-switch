@@ -877,9 +877,11 @@ function renderAgentSessionList() {
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "sessionDeleteBtn";
-    deleteBtn.title = "删除会话及本地文件";
+    const isRunningSession = session.id === state.agentStatus?.session_id && agentIsRunning();
+    deleteBtn.title = isRunningSession ? "当前正在运行的会话不能删除，请先切换到其他对话" : "删除会话及本地文件";
     deleteBtn.setAttribute("aria-label", `删除会话 ${session.title || ""}`);
     deleteBtn.textContent = "×";
+    deleteBtn.disabled = isRunningSession;
     const stopBubble = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -970,20 +972,11 @@ async function deleteAgentSession(session, button) {
     await api(`/api/agent/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
     state.agentSessions = (state.agentSessions || []).filter((item) => item.id !== session.id);
     if (state.activeAgentSession?.id === session.id) {
-      // Active conversation files are gone; drop local UI state.
       state.activeAgentSession = null;
       clearAgentTranscript(true);
       setAgentEngineState("none");
       updateConversationIdentity();
       persistLastChatContext({ sessionId: "", title: "", model: "" });
-      // If the running agent is still bound to the deleted session, stop it.
-      if (state.agentStatus?.session_id === session.id && agentIsRunning()) {
-        try {
-          await api("/api/agent/stop", { method: "POST", body: "{}" });
-        } catch (_) {
-          // ignore stop errors after delete
-        }
-      }
     }
     renderAgentSessionList();
   }, { button, busyLabel: "…", success: "对话已删除" });
@@ -3069,7 +3062,7 @@ function renderGrokAuth(auth) {
     return;
   }
   const detail = [];
-  if (auth.pool_accounts) detail.push(`统一号池 ${auth.pool_accounts} 个账号 · 已启用自动巡检`);
+  if (auth.pool_accounts) detail.push(`统一账号池 ${auth.pool_accounts} 个账号`);
   if (auth.email) detail.push(auth.email);
   if (auth.expires_at) {
     detail.push(`${auth.needs_refresh ? "已过期或即将过期" : "有效期至"} ${new Date(auth.expires_at).toLocaleString()}`);
@@ -3247,8 +3240,6 @@ function renderGrokPool(pool) {
     ].map(([value, label]) => `<div class="poolStat"><strong>${value}</strong><span>${label}</span></div>`).join("");
   }
   const settings = pool?.settings || {};
-  if ($("grokPoolAutoEnabled")) $("grokPoolAutoEnabled").checked = !!settings.enabled;
-  if ($("grokPoolInterval")) $("grokPoolInterval").value = settings.interval_minutes || 360;
   if ($("grokPoolWorkers")) $("grokPoolWorkers").value = settings.workers || 4;
   if ($("grokPoolProxyUrl")) $("grokPoolProxyUrl").value = settings.proxy_url || "";
   if ($("grokPoolAuthDir")) $("grokPoolAuthDir").value = settings.auth_dir || "";
@@ -3276,10 +3267,9 @@ function renderGrokPool(pool) {
   }
   if ($("grokPoolProgress")) {
     const parts = [];
-    if (pool?.running) parts.push(`巡检中 ${pool.done || 0}/${pool.total || 0}`);
-    else if (pool?.last_run) parts.push(`上次巡检 ${new Date(pool.last_run).toLocaleString()}`);
-    else parts.push(configured ? "等待首次巡检" : "尚未导入号池账号");
-    if (!pool?.running && pool?.next_run) parts.push(`下次 ${new Date(pool.next_run).toLocaleString()}`);
+    if (pool?.running) parts.push(`检查中 ${pool.done || 0}/${pool.total || 0}`);
+    else if (pool?.last_run) parts.push(`上次手动检查 ${new Date(pool.last_run).toLocaleString()}`);
+    else parts.push(configured ? "尚未手动检查账号状态" : "尚未导入账号池账号");
     if (pool?.last_error) parts.push(pool.last_error);
     $("grokPoolProgress").textContent = parts.join(" · ");
   }
@@ -4268,14 +4258,49 @@ function renderSSHConnections() {
   }
   box.innerHTML = ssh.connections.map((c) => {
     const status = c.connected ? "connected" : "";
-    return `<div class="sshConnection${ssh.activeConn === c.id ? " active" : ""}" data-id="${c.id}">
-      <div class="sshConnectionName"><span class="sshConnectionStatus ${status}"></span>${escapeHtml(c.name)}</div>
-      <div class="sshConnectionMeta">${escapeHtml(c.user)}@${escapeHtml(c.host)}:${c.port || 22}</div>
+    return `<div class="sshConnection${ssh.activeConn === c.id ? " active" : ""}" data-id="${escapeAttr(c.id)}">
+      <div class="sshConnectionMain" data-action="connect">
+        <div class="sshConnectionName"><span class="sshConnectionStatus ${status}"></span>${escapeHtml(c.name)}</div>
+        <div class="sshConnectionMeta">${escapeHtml(c.user)}@${escapeHtml(c.host)}:${c.port || 22}</div>
+      </div>
+      <div class="sshConnectionActions">
+        <button type="button" class="btn ghost sshConnEditBtn" data-action="edit" title="编辑连接">编辑</button>
+        <button type="button" class="btn ghost danger sshConnDelBtn" data-action="delete" title="删除连接">删除</button>
+      </div>
     </div>`;
   }).join("");
   box.querySelectorAll(".sshConnection").forEach((el) => {
-    el.onclick = () => connectSSH(el.dataset.id);
+    const conn = ssh.connections.find((item) => item.id === el.dataset.id);
+    el.querySelector('[data-action="connect"]').onclick = () => connectSSH(el.dataset.id);
+    el.querySelector('[data-action="edit"]').onclick = (event) => {
+      event.stopPropagation();
+      ssh.editingConn = conn.id;
+      showSSHConnDialog(conn);
+    };
+    el.querySelector('[data-action="delete"]').onclick = (event) => {
+      event.stopPropagation();
+      deleteSSHConnection(conn, event.currentTarget);
+    };
   });
+}
+
+async function deleteSSHConnection(conn, button) {
+  if (!conn?.id) return;
+  const ok = await customConfirm(
+    `删除 SSH 连接「${conn.name}」？\n\n${conn.user}@${conn.host}:${conn.port || 22}\n\n只删除本地连接配置，不会删除 ~/.ssh/config、私钥或远端文件。`,
+    { okLabel: "删除连接", cancelLabel: "取消", danger: true },
+  );
+  if (!ok) return;
+  await run(async () => {
+    await api(`/api/ssh/connections/${encodeURIComponent(conn.id)}`, { method: "DELETE" });
+    if (ssh.activeConn === conn.id) {
+      ssh.activeConn = null;
+      ssh.currentPath = "/";
+      ssh.selected.clear();
+      renderSSHFiles([]);
+    }
+    await loadSSHConnections();
+  }, { button, busyLabel: "删除中…", success: "SSH 连接已删除" });
 }
 
 async function connectSSH(id) {
@@ -4990,7 +5015,7 @@ $("grokAuthFile").onchange = async (event) => {
   }, {
     button: $("importGrokAuthBtn"),
     busyLabel: "导入中…",
-    success: "Grok auth 已导入统一号池，已进入自动巡检",
+    success: "Grok auth 已导入统一账号池",
   });
 };
 
@@ -5115,8 +5140,8 @@ $("grokPoolSettingsForm").onsubmit = (event) => {
     state.grokPool = await api("/api/grok-pool", {
       method: "PUT",
       body: JSON.stringify({
-        enabled: $("grokPoolAutoEnabled").checked,
-        interval_minutes: Number($("grokPoolInterval").value || 360),
+        enabled: false,
+        interval_minutes: 360,
         workers: Number($("grokPoolWorkers").value || 4),
         proxy_url: $("grokPoolProxyUrl").value.trim(),
         auth_dir: $("grokPoolAuthDir").value.trim(),
@@ -5125,7 +5150,7 @@ $("grokPoolSettingsForm").onsubmit = (event) => {
       }),
     });
     renderGrokPool(state.grokPool);
-  }, { button: $("saveGrokPoolSettingsBtn"), busyLabel: "保存中…", success: "号池巡检设置已保存" });
+  }, { button: $("saveGrokPoolSettingsBtn"), busyLabel: "保存中…", success: "账号池设置已保存" });
 };
 
 $("importGrokPoolAuthDirBtn").onclick = () => run(async () => {
@@ -5240,12 +5265,12 @@ async function importGrokPoolFiles(files, button) {
 $("inspectGrokPoolBtn").onclick = () => run(async () => {
   state.grokPool = await api("/api/grok-pool/inspect", { method: "POST" });
   renderGrokPool(state.grokPool);
-}, { button: $("inspectGrokPoolBtn"), busyLabel: "启动中…", success: "号池巡检已启动" });
+}, { button: $("inspectGrokPoolBtn"), busyLabel: "启动中…", success: "账号状态检查已启动" });
 
 $("stopGrokPoolBtn").onclick = () => run(async () => {
   await api("/api/grok-pool/inspect", { method: "DELETE" });
   await loadGrokPool();
-}, { button: $("stopGrokPoolBtn"), busyLabel: "停止中…", success: "已请求停止巡检" });
+}, { button: $("stopGrokPoolBtn"), busyLabel: "停止中…", success: "已请求停止检查" });
 
 async function bulkGrokPoolAction(action, button) {
   const abnormal = (state.grokPool?.accounts || []).filter((account) => {
@@ -5352,27 +5377,32 @@ document.addEventListener("keydown", (event) => {
 });
 
 // ——— Session Graph ———
-const sessionGraph = { logicalSessions: [], loading: false };
+const sessionGraph = { logicalSessions: [], loading: false, currentSessionID: "", agentBusy: false };
 
 async function loadSessionGraph() {
   sessionGraph.loading = true;
   const container = $("sessionGraphContent");
   if (container) container.innerHTML = '<p class="muted tiny">加载会话图谱…</p>';
   try {
-    const response = await api("/api/agent/sessions");
-    const sessions = response.sessions || [];
-    const byLogicalId = {};
-    sessions.forEach((session) => {
-      const logicalId = session.logical_id || session.id.split("-").slice(0, 2).join("-") || session.id;
-      if (!byLogicalId[logicalId]) {
-        byLogicalId[logicalId] = { id: logicalId, title: session.title || `会话 ${logicalId.slice(0, 8)}`, branches: [], created_at: session.created_at, updated_at: session.updated_at };
-      }
-      byLogicalId[logicalId].branches.push({ native_session_id: session.id, provider: session.model || "unknown", model: session.model || "—", cwd: session.cwd || "", health: session.health || "healthy", updated_at: session.updated_at, title: session.title || session.id });
-      if (session.updated_at && (!byLogicalId[logicalId].updated_at || session.updated_at > byLogicalId[logicalId].updated_at)) {
-        byLogicalId[logicalId].updated_at = session.updated_at;
-      }
-    });
-    sessionGraph.logicalSessions = Object.values(byLogicalId).sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    const response = await api("/api/session-graph");
+    const sessions = response.sessions || {};
+    sessionGraph.currentSessionID = response.current_session_id || "";
+    sessionGraph.agentBusy = response.agent_busy === true;
+    sessionGraph.logicalSessions = Object.values(sessions).map((logical) => {
+      const branches = Object.entries(logical.branches || {}).map(([key, branch]) => ({
+        ...branch,
+        branch_key: key,
+        provider_name: branch.provider?.name || branch.provider?.id || "unknown",
+        title: `${branch.provider?.name || branch.provider?.id || "供应商"} · ${branch.model || branch.native_session_id}`,
+        active: logical.active_branch === key,
+        current: branch.native_session_id === (response.current_session_id || ""),
+      }));
+      return {
+        ...logical,
+        title: `逻辑会话 ${String(logical.id || "").slice(0, 8)}`,
+        branches,
+      };
+    }).sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
     renderSessionGraph();
   } catch (err) {
     if (container) container.innerHTML = `<div class="routingUnavailable"><strong>无法加载会话图谱</strong><p>${escapeHtml(err.message)}</p></div>`;
@@ -5390,28 +5420,81 @@ function renderSessionGraph() {
     return;
   }
   container.innerHTML = sessionGraph.logicalSessions.map((logical) => `
-    <section class="sessionGraphGroup">
+    <section class="sessionGraphGroup" data-logical-id="${escapeAttr(logical.id)}">
       <div class="sessionGraphHead"><strong>${escapeHtml(logical.title)}</strong><span class="muted tiny">${escapeHtml(formatSessionTime(logical.updated_at))} · ${logical.branches.length} 个分支</span></div>
       <div class="sessionGraphBranches">
-        ${logical.branches.map((branch) => `
+        ${logical.branches.map((branch) => {
+          const missing = branch.health === "missing";
+          const canMerge = !missing && !!sessionGraph.currentSessionID && !branch.current && logical.branches.some((item) => item.current);
+          const healthLabel = missing ? "文件缺失" : branch.health === "healthy" ? "健康" : "异常";
+          return `
           <div class="sessionGraphBranch" data-session-id="${escapeAttr(branch.native_session_id)}">
-            <div class="sessionGraphBranchInfo"><strong>${escapeHtml(branch.title)}</strong><div class="sessionGraphBranchMeta"><code>${escapeHtml(branch.model)}</code><span class="muted tiny">${escapeHtml(branch.cwd || "默认目录")}</span><span class="badge ${branch.health === "healthy" ? "active" : "warn"}">${escapeHtml(branch.health === "healthy" ? "健康" : "异常")}</span></div></div>
-            <div class="sessionGraphBranchActions"><span class="muted tiny">${escapeHtml(formatSessionTime(branch.updated_at))}</span><button type="button" class="btn sm" data-action="switch" data-session-id="${escapeAttr(branch.native_session_id)}">切换分支</button></div>
-          </div>
-        `).join("")}
+            <div class="sessionGraphBranchInfo"><strong>${escapeHtml(branch.title)}</strong><div class="sessionGraphBranchMeta"><code>${escapeHtml(branch.model || "—")}</code><span class="muted tiny">${escapeHtml(branch.cwd || "默认目录")}</span><span class="badge ${branch.health === "healthy" ? "active" : "warn"}">${escapeHtml(healthLabel)}</span>${branch.current ? '<span class="badge active">正在运行</span>' : branch.active ? '<span class="badge">图谱活动分支</span>' : ''}</div></div>
+            <div class="sessionGraphBranchActions">
+              <span class="muted tiny">${escapeHtml(formatSessionTime(branch.updated_at))}</span>
+              ${canMerge ? `<button type="button" class="btn sm" data-action="merge" data-logical-id="${escapeAttr(logical.id)}" data-session-id="${escapeAttr(branch.native_session_id)}" data-target-session-id="${escapeAttr(sessionGraph.currentSessionID)}" ${sessionGraph.agentBusy ? "disabled" : ""}>合并到当前</button>` : ""}
+              <button type="button" class="btn sm" data-action="switch" data-session-id="${escapeAttr(branch.native_session_id)}" ${(branch.current || missing) ? "disabled" : ""}>${branch.current ? "当前分支" : missing ? "无法切换" : "切换分支"}</button>
+              <button type="button" class="btn sm danger" data-action="delete" data-logical-id="${escapeAttr(logical.id)}" data-session-id="${escapeAttr(branch.native_session_id)}" ${branch.current ? "disabled" : ""}>删除</button>
+            </div>
+          </div>`;
+        }).join("")}
       </div>
     </section>
   `).join("");
   container.querySelectorAll('[data-action="switch"]').forEach((btn) => {
-    btn.onclick = () => run(async () => { await api("/api/agent/session/load", { method: "POST", body: JSON.stringify({ id: btn.dataset.sessionId }) }); toast("已切换会话分支", "success"); showView("chat"); }, { busyLabel: "切换中…" });
+    btn.onclick = () => run(async () => { await api("/api/agent/session/load", { method: "POST", body: JSON.stringify({ session_id: btn.dataset.sessionId }) }); toast("已切换会话分支", "success"); showView("chat"); }, { button: btn, busyLabel: "切换中…" });
+  });
+  container.querySelectorAll('[data-action="merge"]').forEach((btn) => {
+    btn.onclick = () => mergeSessionGraphBranch(btn);
+  });
+  container.querySelectorAll('[data-action="delete"]').forEach((btn) => {
+    btn.onclick = () => deleteSessionGraphBranch(btn);
   });
 }
 
+async function mergeSessionGraphBranch(button) {
+  const sourceID = button.dataset.sessionId;
+  const targetID = button.dataset.targetSessionId;
+  const ok = await customConfirm(
+    "将此分支的文本上下文合并到当前正在运行的分支？\n\n只会导入用户与助手的纯文本，不会复制内部推理、工具调用或工具结果。历史文本将作为不可信引用上下文处理，源分支会保留。",
+    { okLabel: "合并文本", cancelLabel: "取消" },
+  );
+  if (!ok) return;
+  await run(async () => {
+    await api("/api/session-graph/merge", {
+      method: "POST",
+      body: JSON.stringify({
+        logical_session_id: button.dataset.logicalId,
+        source_session_id: sourceID,
+        target_session_id: targetID,
+      }),
+    });
+    toast("合并内容已发送，正在由当前分支处理；确认回复完成后可单独删除源分支", "success");
+    await loadSessionGraph();
+  }, { button, busyLabel: "合并中…" });
+}
+
+async function deleteSessionGraphBranch(button, skipConfirm = false) {
+  const sessionID = button.dataset.sessionId;
+  if (!skipConfirm) {
+    const ok = await customConfirm(
+      `永久删除分支 ${sessionID}？\n\n将删除本地对话历史、终端日志及相关会话文件，不可恢复。当前正在运行的分支不允许删除。`,
+      { okLabel: "永久删除", cancelLabel: "取消", danger: true },
+    );
+    if (!ok) return;
+  }
+  await run(async () => {
+    await api("/api/session-graph/branch", {
+      method: "DELETE",
+      body: JSON.stringify({ logical_session_id: button.dataset.logicalId, session_id: sessionID }),
+    });
+    await loadSessionGraph();
+  }, { button, busyLabel: "删除中…", success: "分支已删除" });
+}
+
 // ——— Browser-use Status ———
-function isGrokModelUI(model) {
-  if (!model) return false;
-  const m = model.trim().toLowerCase();
-  return m.startsWith("grok") || m.startsWith("grok-");
+function routeHasNativeSearch(route) {
+  return !!route && route.api_backend === "responses" && route.supports_backend_search === true;
 }
 
 function renderBrowserUseStatus(snapshot) {
@@ -5419,24 +5502,33 @@ function renderBrowserUseStatus(snapshot) {
   if (!container) return;
   if (!snapshot || !snapshot.policy) { container.innerHTML = '<p class="muted tiny">加载路由策略后可查看 browser-use 注入状态。</p>'; return; }
   const policy = snapshot.policy;
+  const browserUseAvailable = snapshot.browser_use?.available === true;
   const items = [];
-  if (policy.default && snapshot.model_routes) {
-    const route = snapshot.model_routes.find((r) => r.name === policy.default || r.id === policy.default);
-    if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `默认对话 (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
-  }
-  if (policy.web_search && snapshot.model_routes) {
-    const route = snapshot.model_routes.find((r) => r.name === policy.web_search || r.id === policy.web_search);
-    if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `联网搜索 (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
-  }
+  const addRoute = (label, routeName) => {
+    const route = (snapshot.model_routes || []).find((r) => r.name === routeName || r.id === routeName);
+    if (!route) return;
+    const native = routeHasNativeSearch(route);
+    const fallback = !native && browserUseAvailable;
+    items.push({
+      label: `${label} (${route.name || route.model})`,
+      model: route.model,
+      state: native ? "native" : (fallback ? "injected" : "missing"),
+      reason: native ? "Responses 后端已声明原生 x_search 能力" : (fallback ? "已检测到 browser-use MCP，可提供 web_search/web_fetch" : "模型不支持原生搜索，且未检测到 browser-use MCP"),
+    });
+  };
+  if (policy.default) addRoute("默认对话", policy.default);
+  if (policy.web_search) addRoute("联网搜索", policy.web_search);
   for (const subagent of ["explore", "plan"]) {
-    const routeName = policy.subagents?.[subagent] || policy[subagent];
-    if (routeName && snapshot.model_routes) {
-      const route = snapshot.model_routes.find((r) => r.name === routeName || r.id === routeName);
-      if (route) { const needsBU = !isGrokModelUI(route.model); items.push({ label: `子代理 ${subagent} (${route.name || route.model})`, model: route.model, injected: needsBU, reason: needsBU ? "非 Grok 模型，已注入 browser-use MCP" : "Grok 模型，原生支持 x_search" }); }
-    }
+    const routeName = policy.subagents?.[subagent];
+    if (routeName) addRoute(`子代理 ${subagent}`, routeName);
+  }
+  const badge = $("browserUseBadge");
+  if (badge) {
+    badge.textContent = browserUseAvailable ? "MCP 可用" : "MCP 缺失";
+    badge.dataset.state = browserUseAvailable ? "running" : "stopped";
   }
   if (!items.length) { container.innerHTML = '<p class="muted tiny">未配置路由目标。</p>'; return; }
-  container.innerHTML = `<div class="browserUseStatus"><div class="browserUseList">${items.map((item) => `<div class="browserUseItem ${item.injected ? "injected" : "native"}"><span class="browserUseLabel">${escapeHtml(item.label)}</span><code>${escapeHtml(item.model || "—")}</code><span class="badge ${item.injected ? "warn" : "active"}">${item.injected ? "已注入 MCP" : "原生支持"}</span><span class="muted tiny">${escapeHtml(item.reason)}</span></div>`).join("")}</div></div>`;
+  container.innerHTML = `<div class="browserUseStatus"><div class="browserUseList">${items.map((item) => `<div class="browserUseItem ${item.state}"><span class="browserUseLabel">${escapeHtml(item.label)}</span><code>${escapeHtml(item.model || "—")}</code><span class="badge ${item.state === "native" ? "active" : "warn"}">${item.state === "native" ? "原生支持" : (item.state === "injected" ? "MCP 可用" : "工具缺失")}</span><span class="muted tiny">${escapeHtml(item.reason)}</span></div>`).join("")}</div>${snapshot.browser_use?.error ? `<p class="muted tiny">${escapeHtml(snapshot.browser_use.error)}</p>` : ""}</div>`;
 }
 
 // ——— Routing View ———
@@ -5468,19 +5560,21 @@ function renderRouting(snapshot) {
   const routingStatus = $("routingStatus");
   const catalog = $("routingCatalog");
   const modelCount = $("routingModelCount");
-  const browserUseBadge = $("browserUseBadge");
   const policy = snapshot.policy || {};
   const modelRoutes = snapshot.model_routes || [];
   const providers = snapshot.providers || [];
 
-  if (browserUseBadge) browserUseBadge.textContent = snapshot.web_search_capable ? "已就绪" : "未配置";
-
   // Populate policy dropdowns
-  const dropdownIds = { routingDefault: "", routingWebSearch: "web_search", routingExplore: "explore", routingPlan: "plan" };
-  for (const [selectId, policyKey] of Object.entries(dropdownIds)) {
+  const dropdownValues = {
+    routingDefault: policy.default || "",
+    routingWebSearch: policy.web_search || "",
+    routingExplore: policy.subagents?.explore || "",
+    routingPlan: policy.subagents?.plan || "",
+  };
+  for (const [selectId, policyValue] of Object.entries(dropdownValues)) {
     const sel = $(selectId);
     if (!sel) continue;
-    const current = sel.value || policy[policyKey] || "";
+    const current = policyValue;
     sel.innerHTML = '<option value="">（未设置）</option>';
     for (const route of modelRoutes) {
       const opt = document.createElement("option");
@@ -5561,8 +5655,10 @@ function saveRoutingPolicy() {
     default: $("routingDefault")?.value || "",
     default_reasoning_effort: $("routingReasoningEffort")?.value || "none",
     web_search: $("routingWebSearch")?.value || "",
-    explore: $("routingExplore")?.value || "",
-    plan: $("routingPlan")?.value || "",
+    subagents: {
+      explore: $("routingExplore")?.value || "",
+      plan: $("routingPlan")?.value || "",
+    },
   };
   run(async () => {
     await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(policy) });
@@ -5594,8 +5690,9 @@ function openOrganizePanel() {
   $("organizeResults").hidden = true;
   $("organizePanelFoot").hidden = true;
   $("organizeProgressBarFill").style.width = "0%";
-  $("organizeProgressText").textContent = "正在分析…";
-  startOrganizeAnalysis();
+  $("organizeProgressText").textContent = "点击“开始整理”后才会分析对话。";
+  $("organizeStartBtn").hidden = false;
+  $("organizeStartBtn").disabled = false;
 }
 
 function closeOrganizePanel() {
@@ -5605,11 +5702,16 @@ function closeOrganizePanel() {
 }
 
 async function startOrganizeAnalysis() {
+  const startBtn = $("organizeStartBtn");
+  startBtn.disabled = true;
+  $("organizeProgressText").textContent = "正在分析…";
   try {
     const resp = await api("/api/agent/sessions/analyze", { method: "POST" });
     organizeState.taskID = resp.task_id;
+    startBtn.hidden = true;
     organizeState.timer = setInterval(() => pollOrganizeProgress(), 2000);
   } catch (err) {
+    startBtn.disabled = false;
     $("organizeProgressText").textContent = "分析失败: " + err.message;
   }
 }
@@ -5724,6 +5826,7 @@ async function applyOrganizeChanges() {
 }
 
 $("organizePanelCloseBtn").onclick = () => closeOrganizePanel();
+$("organizeStartBtn").onclick = () => startOrganizeAnalysis();
 $("organizeCancelBtn").onclick = () => closeOrganizePanel();
 $("organizeApplyBtn").onclick = () => run(applyOrganizeChanges, { button: $("organizeApplyBtn"), busyLabel: "应用中…" });
 $("organizeSelectDeleteBtn").onclick = () => {

@@ -7,7 +7,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/highlight-github.min.css?v=11.11.1">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.18.0">
-  <link rel="stylesheet" href="/style.css?v=41">
+  <link rel="stylesheet" href="/style.css?v=42">
 </head>
 <body>
   <div class="shell">
@@ -122,6 +122,27 @@
             <p class="muted tiny">拉取列表后点 chip 启用；不会自动设置默认模型。每个已启用模型可单独测试连通。</p>
 
             <div class="formGrid">
+              <label class="field">默认模型
+                <select id="defaultModel">
+                  <option value="">（请先启用模型）</option>
+                </select>
+              </label>
+              <label class="field">联网搜索模型
+                <select id="webSearchModel">
+                  <option value="">（可选）</option>
+                </select>
+              </label>
+              <label class="field">Explore 子代理模型
+                <select id="subagentsExploreModel">
+                  <option value="">（继承主模型）</option>
+                </select>
+              </label>
+              <label class="field">Plan 子代理模型
+                <select id="subagentsPlanModel">
+                  <option value="">（继承主模型）</option>
+                </select>
+              </label>
+              <p class="muted tiny span2">这些值作为供应商的初始建议；启用后请在“模型路由”中统一管理当前 default、web_search、Explore 和 Plan 路由。</p>
               <label class="field reasoningEffortField">默认推理强度
                 <div class="reasoningEffortControl">
                   <select id="defaultReasoningEffort">
@@ -359,7 +380,8 @@
         <div class="organizePanelBody" id="organizePanelBody">
           <div class="organizeProgress" id="organizeProgress">
             <div class="organizeProgressBar"><div class="organizeProgressBarFill" id="organizeProgressBarFill" style="width:0%"></div></div>
-            <span class="muted tiny" id="organizeProgressText">准备中…</span>
+            <span class="muted tiny" id="organizeProgressText">点击“开始整理”后才会分析对话。</span>
+            <button type="button" id="organizeStartBtn" class="btn sm primary">开始整理</button>
           </div>
           <div id="organizeResults" hidden></div>
         </div>
@@ -547,8 +569,8 @@
           </div>
           <div class="alert lanFirewallHint">
             <div>
-              <strong>首次连接请检查 Windows 防火墙</strong>
-              <span>只允许 grok_switch 通过“专用网络”。不要勾选公共网络。</span>
+              <strong>首次连接请允许本地网络访问</strong>
+              <span>如果 macOS 弹出权限提示，请允许 Grok Build Switch 访问本地网络；只建议在可信的家庭或办公网络中使用。</span>
             </div>
           </div>
         </div>
@@ -558,7 +580,7 @@
         <div class="rowBetween">
           <div>
             <h2 class="sectionTitle">Grok Auth JSON</h2>
-            <p class="muted tiny">统一 xAI OAuth 号池入口：导入后自动进入下方巡检池，不再依赖 CPA。</p>
+            <p class="muted tiny">统一 xAI OAuth 账号入口：支持导入、轮换与按需手动检查，不再依赖 CPA。</p>
           </div>
           <span id="grokAuthBadge" class="badge">未配置</span>
         </div>
@@ -590,7 +612,7 @@
         </div>
         <input type="file" id="grokAuthFile" accept="application/json,.json" hidden>
         <input type="file" id="grokAuthDirectory" accept="application/json,.json" webkitdirectory directory multiple hidden>
-        <p class="muted tiny">支持 CPA 的 <span class="mono">xai-*.json</span> 和 Grok CLI 的 <span class="mono">~/.grok/auth.json</span>。单文件和目录导入都进入同一个自动巡检号池；页面不会把 xAI access token 当作 API Key 暴露。</p>
+        <p class="muted tiny">支持 CPA 的 <span class="mono">xai-*.json</span> 和 Grok CLI 的 <span class="mono">~/.grok/auth.json</span>。单文件和目录导入都进入同一个本地账号池；页面不会把 xAI access token 当作 API Key 暴露。</p>
       </section>
 
       <section class="formCard" id="registrarCard">
@@ -729,8 +751,8 @@
       <section class="formCard" id="grokPoolCard">
         <div class="rowBetween">
           <div>
-            <h2 class="sectionTitle">Grok 号池自动巡检</h2>
-            <p class="muted tiny">多账号轮换与定时健康检查；明确坏号会自动退出代理可用集合，但不会被自动删除。</p>
+            <h2 class="sectionTitle">Grok 账号池</h2>
+            <p class="muted tiny">管理本地 xAI OAuth 账号、代理与认证目录；需要排查账号状态时可手动检查。</p>
           </div>
           <span id="grokPoolBadge" class="badge">0 个账号</span>
         </div>
@@ -739,14 +761,10 @@
         <p id="grokPoolProgress" class="muted tiny">尚未导入号池账号。</p>
 
         <form id="grokPoolSettingsForm" class="poolSettings">
-          <label class="check"><input type="checkbox" id="grokPoolAutoEnabled"> 自动巡检</label>
-          <label class="field">间隔（分钟）
-            <input id="grokPoolInterval" type="number" min="30" max="1440" value="360">
-          </label>
-          <label class="field">并发数
+          <label class="field">手动检查并发数
             <input id="grokPoolWorkers" type="number" min="1" max="16" value="4">
           </label>
-          <label class="field poolProxyField">网络代理（巡检、token 刷新、铸造和号池转发共用）
+          <label class="field poolProxyField">网络代理（手动检查、token 刷新、铸造和账号池转发共用）
             <input id="grokPoolProxyUrl" class="mono" placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
           </label>
           <label class="field poolAuthDirField">CPA 认证目录（号池导入 / 铸造输出 / 热加载）
@@ -807,8 +825,8 @@
         <div class="inlineActions">
           <button type="button" id="importGrokPoolBtn" class="btn primary">批量导入 JSON</button>
           <button type="button" id="importGrokPoolDirBtn" class="btn">选择目录导入</button>
-          <button type="button" id="inspectGrokPoolBtn" class="btn">立即巡检</button>
-          <button type="button" id="stopGrokPoolBtn" class="btn" hidden>停止巡检</button>
+          <button type="button" id="inspectGrokPoolBtn" class="btn">检查账号状态</button>
+          <button type="button" id="stopGrokPoolBtn" class="btn" hidden>停止检查</button>
           <button type="button" id="activateGrokPoolBtn" class="btn" hidden>启用号池</button>
           <button type="button" id="batchDisableGrokPoolBtn" class="btn danger">批量禁用异常</button>
           <button type="button" id="batchDeleteGrokPoolBtn" class="btn danger">批量删除异常</button>
@@ -892,7 +910,7 @@
     <!-- SESSION GRAPH -->
     <main id="viewSessionGraph" class="view sessionGraphView" hidden>
       <div class="pageHead">
-        <div><h1 class="pageTitle">会话图谱</h1><p class="pageDesc">跨供应商的逻辑会话与分支管理</p></div>
+        <div><h1 class="pageTitle">会话图谱</h1><p class="pageDesc">跨供应商切换、安全合并或永久删除对话分支</p></div>
         <div class="inlineActions">
           <button type="button" id="refreshSessionGraphBtn" class="btn">刷新</button>
           <button type="button" id="backFromSessionGraphBtn" class="btn">返回</button>
@@ -900,7 +918,7 @@
       </div>
       <section class="formCard">
         <div class="rowBetween">
-          <div><h2 class="sectionTitle">逻辑会话</h2><p class="muted tiny">同一逻辑会话在不同供应商下的分支。点击「切换分支」恢复对应供应商的会话。</p></div>
+          <div><h2 class="sectionTitle">逻辑会话</h2><p class="muted tiny">先切换到目标分支，再把其他分支安全合并到当前分支；当前正在运行的分支不能删除。</p></div>
           <span id="sessionGraphCount" class="muted tiny">0 个</span>
         </div>
         <div id="sessionGraphContent" class="sessionGraphContent"><p class="muted tiny">加载中…</p></div>
@@ -1027,6 +1045,6 @@
   <script src="/vendor/katex/katex.min.js?v=0.18.0"></script>
   <script src="/vendor/katex/contrib/auto-render.min.js?v=0.18.0"></script>
   <script src="/vendor/mermaid.min.js?v=11.16.0"></script>
-  <script src="/app.js?v=45"></script>
+  <script src="/app.js?v=48"></script>
 </body>
 </html>

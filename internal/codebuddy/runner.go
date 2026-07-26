@@ -28,15 +28,15 @@ type Runner struct {
 	Executable string
 }
 
-// DefaultArgs returns the security baseline used for every run.
-// CodeBuddy executes tools natively with acceptEdits permission mode;
-// the proxy layer transparently forwards tool events to the client.
+// DefaultArgs returns the read-only security baseline used for every run.
+// CodeBuddy may inspect the selected working directory but cannot edit files,
+// execute shell commands, start background tasks, or use external MCP servers.
 func DefaultArgs(model string) []string {
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
-		"--permission-mode", "acceptEdits",
-		"--tools", "default",
+		"--permission-mode", "default",
+		"--tools", "Read,Grep,Glob",
 		"--no-session-persistence",
 		"--setting-sources", "user",
 		"--strict-mcp-config",

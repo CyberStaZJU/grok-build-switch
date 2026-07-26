@@ -33,10 +33,10 @@ type ConnectionConfig struct {
 // Connection extends config with runtime state.
 type Connection struct {
 	ConnectionConfig
-	Client    *ssh.Client
-	SFTP      *sftp.Client
-	Connected bool
-	LastError string    `json:"-"`
+	Client      *ssh.Client
+	SFTP        *sftp.Client
+	Connected   bool
+	LastError   string    `json:"-"`
 	ConnectedAt time.Time `json:"-"`
 }
 
@@ -136,11 +136,18 @@ func (m *Manager) UpdateConfig(cfg ConnectionConfig) error {
 
 // DeleteConfig removes a saved connection config and disconnects if active.
 func (m *Manager) DeleteConfig(id string) error {
-	m.mu.Lock()
-	if conn, ok := m.connections[id]; ok {
-		conn.close()
-		delete(m.connections, id)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("缺少连接 ID")
 	}
+	m.mu.Lock()
+	conn, ok := m.connections[id]
+	if !ok {
+		m.mu.Unlock()
+		return os.ErrNotExist
+	}
+	conn.close()
+	delete(m.connections, id)
 	m.mu.Unlock()
 	return m.saveConfigs()
 }

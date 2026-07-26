@@ -8,7 +8,55 @@ import (
 	"testing"
 
 	"grok_switch/internal/agentbridge"
+	"grok_switch/internal/routing"
 )
+
+func TestGenerateSessionTitleHandlesShortErrorResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer upstream.Close()
+
+	s := &Server{}
+	title, shouldDelete, reason := s.generateSessionTitle(routing.ModelRoute{
+		Model:      "test-model",
+		BaseURL:    upstream.URL,
+		APIBackend: "chat_completions",
+	}, "hello", "test")
+	if title != "" || shouldDelete || reason != "" {
+		t.Fatalf("unexpected result: title=%q shouldDelete=%v reason=%q", title, shouldDelete, reason)
+	}
+}
+
+func TestGenerateSessionTitleUsesBackendSpecificProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		backend  string
+		wantPath string
+		response string
+	}{
+		{name: "responses", backend: "responses", wantPath: "/responses", response: `{"output_text":"{\"title\":\"Reviewed\",\"should_delete\":false,\"reason\":\"keep\"}"}`},
+		{name: "messages", backend: "messages", wantPath: "/messages", response: `{"content":[{"type":"text","text":"{\"title\":\"Reviewed\",\"should_delete\":false,\"reason\":\"keep\"}"}]}`},
+		{name: "chat", backend: "chat_completions", wantPath: "/chat/completions", response: `{"choices":[{"message":{"content":"{\"title\":\"Reviewed\",\"should_delete\":false,\"reason\":\"keep\"}"}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.wantPath {
+					t.Fatalf("path = %q, want %q", r.URL.Path, tc.wantPath)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer upstream.Close()
+			s := &Server{}
+			title, shouldDelete, reason := s.generateSessionTitle(routing.ModelRoute{Model: "test", BaseURL: upstream.URL, APIBackend: tc.backend}, "hello", "provider")
+			if title != "provider: Reviewed" || shouldDelete || reason != "keep" {
+				t.Fatalf("result = %q %v %q", title, shouldDelete, reason)
+			}
+		})
+	}
+}
 
 func TestWriteSessionLoadError(t *testing.T) {
 	recorder := httptest.NewRecorder()

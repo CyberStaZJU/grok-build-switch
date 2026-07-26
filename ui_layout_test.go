@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"regexp"
 	"testing"
 
 	"golang.org/x/net/html"
@@ -22,6 +23,127 @@ func TestNativeChatScrimSharesShellStackingContext(t *testing.T) {
 	}
 	if scrim.Parent == nil || !htmlElementHasClass(scrim.Parent, "nativeChatShell") {
 		t.Fatal("nativeChatScrim must be a direct child of nativeChatShell so it stays below the mobile side panels")
+	}
+}
+
+func TestStaticDollarIDReferencesExistInHTML(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := html.Parse(bytes.NewReader(htmlData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := regexp.MustCompile(`\$\("([A-Za-z][A-Za-z0-9_-]*)"\)`).FindAllSubmatch(appData, -1)
+	seen := map[string]bool{}
+	dynamicIDs := map[string]bool{
+		"subscriptionOpenLoginBtn":    true,
+		"subscriptionCancelLoginBtn":  true,
+		"subscriptionDismissLoginBtn": true,
+	}
+	for _, match := range matches {
+		id := string(match[1])
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if dynamicIDs[id] {
+			if !bytes.Contains(appData, []byte(`id="`+id+`"`)) {
+				t.Errorf("dynamic element %q is referenced but not created in app.js", id)
+			}
+			continue
+		}
+		if htmlElementByID(document, id) == nil {
+			t.Errorf("ui/app.js references static element %q, but ui/index.html does not define it", id)
+		}
+	}
+}
+
+func TestSSHConnectionManagementControlsExist(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`class="btn ghost sshConnEditBtn"`, `class="btn ghost danger sshConnDelBtn"`,
+		`method: "DELETE"`, `/api/ssh/connections/${encodeURIComponent(conn.id)}`,
+		"只删除本地连接配置",
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("SSH connection management UI is missing %q", fragment)
+		}
+	}
+}
+
+func TestSessionGraphBranchManagementControlsExist(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`data-action="merge"`, `data-action="delete"`,
+		`/api/session-graph/merge`, `/api/session-graph/branch`,
+		"只会导入用户与助手的纯文本", "当前正在运行的分支不允许删除",
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("session graph branch-management UI is missing %q", fragment)
+		}
+	}
+}
+
+func TestOrganizePanelRespectsHiddenAttribute(t *testing.T) {
+	styleData, err := assets.ReadFile("ui/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(styleData, []byte(".organizePanel[hidden]")) || !bytes.Contains(styleData, []byte("display: none !important;")) {
+		t.Fatal("organize panel must remain hidden until the user opens it explicitly")
+	}
+}
+
+func TestProfileModelRoutingControlsExist(t *testing.T) {
+	data, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := html.Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"defaultModel", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel"} {
+		control := htmlElementByID(document, id)
+		if control == nil || control.Data != "select" {
+			t.Fatalf("%s select not found", id)
+		}
+	}
+}
+
+func TestMacOSLocalNetworkCopyAndManualOnlyPool(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{"Windows 防火墙", "专用网络", "公共网络", "自动巡检", `id="grokPoolAutoEnabled"`, `id="grokPoolInterval"`} {
+		if bytes.Contains(htmlData, []byte(stale)) || bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("stale Windows/automatic-inspection UI remains: %s", stale)
+		}
+	}
+	for _, expected := range []string{"允许本地网络访问", "检查账号状态", "Grok 账号池"} {
+		if !bytes.Contains(htmlData, []byte(expected)) {
+			t.Fatalf("macOS/manual-only copy missing: %s", expected)
+		}
+	}
+	if !bytes.Contains(appData, []byte(`enabled: false`)) {
+		t.Fatal("pool settings client must persist manual-only mode")
 	}
 }
 

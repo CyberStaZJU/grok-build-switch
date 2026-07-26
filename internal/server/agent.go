@@ -452,6 +452,8 @@ func (s *Server) handleAgentSessionLoad(w http.ResponseWriter, r *http.Request) 
 		writeError(w, errors.New("Agent 服务未初始化"), http.StatusServiceUnavailable)
 		return
 	}
+	s.sessionOperationMu.Lock()
+	defer s.sessionOperationMu.Unlock()
 	var opts agentbridge.StartOptions
 	if err := decodeAgentJSON(r, &opts); err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -465,7 +467,9 @@ func (s *Server) handleAgentSessionLoad(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, os.ErrNotExist) {
-			status = http.StatusNotFound
+			_ = s.sessionGraphStore().RemoveNativeSession(opts.SessionID)
+			status = http.StatusGone
+			err = errors.New("该分支的本地会话文件已不存在，失效记录已从会话图谱清理；请选择其他分支")
 		}
 		writeError(w, err, status)
 		return
@@ -543,6 +547,13 @@ func (s *Server) handleAgentSessionHistory(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, history)
 	case http.MethodDelete:
+		s.sessionOperationMu.Lock()
+		defer s.sessionOperationMu.Unlock()
+		statusSnapshot := s.Agent.Status()
+		if statusSnapshot.Running && strings.TrimSpace(statusSnapshot.SessionID) == id {
+			writeError(w, errors.New("当前正在运行的会话不能删除，请先切换到其他对话"), http.StatusConflict)
+			return
+		}
 		if err := s.Agent.DeleteStoredSession(id); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, os.ErrNotExist) {
@@ -550,6 +561,12 @@ func (s *Server) handleAgentSessionHistory(w http.ResponseWriter, r *http.Reques
 			}
 			writeError(w, err, status)
 			return
+		}
+		if graph := s.sessionGraphStore(); graph != nil {
+			if err := graph.RemoveNativeSession(id); err != nil {
+				writeError(w, fmt.Errorf("会话文件已删除，但更新逻辑会话图谱失败: %w", err), http.StatusInternalServerError)
+				return
+			}
 		}
 		writeJSON(w, map[string]any{"ok": true, "id": id})
 	default:
@@ -588,24 +605,24 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // ——— Session Analysis (对话整理) ———
 
 type sessionAnalysisTask struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"` // pending, running, completed, failed
-	Total     int       `json:"total"`
-	Completed int       `json:"completed"`
+	ID        string                  `json:"id"`
+	Status    string                  `json:"status"` // pending, running, completed, failed
+	Total     int                     `json:"total"`
+	Completed int                     `json:"completed"`
 	Results   []sessionAnalysisResult `json:"results"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Error     string                  `json:"error,omitempty"`
+	CreatedAt time.Time               `json:"created_at"`
 }
 
 type sessionAnalysisResult struct {
-	ID            string `json:"id"`
-	CurrentTitle  string `json:"current_title"`
+	ID             string `json:"id"`
+	CurrentTitle   string `json:"current_title"`
 	SuggestedTitle string `json:"suggested_title"`
-	ShouldDelete  bool   `json:"should_delete"`
-	Reason        string `json:"reason,omitempty"`
-	MessageCount  int    `json:"message_count"`
-	Model         string `json:"model"`
-	UpdatedAt     string `json:"updated_at"`
+	ShouldDelete   bool   `json:"should_delete"`
+	Reason         string `json:"reason,omitempty"`
+	MessageCount   int    `json:"message_count"`
+	Model          string `json:"model"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 var (
@@ -771,19 +788,32 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 			"Conversation:\n%s",
 		conversation,
 	)
-	body := map[string]any{
-		"model": route.Model,
-		"messages": []map[string]string{
+	backend := strings.TrimSpace(route.APIBackend)
+	if backend == "" {
+		backend = "chat_completions"
+	}
+	body := map[string]any{"model": route.Model}
+	endpoint := strings.TrimRight(route.BaseURL, "/") + "/chat/completions"
+	switch backend {
+	case "responses":
+		endpoint = strings.TrimRight(route.BaseURL, "/") + "/responses"
+		body["instructions"] = "You are a JSON-only response assistant. Always respond with valid JSON."
+		body["input"] = prompt
+		body["max_output_tokens"] = 1000
+	case "messages":
+		endpoint = strings.TrimRight(route.BaseURL, "/") + "/messages"
+		body["system"] = "You are a JSON-only response assistant. Always respond with valid JSON."
+		body["messages"] = []map[string]string{{"role": "user", "content": prompt}}
+		body["max_tokens"] = 1000
+	default:
+		body["messages"] = []map[string]string{
 			{"role": "system", "content": "You are a JSON-only response assistant. Always respond with valid JSON."},
 			{"role": "user", "content": prompt},
-		},
-		"max_tokens": 1000,
-		"temperature": 0.3,
+		}
+		body["max_tokens"] = 1000
+		body["temperature"] = 0.3
 	}
-	// Disable reasoning for title generation to save tokens and get direct output.
-	// LongCat-2.0 and similar models put thinking in reasoning_content which can
-	// fill the entire max_tokens budget before writing the actual answer.
-	if route.SupportsReasoningEffort {
+	if route.SupportsReasoningEffort && backend != "messages" {
 		body["reasoning_effort"] = "none"
 	}
 	jsonBody, err := json.Marshal(body)
@@ -791,7 +821,6 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 		fmt.Fprintf(os.Stderr, "[organize] marshal error: %v\n", err)
 		return "", false, ""
 	}
-	endpoint := strings.TrimRight(route.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] request error: %v\n", err)
@@ -812,8 +841,9 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "[organize] LLM status %d: %s\n", resp.StatusCode, string(respBody)[:200])
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		preview := respBody[:min(len(respBody), 200)]
+		fmt.Fprintf(os.Stderr, "[organize] LLM status %d: %s\n", resp.StatusCode, string(preview))
 		return "", false, ""
 	}
 	respBody, err := io.ReadAll(resp.Body)
@@ -821,25 +851,14 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 		fmt.Fprintf(os.Stderr, "[organize] read error: %v\n", err)
 		return "", false, ""
 	}
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "[organize] unmarshal error: %v\n", err)
+	content, err := organizeResponseContent(backend, respBody)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[organize] response error: %v\n", err)
 		return "", false, ""
 	}
-	if len(result.Choices) == 0 {
-		fmt.Fprintf(os.Stderr, "[organize] no choices in response\n")
-		return "", false, ""
-	}
-	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	content = strings.TrimSpace(content)
 	fmt.Fprintf(os.Stderr, "[organize] LLM raw response: %q\n", content)
 	fmt.Fprintf(os.Stderr, "[organize] LLM full response: %s\n", string(respBody)[:min(len(respBody), 500)])
-	// Parse JSON response.
 	// Parse JSON response.
 	var parsed struct {
 		Title        string `json:"title"`
@@ -866,6 +885,62 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 		title = fmt.Sprintf("%s: %s", providerName, title)
 	}
 	return title, parsed.ShouldDelete, strings.TrimSpace(parsed.Reason)
+}
+
+func organizeResponseContent(backend string, data []byte) (string, error) {
+	switch backend {
+	case "responses":
+		var response struct {
+			OutputText string `json:"output_text"`
+			Output     []struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
+		}
+		if err := json.Unmarshal(data, &response); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(response.OutputText) != "" {
+			return response.OutputText, nil
+		}
+		for _, item := range response.Output {
+			for _, block := range item.Content {
+				if strings.TrimSpace(block.Text) != "" {
+					return block.Text, nil
+				}
+			}
+		}
+	case "messages":
+		var response struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(data, &response); err != nil {
+			return "", err
+		}
+		for _, block := range response.Content {
+			if strings.TrimSpace(block.Text) != "" {
+				return block.Text, nil
+			}
+		}
+	default:
+		var response struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(data, &response); err != nil {
+			return "", err
+		}
+		if len(response.Choices) > 0 && strings.TrimSpace(response.Choices[0].Message.Content) != "" {
+			return response.Choices[0].Message.Content, nil
+		}
+	}
+	return "", errors.New("模型响应中没有文本内容")
 }
 
 // ——— Bulk Operations ———
@@ -918,12 +993,21 @@ func (s *Server) handleAgentSessionsBulkDelete(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var deleted int
+	statusSnapshot := s.Agent.Status()
+	currentID := ""
+	if statusSnapshot.Running {
+		currentID = strings.TrimSpace(statusSnapshot.SessionID)
+	}
 	for _, id := range request.IDs {
-		if strings.TrimSpace(id) == "" {
+		id = strings.TrimSpace(id)
+		if id == "" || id == currentID {
 			continue
 		}
 		if err := s.Agent.DeleteStoredSession(id); err == nil {
 			deleted++
+			if graph := s.sessionGraphStore(); graph != nil {
+				_ = graph.RemoveNativeSession(id)
+			}
 		}
 	}
 	writeJSON(w, map[string]any{"ok": true, "deleted": deleted})

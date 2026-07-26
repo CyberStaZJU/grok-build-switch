@@ -343,12 +343,13 @@ func (b *Bridge) StoredSessionTransferText(id string, maxChars int) (string, err
 	}
 	parts := make([]string, 0, len(history.Messages)+4)
 	parts = append(parts,
-		"以下是从另一供应商安全迁移的旧会话纯文本上下文。",
+		"以下是从另一供应商迁移的旧会话纯文本上下文。",
 		"请继续完成原任务；不要假设旧工具调用仍然存在，需要时重新检查文件和环境。",
 	)
 	if title := strings.TrimSpace(history.Session.Title); title != "" {
 		parts = append(parts, "旧会话标题："+title)
 	}
+	messageParts := make([]string, 0, len(history.Messages))
 	for _, message := range history.Messages {
 		content := strings.TrimSpace(message.Content)
 		if content == "" || (message.Role != "user" && message.Role != "assistant") {
@@ -358,8 +359,12 @@ func (b *Bridge) StoredSessionTransferText(id string, maxChars int) (string, err
 		if message.Role == "assistant" {
 			label = "助手"
 		}
-		parts = append(parts, label+"："+content)
+		messageParts = append(messageParts, label+"："+content)
 	}
+	if len(messageParts) == 0 {
+		return "", nil
+	}
+	parts = append(parts, messageParts...)
 	text := strings.Join(parts, "\n\n")
 	if len([]rune(text)) > maxChars {
 		runes := []rune(text)

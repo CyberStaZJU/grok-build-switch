@@ -64,3 +64,30 @@ settings.json
 **/*auth*.json
 **/selected-models.json
 /cliproxy/
+
+# Local Grok / Grok Build Switch state and credentials
+.grok/
+.grok_switch/
+**/profiles.json
+**/routing.json
+**/settings.json
+**/remote_access.json
+**/session_graph.json
+**/ssh_connections.json
+**/grok_auth.json
+**/grok_pool/
+**/registrar.json
+**/cpa_auths/
+
+# Common secret-bearing files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.mobileprovision
+*credentials*.json
+*secrets*.json
+
+# Personal contact exports and local review artifacts
+/QQ.jpg

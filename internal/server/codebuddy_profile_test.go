@@ -129,6 +129,96 @@ func TestEnsureCodeBuddyProfileUpdatesPortAndRemovesDuplicates(t *testing.T) {
 	}
 }
 
+func TestEnsureCodeBuddyProfileMigratesLegacyDuplicateAndRewritesPolicy(t *testing.T) {
+	dir := t.TempDir()
+	store := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	legacy, err := store.Create(profiles.Profile{
+		Name: codeBuddyProfileName, UpstreamFormat: "openai_chat",
+		BaseURL: "http://127.0.0.1:17878/codebuddy/v1", APIKey: codeBuddyLocalAPIKey,
+		DefaultModel: "codebuddy/hy3", Models: []profiles.ModelDef{
+			{Name: "codebuddy/hy3", Model: "codebuddy/hy3", BaseURL: "http://127.0.0.1:17878/codebuddy/v1", APIKey: codeBuddyLocalAPIKey, APIBackend: "chat_completions"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := store.Create(profiles.Profile{
+		Name: codeBuddyProfileName, Source: codeBuddyProfileSource, UpstreamFormat: "openai_chat",
+		BaseURL: "http://127.0.0.1:17878/codebuddy/v1", APIKey: codeBuddyLocalAPIKey,
+		DefaultModel: "codebuddy/hy3", Models: []profiles.ModelDef{
+			{Name: "codebuddy/hy3", Model: "codebuddy/hy3", BaseURL: "http://127.0.0.1:17878/codebuddy/v1", APIKey: codeBuddyLocalAPIKey, APIBackend: "chat_completions"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
+	initial, err := routingStore.Initialize(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyRoute string
+	for _, route := range initial.ModelRoutes {
+		if route.ProviderID == legacy.ID {
+			legacyRoute = route.Name
+		}
+	}
+	if legacyRoute == "" || legacyRoute == "codebuddy/hy3" {
+		t.Fatalf("expected qualified legacy route, got %q in %#v", legacyRoute, initial.ModelRoutes)
+	}
+	policy := initial.Policy
+	policy.Default = legacyRoute
+	policy.Subagents = routing.SubagentsPolicy{Explore: legacyRoute, Plan: legacyRoute}
+	if _, err := routingStore.UpdatePolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{Profiles: store, Routing: routingStore, CodeBuddy: &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3", "glm-5.2"}}}, ActualPort: 17878}
+	if err := s.EnsureCodeBuddyProfile(); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != canonical.ID || list[0].Source != codeBuddyProfileSource {
+		t.Fatalf("legacy duplicate was not removed safely: %#v", list)
+	}
+	stored, err := routingStore.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Policy.Default != "codebuddy/hy3" || stored.Policy.WebSearch != "" || stored.Policy.Subagents.Explore != "codebuddy/hy3" || stored.Policy.Subagents.Plan != "codebuddy/hy3" {
+		t.Fatalf("legacy selections were not translated: %#v", stored.Policy)
+	}
+}
+
+func TestEnsureCodeBuddyProfilePreservesUserOwnedLookalike(t *testing.T) {
+	store := profiles.NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	custom, err := store.Create(profiles.Profile{
+		Name: codeBuddyProfileName, UpstreamFormat: "openai_chat",
+		BaseURL: "https://example.test/codebuddy/v1", APIKey: "user-secret",
+		DefaultModel: "codebuddy/hy3", Models: []profiles.ModelDef{{Name: "codebuddy/hy3", Model: "custom-upstream"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Profiles: store, CodeBuddy: &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3"}}}, ActualPort: 17878}
+	if err := s.EnsureCodeBuddyProfile(); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("user-owned lookalike should be preserved: %#v", list)
+	}
+	if got, err := store.Get(custom.ID); err != nil || got.APIKey != "user-secret" {
+		t.Fatalf("custom profile changed or disappeared: %#v, err=%v", got, err)
+	}
+}
+
 func TestCodeBuddyManagedProfileProjectsIntoRoutingAndUsesOrdinaryProviderIdentity(t *testing.T) {
 	store := profiles.NewStore(filepath.Join(t.TempDir(), "profiles.json"))
 	s := &Server{Profiles: store, CodeBuddy: &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3"}}}, ActualPort: 18888}

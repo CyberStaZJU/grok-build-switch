@@ -142,9 +142,25 @@ func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	matches, err := CurrentMatches(path, profile)
-	if err != nil || !matches {
-		return matches, err
+	current, err := ImportProfile(path, profile.Name)
+	if err != nil {
+		return false, err
+	}
+	// A combined routing profile has no meaningful profile-level API key: every
+	// model carries the credential for its own provider. Normalize derives the
+	// legacy Profile.APIKey from the first model, but the projected catalog uses
+	// provider order while TOML import uses sorted model names. Comparing that
+	// synthetic field therefore makes an unchanged multi-provider config appear
+	// stale whenever those orders differ. Align only the synthetic aggregate
+	// fields; per-model keys, endpoints, headers, backends, and capabilities are
+	// still compared strictly below.
+	current.APIKey = profile.APIKey
+	// Grok may persist a conversation's reasoning effort back to config.toml.
+	// Treat it as a runtime preference, consistent with CurrentMatches.
+	current.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	matches := profiles.Normalize(profile).Matches(profiles.Normalize(current))
+	if !matches {
+		return false, nil
 	}
 	// Also verify routing-policy-managed keys match the policy.
 	return routingPolicyMatches(path, snapshot.Policy)

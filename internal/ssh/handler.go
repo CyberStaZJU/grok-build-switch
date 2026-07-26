@@ -3,6 +3,7 @@ package ssh
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -86,7 +87,11 @@ func (h *Handler) handleConnectionByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, cfg)
 	case http.MethodDelete:
 		if err := h.manager.DeleteConfig(id); err != nil {
-			writeError(w, err, http.StatusBadRequest)
+			status := http.StatusBadRequest
+			if os.IsNotExist(err) {
+				status = http.StatusNotFound
+			}
+			writeError(w, err, status)
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
@@ -269,8 +274,12 @@ func methodNotAllowed(w http.ResponseWriter) {
 }
 
 func isLoopback(w http.ResponseWriter, r *http.Request) bool {
-	host, _, _ := strings.Cut(r.Host, ":")
-	if host != "127.0.0.1" && host != "localhost" {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil || !ip.IsLoopback() {
 		writeError(w, os.ErrPermission, http.StatusForbidden)
 		return false
 	}

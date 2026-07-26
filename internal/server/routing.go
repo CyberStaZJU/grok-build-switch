@@ -39,13 +39,20 @@ type routingModelDTO struct {
 	MaxCompletionTokens     int64    `json:"max_completion_tokens,omitempty"`
 }
 
+type browserUseStatusDTO struct {
+	Available bool   `json:"available"`
+	Command   string `json:"command,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 type routingSnapshotDTO struct {
-	Version           int                   `json:"version"`
-	Providers         []routingProviderDTO  `json:"providers"`
-	ModelRoutes       []routingModelDTO     `json:"model_routes"`
-	Policy            routing.RoutingPolicy `json:"policy"`
-	WebSearchCapable  bool                  `json:"web_search_capable"`
-	UpdatedAt         time.Time             `json:"updated_at"`
+	Version          int                   `json:"version"`
+	Providers        []routingProviderDTO  `json:"providers"`
+	ModelRoutes      []routingModelDTO     `json:"model_routes"`
+	Policy           routing.RoutingPolicy `json:"policy"`
+	WebSearchCapable bool                  `json:"web_search_capable"`
+	BrowserUse       browserUseStatusDTO   `json:"browser_use"`
+	UpdatedAt        time.Time             `json:"updated_at"`
 }
 
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
@@ -121,13 +128,21 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, ok := rawPatch["subagents"]; ok {
-		var v routing.SubagentsPolicy
-		if err := json.Unmarshal(rawPatch["subagents"], &v); err == nil {
-			if v.Explore != "" {
-				policy.Subagents.Explore = v.Explore
+		var subagentPatch map[string]json.RawMessage
+		if err := json.Unmarshal(rawPatch["subagents"], &subagentPatch); err != nil {
+			writeError(w, fmt.Errorf("读取子代理路由策略: %w", err), http.StatusBadRequest)
+			return
+		}
+		if raw, present := subagentPatch["explore"]; present {
+			if err := json.Unmarshal(raw, &policy.Subagents.Explore); err != nil {
+				writeError(w, fmt.Errorf("读取 explore 路由: %w", err), http.StatusBadRequest)
+				return
 			}
-			if v.Plan != "" {
-				policy.Subagents.Plan = v.Plan
+		}
+		if raw, present := subagentPatch["plan"]; present {
+			if err := json.Unmarshal(raw, &policy.Subagents.Plan); err != nil {
+				writeError(w, fmt.Errorf("读取 plan 路由: %w", err), http.StatusBadRequest)
+				return
 			}
 		}
 	}
@@ -465,16 +480,21 @@ func routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 			ContextWindow:           route.ContextWindow, MaxCompletionTokens: route.MaxCompletionTokens,
 		})
 	}
+	command, _, browserUseAvailable := BrowserUseCommand()
+	browserUseStatus := browserUseStatusDTO{Available: browserUseAvailable, Command: command}
+	if !browserUseAvailable {
+		browserUseStatus.Error = "未找到 browser-use MCP 可执行文件；需要搜索回退的路由将不会获得 web_search/web_fetch 工具"
+	}
 	return routingSnapshotDTO{
 		Version: snapshot.Version, Providers: providers, ModelRoutes: models,
 		Policy: snapshot.Policy, WebSearchCapable: snapshot.Policy.WebSearchCapable,
-		UpdatedAt: snapshot.UpdatedAt,
+		BrowserUse: browserUseStatus, UpdatedAt: snapshot.UpdatedAt,
 	}
 }
 
 func decodeRoutingJSON(w http.ResponseWriter, r *http.Request, out any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
- decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(r.Body)
 	// When decoding into a map (partial update), allow unknown fields so the
 	// frontend can send a subset of policy fields.
 	if _, isMap := out.(*map[string]json.RawMessage); !isMap {

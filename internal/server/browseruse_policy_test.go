@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -8,6 +9,18 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/routing"
 )
+
+func withBrowserUseCommand(t *testing.T, available bool) {
+	t.Helper()
+	original := browserUseLookPath
+	browserUseLookPath = func(name string) (string, error) {
+		if available && name == "browser-use" {
+			return "/test/browser-use", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { browserUseLookPath = original })
+}
 
 func TestMcpServersForSubagent_GrokModel(t *testing.T) {
 	// Grok model subagent should NOT inject browser-use.
@@ -40,6 +53,7 @@ func TestMcpServersForSubagent_GrokModel(t *testing.T) {
 }
 
 func TestMcpServersForSubagent_NonGrokModel(t *testing.T) {
+	withBrowserUseCommand(t, true)
 	// Non-Grok model subagent SHOULD inject browser-use.
 	source := []profiles.Profile{
 		{
@@ -72,6 +86,37 @@ func TestMcpServersForSubagent_NonGrokModel(t *testing.T) {
 	}
 	if servers[0].Stdio.Name != "browser-use" {
 		t.Fatalf("Expected browser-use MCP server, got %q", servers[0].Stdio.Name)
+	}
+}
+
+func TestMcpServersForSubagent_GrokNamedChatBackendUsesFallback(t *testing.T) {
+	withBrowserUseCommand(t, true)
+	source := []profiles.Profile{{
+		ID: "p1", Name: "Alias", DefaultModel: "alias",
+		Models: []profiles.ModelDef{{Name: "alias", Model: "grok-alias", APIBackend: "chat_completions", SupportsBackendSearch: false}},
+	}}
+	snapshot, err := routing.ProjectWithPolicy(source, routing.RoutingPolicy{Default: "alias", Subagents: routing.SubagentsPolicy{Explore: "alias"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers := McpServersForSubagent(snapshot, "explore"); len(servers) != 1 {
+		t.Fatalf("grok-named chat backend should use browser fallback, got %d servers", len(servers))
+	}
+}
+
+func TestMcpServersForSubagent_MissingBrowserUseIsExplicitlyUnavailable(t *testing.T) {
+	withBrowserUseCommand(t, false)
+	source := []profiles.Profile{{ID: "p1", Name: "Other", DefaultModel: "other", Models: []profiles.ModelDef{{Name: "other", Model: "other", APIBackend: "chat_completions"}}}}
+	snapshot, err := routing.ProjectWithPolicy(source, routing.RoutingPolicy{Default: "other", Subagents: routing.SubagentsPolicy{Explore: "other"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers := McpServersForSubagent(snapshot, "explore"); len(servers) != 0 {
+		t.Fatalf("missing browser-use command should not create a server: %#v", servers)
+	}
+	dto := routingDTO(snapshot)
+	if dto.BrowserUse.Available || dto.BrowserUse.Error == "" {
+		t.Fatalf("browser-use status = %#v", dto.BrowserUse)
 	}
 }
 
@@ -108,6 +153,7 @@ func TestMcpServersForSubagent_NoRoute(t *testing.T) {
 }
 
 func TestMcpServersForMain_NonGrokWebSearch(t *testing.T) {
+	withBrowserUseCommand(t, true)
 	// Main conversation with non-Grok web_search SHOULD inject browser-use.
 	source := []profiles.Profile{
 		{

@@ -68,6 +68,7 @@ type Server struct {
 	providerMu             sync.Mutex
 	providerHandoff        *providerHandoff
 	sessionGraph           *sessionGraphStore
+	sessionOperationMu     sync.Mutex
 	routingMu              sync.Mutex
 }
 
@@ -280,6 +281,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/sessions/", s.handleAgentSessionHistory)
 	mux.HandleFunc("/api/agent/session/rename", s.handleAgentRename)
 	mux.HandleFunc("/api/agent/ws", s.handleAgentWebSocket)
+	mux.HandleFunc("/api/session-graph", s.handleSessionGraph)
+	mux.HandleFunc("/api/session-graph/merge", s.handleSessionGraphMerge)
+	mux.HandleFunc("/api/session-graph/branch", s.handleSessionGraphBranch)
 	mux.HandleFunc("/api/codebuddy/status", s.handleCodeBuddyStatus)
 	mux.HandleFunc("/codebuddy/v1", s.handleCodeBuddyInference)
 	mux.HandleFunc("/codebuddy/v1/", s.handleCodeBuddyInference)

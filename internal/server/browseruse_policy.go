@@ -12,12 +12,14 @@ import (
 // browserUseMCPName is the MCP server name injected for non-Grok subagents.
 const browserUseMCPName = "browser-use"
 
+var browserUseLookPath = exec.LookPath
+
 // BrowserUseCommand resolves the browser-use MCP server executable.
 // It prefers a bundled binary named "browser-use-mcp" on PATH, then falls
 // back to "browser-use" if available.
 func BrowserUseCommand() (string, []string, bool) {
 	for _, name := range []string{"browser-use-mcp", "browser-use"} {
-		if path, err := exec.LookPath(name); err == nil {
+		if path, err := browserUseLookPath(name); err == nil {
 			return path, nil, true
 		}
 	}
@@ -44,8 +46,7 @@ func McpServersForSubagent(snapshot routing.Snapshot, subagent string) []acp.Mcp
 		// Route missing from catalog; skip injection rather than guess.
 		return nil
 	}
-	if browseruse.IsGrokModel(route.Model) {
-		// Grok series models support x_search natively.
+	if route.APIBackend == "responses" && route.SupportsBackendSearch {
 		return nil
 	}
 	return browserUseMCPServers()
@@ -62,9 +63,10 @@ func McpServersForMain(snapshot routing.Snapshot) []acp.McpServer {
 		// Main conversation web_search points at a non-x_search model.
 		return browserUseMCPServers()
 	}
-	// Also check the default model.
+	// Also check the default model using actual backend capability rather than
+	// its marketing name. A grok-* alias on chat_completions has no x_search.
 	if route, ok := snapshot.Route(snapshot.Policy.Default); ok {
-		if !browseruse.IsGrokModel(route.Model) {
+		if route.APIBackend != "responses" || !route.SupportsBackendSearch {
 			return browserUseMCPServers()
 		}
 	}
@@ -108,5 +110,3 @@ func browserUseMCPServers() []acp.McpServer {
 func ShouldInjectBrowserUse(model string) bool {
 	return !browseruse.IsGrokModel(model)
 }
-
-

@@ -66,12 +66,12 @@ esac
 	}
 }
 
-func TestDefaultArgsAllowNativeToolExecution(t *testing.T) {
+func TestDefaultArgsEnforceReadOnlyTools(t *testing.T) {
 	args := DefaultArgs("hy3")
 	joined := " " + strings.Join(args, " ") + " "
 	for _, required := range []string{
-		" --print ", " --output-format stream-json ", " --permission-mode acceptEdits ",
-		" --tools default ", " --no-session-persistence ",
+		" --print ", " --output-format stream-json ", " --permission-mode default ",
+		" --tools Read,Grep,Glob ", " --no-session-persistence ",
 		" --setting-sources user ", " --strict-mcp-config ",
 		` --mcp-config {"mcpServers":{}} `, " --model hy3 ",
 	} {
@@ -79,7 +79,7 @@ func TestDefaultArgsAllowNativeToolExecution(t *testing.T) {
 			t.Errorf("missing required args %q in %q", required, joined)
 		}
 	}
-	for _, forbidden := range []string{" -y ", " --bg ", " --background ", "daemon"} {
+	for _, forbidden := range []string{" acceptEdits ", " --tools default ", " -y ", " --bg ", " --background ", "daemon", " Bash ", " Write ", " Edit "} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("forbidden argument %q in %q", forbidden, joined)
 		}

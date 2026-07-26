@@ -9,6 +9,36 @@ import (
 	"time"
 )
 
+func TestStoredSessionTransferTextRejectsHistoryWithoutConversationMessages(t *testing.T) {
+	grokHome := t.TempDir()
+	sessionDir := filepath.Join(grokHome, "sessions", "encoded-cwd", "session-empty")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var summary storedSummary
+	summary.Info.ID = "session-empty"
+	summary.Info.Cwd = "/tmp/project"
+	summary.GeneratedTitle = "Only a title"
+	summaryData, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "summary.json"), summaryData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "chat_history.jsonl"), []byte(`{"type":"reasoning","content":"private"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bridge := New(grokHome, filepath.Join(t.TempDir(), "agent.log"))
+	text, err := bridge.StoredSessionTransferText("session-empty", 48000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "" {
+		t.Fatalf("empty conversation transfer = %q, want empty", text)
+	}
+}
+
 func TestStoredSessionProviderAndTransferText(t *testing.T) {
 	grokHome := t.TempDir()
 	projectDir := t.TempDir()

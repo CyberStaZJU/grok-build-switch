@@ -146,7 +146,7 @@ type Manager struct {
 
 func defaultSettings() Settings {
 	return Settings{
-		Enabled:         true,
+		Enabled:         false,
 		IntervalMinutes: defaultIntervalMinutes,
 		Workers:         defaultWorkers,
 		WatchRecursive:  true,

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"grok_switch/internal/agentbridge"
+	"grok_switch/internal/paths"
 	"grok_switch/internal/routing"
 )
 
@@ -40,6 +43,58 @@ func TestSessionGraphKeepsProviderBranchesUnderOneLogicalSession(t *testing.T) {
 	}
 }
 
+func TestSessionGraphAPIReturnsPersistedBranches(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionGraphStore(dir)
+	provider := providerIdentity{ID: "provider-a", Name: "Provider A", Backend: "responses", BaseURL: "https://a.example/v1"}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: provider, NativeSessionID: "session-a", Model: "model-a"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Paths: paths.Paths{DataDir: dir}, sessionGraph: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/session-graph", nil)
+	recorder := httptest.NewRecorder()
+	s.handleSessionGraph(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"logical-1"`) || !strings.Contains(recorder.Body.String(), `"session-a"`) || !strings.Contains(recorder.Body.String(), `"active_branch"`) {
+		t.Fatalf("unexpected graph response: %s", recorder.Body.String())
+	}
+}
+
+func TestSessionGraphRemoveBranchPromotesRemainingBranchAndDropsEmptyLogicalSession(t *testing.T) {
+	store := newSessionGraphStore(t.TempDir())
+	providerA := providerIdentity{ID: "provider-a", Backend: "responses", BaseURL: "https://a.example/v1"}
+	providerB := providerIdentity{ID: "provider-b", Backend: "openai", BaseURL: "https://b.example/v1"}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerA, NativeSessionID: "session-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerB, NativeSessionID: "session-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveBranch("logical-1", "session-b"); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logical := graph.Sessions["logical-1"]
+	if len(logical.Branches) != 1 || logical.ActiveBranch != providerBranchKey(providerA) {
+		t.Fatalf("logical after remove = %#v", logical)
+	}
+	if err := store.RemoveBranch("logical-1", "session-a"); err != nil {
+		t.Fatal(err)
+	}
+	graph, err = store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := graph.Sessions["logical-1"]; ok {
+		t.Fatalf("empty logical session was not removed: %#v", graph.Sessions["logical-1"])
+	}
+}
+
 func TestSessionGraphDoesNotPersistProviderCredentials(t *testing.T) {
 	store := newSessionGraphStore(t.TempDir())
 	provider := providerIdentity{ID: "provider-a", Backend: "responses", BaseURL: "https://private.example/v1"}
@@ -58,18 +113,26 @@ func TestSessionGraphDoesNotPersistProviderCredentials(t *testing.T) {
 }
 
 type sessionSwitchAgentFake struct {
-	status    agentbridge.Status
-	history   agentbridge.SessionHistory
-	transfer  string
-	stopErr   error
-	stopCalls int
+	status     agentbridge.Status
+	history    agentbridge.SessionHistory
+	transfer   string
+	stopErr    error
+	stopCalls  int
+	promptText string
+	promptErr  error
+	deletedIDs []string
+	deleteErr  error
+	historyErr error
 }
 
 func (f *sessionSwitchAgentFake) Status() agentbridge.Status                          { return f.status }
 func (*sessionSwitchAgentFake) Start(context.Context, agentbridge.StartOptions) error { return nil }
 func (*sessionSwitchAgentFake) NewSession(context.Context, string) error              { return nil }
-func (*sessionSwitchAgentFake) Prompt(string, []agentbridge.Attachment) error         { return nil }
-func (*sessionSwitchAgentFake) CancelPrompt() error                                   { return nil }
+func (f *sessionSwitchAgentFake) Prompt(text string, _ []agentbridge.Attachment) error {
+	f.promptText = text
+	return f.promptErr
+}
+func (*sessionSwitchAgentFake) CancelPrompt() error { return nil }
 func (*sessionSwitchAgentFake) Subscribe() (string, <-chan agentbridge.Event) {
 	return "", make(chan agentbridge.Event)
 }
@@ -83,10 +146,13 @@ func (*sessionSwitchAgentFake) ListStoredSessions(string, int) ([]agentbridge.Se
 	return nil, nil
 }
 func (f *sessionSwitchAgentFake) StoredSessionHistory(string) (agentbridge.SessionHistory, error) {
-	return f.history, nil
+	return f.history, f.historyErr
 }
 func (*sessionSwitchAgentFake) RenameStoredSession(string, string) error { return nil }
-func (*sessionSwitchAgentFake) DeleteStoredSession(string) error         { return nil }
+func (f *sessionSwitchAgentFake) DeleteStoredSession(id string) error {
+	f.deletedIDs = append(f.deletedIDs, id)
+	return f.deleteErr
+}
 func (*sessionSwitchAgentFake) SetStoredSessionProvider(string, agentbridge.SessionProvider) error {
 	return nil
 }
@@ -94,6 +160,136 @@ func (f *sessionSwitchAgentFake) StoredSessionTransferText(string, int) (string,
 	return f.transfer, nil
 }
 func (f *sessionSwitchAgentFake) Stop() error { f.stopCalls++; return f.stopErr }
+
+func TestSessionGraphMergeRequiresCurrentTargetAndPromptsSafeText(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionGraphStore(dir)
+	providerA := providerIdentity{ID: "provider-a", Name: "Provider A", Backend: "responses", BaseURL: "https://a.example/v1"}
+	providerB := providerIdentity{ID: "provider-b", Name: "Provider B", Backend: "openai", BaseURL: "https://b.example/v1"}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerA, NativeSessionID: "session-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerB, NativeSessionID: "session-b"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &sessionSwitchAgentFake{status: agentbridge.Status{Running: true, SessionID: "session-b"}, transfer: "用户：旧问题\n\n助手：旧回答"}
+	s := &Server{Paths: paths.Paths{DataDir: dir}, sessionGraph: store, Agent: agent}
+	body := strings.NewReader(`{"logical_session_id":"logical-1","source_session_id":"session-a","target_session_id":"session-b"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/session-graph/merge", body)
+	recorder := httptest.NewRecorder()
+	s.handleSessionGraphMerge(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(agent.promptText, "不可信的历史数据") || !strings.Contains(agent.promptText, "<untrusted_branch_history>") || !strings.Contains(agent.promptText, "旧问题") {
+		t.Fatalf("unsafe or missing merge prompt: %q", agent.promptText)
+	}
+
+	agent.promptText = ""
+	body = strings.NewReader(`{"logical_session_id":"logical-1","source_session_id":"session-a","target_session_id":"session-x"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/session-graph/merge", body)
+	recorder = httptest.NewRecorder()
+	s.handleSessionGraphMerge(recorder, req)
+	if recorder.Code != http.StatusConflict || agent.promptText != "" {
+		t.Fatalf("non-current target status=%d prompt=%q body=%s", recorder.Code, agent.promptText, recorder.Body.String())
+	}
+}
+
+func TestSessionGraphDeleteRejectsCurrentBranchAndRemovesInactiveBranch(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionGraphStore(dir)
+	providerA := providerIdentity{ID: "provider-a", Backend: "responses"}
+	providerB := providerIdentity{ID: "provider-b", Backend: "openai"}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerA, NativeSessionID: "session-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Record("logical-1", sessionBranch{Provider: providerB, NativeSessionID: "session-b"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &sessionSwitchAgentFake{status: agentbridge.Status{Running: true, SessionID: "session-b"}}
+	s := &Server{Paths: paths.Paths{DataDir: dir}, sessionGraph: store, Agent: agent}
+
+	body := strings.NewReader(`{"logical_session_id":"logical-1","session_id":"session-b"}`)
+	req := httptest.NewRequest(http.MethodDelete, "/api/session-graph/branch", body)
+	recorder := httptest.NewRecorder()
+	s.handleSessionGraphBranch(recorder, req)
+	if recorder.Code != http.StatusConflict || len(agent.deletedIDs) != 0 {
+		t.Fatalf("current delete status=%d deleted=%v body=%s", recorder.Code, agent.deletedIDs, recorder.Body.String())
+	}
+
+	body = strings.NewReader(`{"logical_session_id":"logical-1","session_id":"session-a"}`)
+	req = httptest.NewRequest(http.MethodDelete, "/api/session-graph/branch", body)
+	recorder = httptest.NewRecorder()
+	s.handleSessionGraphBranch(recorder, req)
+	if recorder.Code != http.StatusOK || len(agent.deletedIDs) != 1 || agent.deletedIDs[0] != "session-a" {
+		t.Fatalf("inactive delete status=%d deleted=%v body=%s", recorder.Code, agent.deletedIDs, recorder.Body.String())
+	}
+	graph, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Sessions["logical-1"].Branches) != 1 {
+		t.Fatalf("graph branch not removed: %#v", graph.Sessions["logical-1"])
+	}
+}
+
+func TestSessionGraphMarksMissingFilesAndAllowsStaleBranchCleanup(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionGraphStore(dir)
+	provider := providerIdentity{ID: "provider-a", Backend: "responses"}
+	if _, err := store.Record("logical-missing", sessionBranch{Provider: provider, NativeSessionID: "missing-session"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &sessionSwitchAgentFake{historyErr: os.ErrNotExist, deleteErr: os.ErrNotExist}
+	s := &Server{Paths: paths.Paths{DataDir: dir}, sessionGraph: store, Agent: agent}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/session-graph", nil)
+	recorder := httptest.NewRecorder()
+	s.handleSessionGraph(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"health":"missing"`) {
+		t.Fatalf("missing branch was not surfaced safely: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	body := strings.NewReader(`{"logical_session_id":"logical-missing","session_id":"missing-session"}`)
+	req = httptest.NewRequest(http.MethodDelete, "/api/session-graph/branch", body)
+	recorder = httptest.NewRecorder()
+	s.handleSessionGraphBranch(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"session_file_already_missing":true`) {
+		t.Fatalf("stale branch cleanup status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	graph, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := graph.Sessions["logical-missing"]; ok {
+		t.Fatalf("stale logical session remains: %#v", graph.Sessions["logical-missing"])
+	}
+}
+
+func TestSessionLoadMissingFileCleansGraphAndReturnsActionableMessage(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionGraphStore(dir)
+	provider := providerIdentity{ID: "provider-a", Backend: "responses"}
+	if _, err := store.Record("logical-missing", sessionBranch{Provider: provider, NativeSessionID: "missing-session"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &sessionSwitchAgentFake{historyErr: os.ErrNotExist}
+	s := &Server{Paths: paths.Paths{DataDir: dir}, sessionGraph: store, Agent: agent}
+	body := strings.NewReader(`{"session_id":"missing-session"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/session/load", body)
+	recorder := httptest.NewRecorder()
+	s.handleAgentSessionLoad(recorder, req)
+	if recorder.Code != http.StatusGone || !strings.Contains(recorder.Body.String(), "失效记录已从会话图谱清理") {
+		t.Fatalf("missing load status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	graph, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := graph.Sessions["logical-missing"]; ok {
+		t.Fatalf("missing session reference remains: %#v", graph.Sessions["logical-missing"])
+	}
+}
 
 func TestPrepareProviderSwitchRejectsBusyTurn(t *testing.T) {
 	s := newRoutingTestServer(t)

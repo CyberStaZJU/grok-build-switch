@@ -54,7 +54,7 @@ type Runtime struct {
 }
 type Status struct {
 	Running, Healthy, PortConflict bool
-	PID                           int
+	PID                            int
 }
 
 func (r Runtime) runner() Runner {
@@ -83,13 +83,7 @@ func (r Runtime) programPath() string {
 
 func (r Runtime) plist() []byte {
 	p := r.Paths
-	proxy := strings.TrimSpace(os.Getenv("HTTPS_PROXY"))
-	if proxy == "" {
-		proxy = strings.TrimSpace(os.Getenv("HTTP_PROXY"))
-	}
-	if proxy == "" {
-		proxy = "http://127.0.0.1:7890"
-	}
+	proxy := localProxyURL()
 	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
