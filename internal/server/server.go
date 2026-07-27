@@ -1259,7 +1259,7 @@ func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request) {
 		"path":    s.Paths.GrokConfig,
 		"snippet": snippet,
 		"full":    string(full),
-		"note":    "磁盘上只有一份生效的 config.toml。每个供应商的 URL/Key/模型保存在 grok_switch 的 profile 里；点「启用」或「保存并启用」时，才会把该供应商的字段写入这份文件。",
+		"note":    "磁盘上只有一份生效的 config.toml。每个供应商的 URL、Key 和模型保存在 grok_switch 的 profile 里；保存供应商不会切换当前路由，实际使用的模型由“模型路由”统一管理。",
 	})
 }
 

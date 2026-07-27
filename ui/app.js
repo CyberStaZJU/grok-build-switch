@@ -3420,7 +3420,7 @@ function openEdit(profile) {
 
 function fillForm(profile) {
   $("formTitle").textContent = profile.id ? "编辑供应商" : "添加供应商";
-  $("formHint").textContent = profile.id ? "修改后可保存，或保存并启用" : "名称、类型与 API Key 即可开始；模型可稍后设置";
+  $("formHint").textContent = profile.id ? "修改供应商信息后保存；实际使用的模型由“模型路由”统一管理" : "名称、类型与 API Key 即可开始；保存后到“模型路由”选择要使用的模型";
   $("profileId").value = profile.id || "";
   $("name").value = profile.name || "";
   $("baseUrl").value = profile.base_url || "";
@@ -4931,19 +4931,6 @@ $("profileForm").onsubmit = (event) => {
     }
   }, { button: $("saveProfileBtn"), busyLabel: "保存中…", success: "已保存" });
 };
-
-$("activateCurrentBtn").onclick = () => run(async () => {
-  const saved = await saveCurrentProfile();
-  if (saved?.id) {
-    await api(`/api/profiles/${saved.id}/activate`, { method: "POST" });
-    await refreshAll();
-    showView("home");
-  }
-}, {
-  button: $("activateCurrentBtn"),
-  busyLabel: "启用中…",
-  success: "已保存并启用。新开 grok 会话生效。",
-});
 
 $("settingsForm").onsubmit = (event) => {
   event.preventDefault();

@@ -106,6 +106,25 @@ func TestOrganizePanelRespectsHiddenAttribute(t *testing.T) {
 	}
 }
 
+func TestProfileEditorUsesSaveOnly(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(htmlData, []byte(`id="saveProfileBtn"`)) {
+		t.Fatal("profile editor save button not found")
+	}
+	for _, stale := range []string{`id="activateCurrentBtn"`, "保存并启用", `$("activateCurrentBtn")`} {
+		if bytes.Contains(htmlData, []byte(stale)) || bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("profile editor still contains obsolete save-and-activate behavior: %s", stale)
+		}
+	}
+}
+
 func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 	data, err := assets.ReadFile("ui/index.html")
 	if err != nil {
