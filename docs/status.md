@@ -1,6 +1,6 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、已知问题与技术债。最后更新：2026-07-24。
+> 当前状态、已知问题与技术债。最后更新：2026-07-27。
 
 ---
 
@@ -10,19 +10,20 @@
 - **多供应商路由**：Profile 创建/编辑/激活/删除，事务性 config.toml 切换。
 - **会话图**：逻辑会话 ID + 多供应商分支，跨供应商切换时文本迁移。
 - **订阅代理**：CLIProxyAPI 内嵌，ChatGPT/Gemini/Grok 订阅账号接入；状态/停止/重启/账号管理已修复。
-- **CodeBuddy**：原生工具执行模式（`--permission-mode acceptEdits --tools default`），stream-json 事件透传。
+- **CodeBuddy**：保持纯文本只读桥接（`Read/Grep/Glob`），忽略请求中可能因 `/model` 切换而残留的工具 schema；stream-json 文本与历史工具上下文可安全透传。
 - **ACP Agent**：`grok agent stdio` 生命周期管理，session/load 溢出恢复。
 - **构建系统**：`build-macos.sh` 签名 + DMG 打包 + 可选公证。
 - **菜单栏常驻**：macOS NSStatusItem 实现，点红色叉隐藏到菜单栏，支持路由策略查看/切换、缓存统计、显示主窗口、退出。
 
 ### 1.2 已修复（近期）
+- **GitHub 权威源与工作区生成物治理**：`CyberStaZJU/grok-build-switch` 已确定为代码/文档/发布记录的权威源，本机仅作工作副本。仓库根可重建 `dist/` 已在用户批准后永久删除；完整 `go test ./...` 通过。`ui/vendor/` 是 tracked `go:embed` 资产，必须保留；根 `vendor/` 是 `-mod=vendor` 离线依赖并含固定版本 CLIProxyAPI 包，暂不移动。当前 checkout 仍有未提交实现修改，因此在 commit/push 前不可视为可丢弃副本。
 - **session/load 通知溢出**：`sessionLoadNotificationFilter` 抑制重放通知，`SessionLoadError` 自动重启恢复。
 - **空工具名 400 错误**：`repairMalformedToolHistory` 在订阅代理请求层清洗 `input[].name` 为空的历史工具调用。
 - **Subagents 配置键错误**：从 `subagents.default_model`（Grok 不识别）迁移到 `subagents.models.explore/plan`。
 - **stream_tool_calls 导致工具名丢失**：部分 API 端点（如 gpt-5.6-sol@API池）返回的 streaming chunk 中 `function.name` 缺失，导致 Grok 解析出空工具名。修复：全局 `stream_tool_calls = false`，仅对已知可靠模型（LongCat-2.0、codebuddy/*）启用。
 - **订阅代理状态/控制失效**：`SubscriptionProxyStatus` 扩展为包含 State/PID/ConfigPath/LastError/BaseURL/APIKeyMasked；`UpdateAccount`/`DeleteAccount` 改为直接操作 auth 文件（CLIProxyAPI PATCH 返回 404）。
 - **菜单栏常驻**：通过 `fyne.io/systray` + `Register()` 外部循环模式实现 NSStatusItem；解决 systray 与 Wails 的 `AppDelegate` 符号冲突（重命名为 `SystrayAppDelegate`）。
-- **CodeBuddy 权限扩展**：从只读（`--tools Read,Grep,Glob`）升级为全工具执行（`--permission-mode acceptEdits --tools default`），stream-json 格式解析 tool_use/tool_result 事件并透传到响应。
+- **CodeBuddy 工具上下文兼容**：stream-json 可解析历史 `tool_use/tool_result` 并作为引用文本返回；安全审查后保留 `Read/Grep/Glob` 只读能力，不因附带工具 schema 自动升级到 Bash/Write/Edit。
 - **路由策略部分合并**：`handleRoutingPolicy` 使用 `map[string]json.RawMessage` 实现 PATCH 语义，仅更新请求中提供的字段。
 
 ---
@@ -105,7 +106,7 @@
 
 ### 3.2 架构层面
 - **Agent 子进程与 HTTP 服务器耦合**：`Server` 结构体同时持有 `Agent` 和 `Switcher`，职责过重。
-- **MCP 服务器未使用**：`NewSessionRequest.McpServers` 当前传空切片，browser-use 集成待建。
+- **MCP 会话刷新尚不完整**：browser-use MCP 已可注入新建/加载的 ACP 会话，但路由策略改变后，已存在会话仍需明确重启或重载才能获得新 MCP 配置。
 - **web_search 能力检测是静态的**：`SupportsBackendSearch` 在 Profile 编辑时手动设置，未自动探测。
 
 ### 3.3 文档层面

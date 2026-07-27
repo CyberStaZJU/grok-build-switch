@@ -10,17 +10,22 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 )
 
@@ -69,9 +74,6 @@ func (s *Server) SetLogger(l *log.Logger) {
 
 // Serve blocks until EOF on stdin or a fatal protocol error.
 func (s *Server) Serve(ctx context.Context) error {
-	if err := s.startBrowser(ctx); err != nil {
-		s.logger.Printf("browser-use: browser start skipped: %v", err)
-	}
 	defer s.stopBrowser()
 
 	scanner := bufio.NewScanner(s.stdin)
@@ -131,7 +133,7 @@ func (s *Server) handle(ctx context.Context, req *rpcRequest) {
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "grok_switch-browseruse", "version": "1"},
 		})
-	case "initialized":
+	case "initialized", "notifications/initialized":
 		// no-op notification
 	case "tools/list":
 		s.writeResult(req.ID, map[string]any{"tools": toolsList()})
@@ -209,63 +211,254 @@ func (s *Server) handleWebFetch(ctx context.Context, id json.RawMessage, args ma
 
 // searchWeb runs a headless browser search and returns plain-text results.
 func searchWeb(ctx context.Context, s *Server, query string, maxResults int) (string, error) {
-	ctx = s.browserContext(ctx)
-	target := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
-	var nodes []*cdp.Node
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(target),
-		chromedp.WaitReady("#links", chromedp.ByID),
-		chromedp.Nodes(`.result__a`, &nodes, chromedp.ByQueryAll),
-	)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if maxResults < 1 {
+		maxResults = 1
+	}
+	if maxResults > 10 {
+		maxResults = 10
+	}
+	endpoint := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
-	var sb strings.Builder
-	for i, n := range nodes {
-		if i >= maxResults {
-			break
-		}
-		title := innerText(n)
-		href := ""
-		for j := 0; j+1 < len(n.Attributes); j += 2 {
-			if n.Attributes[j] == "href" {
-				href = n.Attributes[j+1]
-				break
-			}
-		}
-		fmt.Fprintf(&sb, "%d. %s\n   %s\n", i+1, title, href)
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36")
+	response, err := s.HTTPClient().Do(request)
+	if err != nil {
+		return "", err
 	}
-	if sb.Len() == 0 {
-		return "(no results found)", nil
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("搜索服务返回 HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if err != nil {
+		return "", err
+	}
+	results := parseDuckDuckGoResults(string(body), maxResults)
+	if len(results) == 0 {
+		return "", errors.New("搜索服务未返回可解析的结果")
+	}
+	var sb strings.Builder
+	for i, result := range results {
+		fmt.Fprintf(&sb, "%d. %s\n   %s\n", i+1, result.Title, result.URL)
 	}
 	return sb.String(), nil
 }
 
-// fetchURL retrieves a URL and returns a plain-text preview.
-func fetchURL(ctx context.Context, s *Server, rawURL string, maxChars int) (string, error) {
-	ctx = s.browserContext(ctx)
-	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", fmt.Errorf("invalid url: %s", rawURL)
+type searchResult struct {
+	Title string
+	URL   string
+}
+
+func parseDuckDuckGoResults(body string, maxResults int) []searchResult {
+	const marker = `class="result__a"`
+	results := make([]searchResult, 0, maxResults)
+	for len(results) < maxResults {
+		index := strings.Index(body, marker)
+		if index < 0 {
+			break
+		}
+		body = body[index+len(marker):]
+		hrefIndex := strings.Index(body, `href="`)
+		if hrefIndex < 0 {
+			break
+		}
+		body = body[hrefIndex+len(`href="`):]
+		hrefEnd := strings.IndexByte(body, '"')
+		if hrefEnd < 0 {
+			break
+		}
+		rawURL := html.UnescapeString(body[:hrefEnd])
+		body = body[hrefEnd+1:]
+		textStart := strings.IndexByte(body, '>')
+		textEnd := strings.Index(body, "</a>")
+		if textStart < 0 || textEnd < 0 || textEnd <= textStart {
+			continue
+		}
+		title := strings.TrimSpace(stripHTML(html.UnescapeString(body[textStart+1 : textEnd])))
+		resolvedURL := resolveDuckDuckGoURL(rawURL)
+		if title != "" && resolvedURL != "" {
+			results = append(results, searchResult{Title: title, URL: resolvedURL})
+		}
+		body = body[textEnd+len("</a>"):]
 	}
-	var body string
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(rawURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.ActionFunc(func(cctx context.Context) error {
-			return chromedp.Evaluate(`(() => {
-				const t = (document.body && document.body.innerText) || '';
-				return t.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n');
-			})()`, &body).Do(cctx)
-		}),
-	); err != nil {
+	return results
+}
+
+func resolveDuckDuckGoURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	if value := parsed.Query().Get("uddg"); value != "" {
+		return value
+	}
+	if parsed.IsAbs() {
+		return parsed.String()
+	}
+	return ""
+}
+
+func stripHTML(value string) string {
+	var out strings.Builder
+	insideTag := false
+	for _, character := range value {
+		switch character {
+		case '<':
+			insideTag = true
+		case '>':
+			insideTag = false
+		default:
+			if !insideTag {
+				out.WriteRune(character)
+			}
+		}
+	}
+	return out.String()
+}
+
+// fetchURL retrieves a public URL through a pinned, redirect-validating HTTP
+// transport. It intentionally does not execute page JavaScript: model-controlled
+// fetching must not give a browser access to localhost, LAN services or metadata.
+func fetchURL(ctx context.Context, s *Server, rawURL string, maxChars int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	client, err := publicHTTPClient(ctx)
+	if err != nil {
 		return "", err
 	}
-	body = strings.TrimSpace(body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36")
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("目标页面返回 HTTP %d", response.StatusCode)
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if err != nil {
+		return "", err
+	}
+	body := strings.TrimSpace(stripHTML(string(content)))
+	body = strings.Join(strings.Fields(body), " ")
 	if len(body) > maxChars {
 		body = body[:maxChars] + "\n…(truncated)"
 	}
 	return body, nil
+}
+
+func validatePublicURL(ctx context.Context, rawURL string) error {
+	_, _, err := resolvePublicTarget(ctx, rawURL)
+	return err
+}
+
+func resolvePublicTarget(ctx context.Context, rawURL string) (*url.URL, []netip.Addr, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return nil, nil, fmt.Errorf("invalid url: %s", rawURL)
+	}
+	if parsed.User != nil {
+		return nil, nil, errors.New("URL 不得包含用户凭证")
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return nil, nil, errors.New("拒绝访问本机或私有网络地址")
+	}
+	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, nil, fmt.Errorf("解析目标地址失败: %w", err)
+	}
+	if len(addresses) == 0 {
+		return nil, nil, errors.New("目标主机没有可用地址")
+	}
+	for _, address := range addresses {
+		if !isPublicAddress(address) {
+			return nil, nil, errors.New("拒绝访问本机、私有、链路本地或保留网络地址")
+		}
+	}
+	return parsed, addresses, nil
+}
+
+func publicHTTPClient(ctx context.Context) (*http.Client, error) {
+	pinned := make(map[string][]netip.Addr)
+	transport := &http.Transport{}
+	transport.DialContext = func(dialCtx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		addresses := pinned[strings.TrimSuffix(strings.ToLower(host), ".")]
+		if len(addresses) == 0 {
+			return nil, errors.New("目标主机未经安全解析")
+		}
+		var lastErr error
+		for _, ip := range addresses {
+			connection, err := (&net.Dialer{}).DialContext(dialCtx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return connection, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+	client := &http.Client{Transport: transport}
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("重定向次数过多")
+		}
+		parsed, addresses, err := resolvePublicTarget(request.Context(), request.URL.String())
+		if err != nil {
+			return err
+		}
+		pinned[strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")] = addresses
+		return nil
+	}
+	// The initial request and every redirect are validated and pinned by
+	// RoundTrip before the transport resolves or dials the target host.
+	client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		parsed, addresses, err := resolvePublicTarget(request.Context(), request.URL.String())
+		if err != nil {
+			return nil, err
+		}
+		pinned[strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")] = addresses
+		return transport.RoundTrip(request)
+	})
+	return client, nil
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func isPublicAddress(address netip.Addr) bool {
+	address = address.Unmap()
+	if !address.IsValid() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	if address.Is4() {
+		value := address.As4()
+		// Carrier-grade NAT, documentation, benchmarking and reserved IPv4 ranges.
+		if value[0] == 100 && value[1]&0xc0 == 64 ||
+			value[0] == 192 && value[1] == 0 && value[2] == 0 ||
+			value[0] == 192 && value[1] == 0 && value[2] == 2 ||
+			value[0] == 198 && value[1] == 18 || value[0] == 198 && value[1] == 19 ||
+			value[0] == 198 && value[1] == 51 && value[2] == 100 ||
+			value[0] == 203 && value[1] == 0 && value[2] == 113 ||
+			value[0] >= 240 {
+			return false
+		}
+	}
+	return !address.Is6() || address.IsGlobalUnicast()
 }
 
 // browserContext returns the long-lived browser context, or the input ctx when
@@ -279,18 +472,68 @@ func (s *Server) browserContext(fallback context.Context) context.Context {
 	return fallback
 }
 
+func (s *Server) ensureBrowser(ctx context.Context) error {
+	s.mu.Lock()
+	started := s.started
+	s.mu.Unlock()
+	if started {
+		return nil
+	}
+	return s.startBrowser(ctx)
+}
+
 func (s *Server) startBrowser(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started {
 		return nil
 	}
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, "http://127.0.0.1:9222")
+	browserPath, err := findBrowserExecutable()
+	if err != nil {
+		return err
+	}
+	allocOptions := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(browserPath),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+	)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOptions...)
 	browserCtx, _ := chromedp.NewContext(allocCtx)
+	if err := chromedp.Run(browserCtx); err != nil {
+		allocCancel()
+		return fmt.Errorf("启动无头浏览器失败: %w", err)
+	}
 	s.allocCancel = allocCancel
 	s.browserCtx = browserCtx
 	s.started = true
 	return nil
+}
+
+func findBrowserExecutable() (string, error) {
+	var candidates []string
+	if configured := strings.TrimSpace(os.Getenv("GROK_SWITCH_BROWSER_PATH")); configured != "" {
+		candidates = append(candidates, configured)
+	}
+	if runtime.GOOS == "darwin" {
+		candidates = append(candidates,
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		)
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"} {
+		if path, err := exec.LookPath(name); err == nil {
+			candidates = append(candidates, path)
+		}
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("未找到 Chrome、Edge 或 Chromium；可通过 GROK_SWITCH_BROWSER_PATH 指定浏览器")
 }
 
 func (s *Server) stopBrowser() {
@@ -304,10 +547,16 @@ func (s *Server) stopBrowser() {
 }
 
 func (s *Server) writeResult(id json.RawMessage, result any) {
+	if len(id) == 0 || string(id) == "null" {
+		return
+	}
 	s.write(rpcResponse{ID: id, Result: result})
 }
 
 func (s *Server) writeError(id json.RawMessage, code int, message, detail string) {
+	if len(id) == 0 || string(id) == "null" {
+		return
+	}
 	s.write(rpcResponse{ID: id, Error: &rpcError{Code: code, Message: message + ": " + detail}})
 }
 
@@ -350,21 +599,6 @@ func toolsList() []map[string]any {
 		},
 	}
 }
-
-func innerText(n *cdp.Node) string {
-	if n.NodeValue != "" {
-		return n.NodeValue
-	}
-	var sb strings.Builder
-	for _, child := range n.Children {
-		sb.WriteString(innerText(child))
-	}
-	return sb.String()
-}
-
-// DefaultRemoteDebugURL is the Chrome CDP endpoint used when launching the
-// browser for browser-use tools.
-const DefaultRemoteDebugURL = "http://127.0.0.1:9222"
 
 // HTTPClient returns an *http.Client routed through Chrome's CDP when the
 // browser is running, or the default transport otherwise.

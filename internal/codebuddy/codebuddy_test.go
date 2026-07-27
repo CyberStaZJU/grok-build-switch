@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -67,7 +68,7 @@ esac
 }
 
 func TestDefaultArgsEnforceReadOnlyTools(t *testing.T) {
-	args := DefaultArgs("hy3")
+	args := DefaultArgs("hy3", CapabilityReadOnly)
 	joined := " " + strings.Join(args, " ") + " "
 	for _, required := range []string{
 		" --print ", " --output-format stream-json ", " --permission-mode default ",
@@ -82,6 +83,30 @@ func TestDefaultArgsEnforceReadOnlyTools(t *testing.T) {
 	for _, forbidden := range []string{" acceptEdits ", " --tools default ", " -y ", " --bg ", " --background ", "daemon", " Bash ", " Write ", " Edit "} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("forbidden argument %q in %q", forbidden, joined)
+		}
+	}
+}
+
+func TestDefaultArgsExposeRequestedCapabilityWithoutBypass(t *testing.T) {
+	webJoined := " " + strings.Join(DefaultArgs("hy3", CapabilityWeb), " ") + " "
+	if !strings.Contains(webJoined, " --tools Read,Grep,Glob,WebSearch,WebFetch ") || !strings.Contains(webJoined, " --allowedTools WebSearch,WebFetch ") {
+		t.Fatalf("web capability args = %q", webJoined)
+	}
+	for _, test := range []struct {
+		capability Capability
+		tools      string
+	}{
+		{CapabilityExecute, "Read,Grep,Glob,Bash"},
+		{CapabilityAll, "Read,Grep,Glob,Bash,Write,Edit"},
+	} {
+		joined := " " + strings.Join(DefaultArgs("hy3", test.capability), " ") + " "
+		if !strings.Contains(joined, " --tools "+test.tools+" ") || !strings.Contains(joined, " --permission-mode acceptEdits ") || !strings.Contains(joined, " --allowedTools ") {
+			t.Errorf("capability %s args = %q", test.capability, joined)
+		}
+		for _, forbidden := range []string{" bypassPermissions ", " -y ", " --bg ", " --background ", " --tools default "} {
+			if strings.Contains(joined, forbidden) {
+				t.Errorf("capability %s contains forbidden argument %q: %s", test.capability, forbidden, joined)
+			}
 		}
 	}
 }
@@ -123,16 +148,31 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'
 		t.Fatal(err)
 	}
 	prompt, err := os.ReadFile(stdinPath)
-	if err != nil || string(prompt) != "secret prompt" {
-		t.Fatalf("stdin = %q, err = %v", prompt, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptText := string(prompt)
+	for _, expected := range []string{
+		"当前只提供 Read、Grep、Glob 三种只读工具",
+		"Bash、Write、Edit、后台任务和 MCP 均不可用",
+		"不要从工作区根目录并行发起多个宽泛的递归 Glob",
+		"若搜索超时，应缩小到相关目录",
+		"--- 对话记录开始 ---\nsecret prompt",
+	} {
+		if !strings.Contains(promptText, expected) {
+			t.Errorf("stdin missing guidance or original prompt %q: %s", expected, promptText)
+		}
+	}
+	if strings.Count(promptText, "secret prompt") != 1 {
+		t.Fatalf("original prompt count = %d, stdin=%q", strings.Count(promptText, "secret prompt"), promptText)
 	}
 	argData, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := strings.Fields(string(argData))
-	if !reflect.DeepEqual(args, DefaultArgs("hy3")) {
-		t.Fatalf("args = %#v, want %#v", args, DefaultArgs("hy3"))
+	if !reflect.DeepEqual(args, DefaultArgs("hy3", CapabilityReadOnly)) {
+		t.Fatalf("args = %#v, want %#v", args, DefaultArgs("hy3", CapabilityReadOnly))
 	}
 	envData, err := os.ReadFile(envPath)
 	if err != nil || string(envData) != "1" {
@@ -140,6 +180,101 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'
 	}
 	if len(events) != 2 || events[0].Kind != EventText || events[0].Text != "hello" || events[1].Kind != EventResult {
 		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestRunnerAllCapabilityUsesDetachedWorktree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake POSIX executable")
+	}
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		command.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.invalid")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	git("init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "tracked.txt")
+	git("commit", "-m", "base")
+
+	cwdPath := filepath.Join(t.TempDir(), "cwd.txt")
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	stdinPath := filepath.Join(t.TempDir(), "stdin.txt")
+	t.Setenv("FAKE_CWD", cwdPath)
+	t.Setenv("FAKE_ARGS", argsPath)
+	t.Setenv("FAKE_STDIN", stdinPath)
+	executable := fakeExecutable(t, `
+pwd > "$FAKE_CWD"
+printf '%s\n' "$@" > "$FAKE_ARGS"
+cat > "$FAKE_STDIN"
+printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'
+`)
+	var worktree string
+	err := (Runner{Executable: executable}).Run(context.Background(), RunRequest{
+		Prompt: "modify and test", Cwd: repo, Model: "hy3", Capability: CapabilityAll,
+	}, func(event Event) error {
+		if event.Type == "grok_switch_worktree" {
+			worktree = event.Text
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worktree == "" || worktree == repo {
+		t.Fatalf("worktree = %q, repo=%q", worktree, repo)
+	}
+	cwdData, err := os.ReadFile(cwdPath)
+	if err != nil || strings.TrimSpace(string(cwdData)) != worktree {
+		t.Fatalf("runner cwd=%q err=%v, want %q", cwdData, err, worktree)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "tracked.txt")); err != nil {
+		t.Fatalf("isolated worktree missing tracked file: %v", err)
+	}
+	argsData, err := os.ReadFile(argsPath)
+	if err != nil || !strings.Contains(string(argsData), "Read,Grep,Glob,Bash,Write,Edit") {
+		t.Fatalf("args=%q err=%v", argsData, err)
+	}
+	stdinData, err := os.ReadFile(stdinPath)
+	if err != nil || !strings.Contains(string(stdinData), "独立的 detached Git worktree") || !strings.Contains(string(stdinData), worktree) {
+		t.Fatalf("stdin=%q err=%v", stdinData, err)
+	}
+}
+
+func TestRunnerRejectsDirtyRepositoryForIsolatedExecution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires git")
+	}
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		command.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.invalid")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	git("init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "tracked.txt")
+	git("commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := fakeExecutable(t, `exit 0`)
+	err := (Runner{Executable: executable}).Run(context.Background(), RunRequest{
+		Prompt: "modify", Cwd: repo, Model: "hy3", Capability: CapabilityAll,
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "干净 Git 工作区") {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 

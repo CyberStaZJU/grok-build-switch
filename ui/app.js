@@ -5546,7 +5546,13 @@ function renderRouting(snapshot) {
     for (const route of modelRoutes) {
       const opt = document.createElement("option");
       opt.value = route.name;
-      opt.textContent = `${route.name} — ${route.model}`;
+      const nativeSearch = routeHasNativeSearch(route);
+      if (selectId === "routingWebSearch" && !nativeSearch) {
+        opt.textContent = `${route.name} — ${route.model}（浏览器回退）`;
+        opt.disabled = snapshot.browser_use?.available !== true;
+      } else {
+        opt.textContent = `${route.name} — ${route.model}`;
+      }
       sel.appendChild(opt);
     }
     sel.value = current;

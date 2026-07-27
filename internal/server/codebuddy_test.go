@@ -134,6 +134,40 @@ func TestCodeBuddyInferenceRejectsRemoteButNormalizesProtocolTools(t *testing.T)
 	}
 }
 
+func TestCodeBuddyInferenceNeverEscalatesFromAttachedToolSchemas(t *testing.T) {
+	for _, tools := range []string{
+		`[{"type":"function","function":{"name":"read_file"}}]`,
+		`[{"type":"function","function":{"name":"web_search"}}]`,
+		`[{"type":"function","function":{"name":"run_terminal_command"}}]`,
+		`[{"type":"function","function":{"name":"search_replace"}}]`,
+	} {
+		fake := &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3"}}, events: []codebuddy.Event{{Kind: codebuddy.EventResult, Text: "done"}}}
+		s := &Server{CodeBuddy: fake}
+		body := `{"model":"hy3","messages":[{"role":"user","content":"work"}],"tool_choice":"none","tools":` + tools + `}`
+		response := httptest.NewRecorder()
+		s.handleCodeBuddyInference(response, loopbackRequest(http.MethodPost, "/codebuddy/v1/chat/completions", body))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		if got := fake.lastRequest(t).Capability; got != codebuddy.CapabilityReadOnly {
+			t.Fatalf("capability=%q, want read-only for tools=%s", got, tools)
+		}
+	}
+}
+
+func TestCodeBuddyCompletionReportsIsolatedWorktree(t *testing.T) {
+	fake := &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3"}}, events: []codebuddy.Event{
+		{Kind: codebuddy.EventMeta, Type: "grok_switch_worktree", Text: "/tmp/isolated-run"},
+		{Kind: codebuddy.EventResult, Text: "done"},
+	}}
+	s := &Server{CodeBuddy: fake}
+	response := httptest.NewRecorder()
+	s.handleCodeBuddyInference(response, loopbackRequest(http.MethodPost, "/codebuddy/v1/chat/completions", `{"model":"hy3","messages":[{"role":"user","content":"edit"}],"tools":[{"type":"function","function":{"name":"Edit"}}]}`))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "/tmp/isolated-run") || !strings.Contains(response.Body.String(), "尚未应用") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestCodeBuddyNonStreamingCompletionUsesPromptModelAndCwd(t *testing.T) {
 	cwd := t.TempDir()
 	fake := &fakeCodeBuddyRunner{status: codebuddy.Status{Available: true, Models: []string{"hy3"}}, events: []codebuddy.Event{

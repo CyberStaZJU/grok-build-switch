@@ -338,6 +338,7 @@ func (b *Bridge) newSessionLocked(ctx context.Context, cwd string) error {
 	conn := b.conn
 	running := b.cmd != nil
 	busy := b.busy
+	mcpServers := append([]acp.McpServer(nil), b.mcpServers...)
 	b.mu.RUnlock()
 	if !running || conn == nil {
 		return ErrNotRunning
@@ -345,7 +346,7 @@ func (b *Bridge) newSessionLocked(ctx context.Context, cwd string) error {
 	if busy {
 		return ErrBusy
 	}
-	response, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: b.mcpServers})
+	response, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: mcpServers})
 	if err != nil {
 		return fmt.Errorf("创建 Grok 会话失败: %w", err)
 	}
@@ -369,6 +370,7 @@ func (b *Bridge) loadSessionLocked(ctx context.Context, sessionID, cwd string) e
 	outputFilter := b.outputFilter
 	running := b.cmd != nil
 	busy := b.busy
+	mcpServers := append([]acp.McpServer(nil), b.mcpServers...)
 	b.mu.RUnlock()
 	if !running || conn == nil {
 		return ErrNotRunning
@@ -392,7 +394,7 @@ func (b *Bridge) loadSessionLocked(ctx context.Context, sessionID, cwd string) e
 	b.mu.Unlock()
 	b.suppressUpdates.Store(true)
 	response, err := conn.LoadSession(ctx, acp.LoadSessionRequest{
-		SessionId: acp.SessionId(sessionID), Cwd: cwd, McpServers: b.mcpServers,
+		SessionId: acp.SessionId(sessionID), Cwd: cwd, McpServers: mcpServers,
 	})
 	b.suppressUpdates.Store(false)
 	if outputFilter != nil {

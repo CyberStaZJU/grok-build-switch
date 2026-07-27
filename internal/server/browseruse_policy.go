@@ -1,7 +1,9 @@
 package server
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -13,15 +15,22 @@ import (
 const browserUseMCPName = "browser-use"
 
 var browserUseLookPath = exec.LookPath
+var browserUseExecutable = os.Executable
 
-// BrowserUseCommand resolves the browser-use MCP server executable.
-// It prefers a bundled binary named "browser-use-mcp" on PATH, then falls
-// back to "browser-use" if available.
+// BrowserUseCommand resolves the browser-use MCP server executable. The app
+// binary itself always contains this MCP server, which avoids depending on an
+// unrelated external `browser-use` command or an installation-specific PATH.
 func BrowserUseCommand() (string, []string, bool) {
-	for _, name := range []string{"browser-use-mcp", "browser-use"} {
-		if path, err := browserUseLookPath(name); err == nil {
-			return path, nil, true
+	if executable, err := browserUseExecutable(); err == nil {
+		if executable, err = filepath.Abs(executable); err == nil {
+			if info, statErr := os.Stat(executable); statErr == nil && !info.IsDir() {
+				return executable, []string{"browser-use-mcp"}, true
+			}
 		}
+	}
+	// Development compatibility: a separately built helper is still accepted.
+	if path, err := browserUseLookPath("browser-use-mcp"); err == nil {
+		return path, nil, true
 	}
 	return "", nil, false
 }
@@ -91,7 +100,7 @@ func browserUseMCPServers() []acp.McpServer {
 		return nil
 	}
 	if len(args) == 0 {
-		args = []string{"mcp", "serve"}
+		args = []string{"browser-use-mcp"}
 	}
 	return []acp.McpServer{
 		{

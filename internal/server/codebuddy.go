@@ -163,7 +163,14 @@ func (s *Server) handleCodeBuddyChatCompletions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	runRequest := codebuddy.RunRequest{Prompt: prompt, Cwd: cwd, Model: model}
+	// Tool schemas can be stale after a /model switch. Never infer native
+	// execution authority from request metadata: CodeBuddy remains read-only.
+	runRequest := codebuddy.RunRequest{
+		Prompt:     prompt,
+		Cwd:        cwd,
+		Model:      model,
+		Capability: codebuddy.CapabilityReadOnly,
+	}
 	if request.Stream {
 		s.streamCodeBuddyCompletion(w, r, runRequest, codeBuddyModelPrefix+model)
 		return
@@ -252,8 +259,9 @@ func (s *Server) streamCodeBuddyCompletion(w http.ResponseWriter, r *http.Reques
 }
 
 type codeBuddyOutput struct {
-	value string
-	tools []codebuddy.Event
+	value    string
+	tools    []codebuddy.Event
+	worktree string
 }
 
 func (o *codeBuddyOutput) consume(event codebuddy.Event) error {
@@ -273,6 +281,11 @@ func (o *codeBuddyOutput) consumeDelta(event codebuddy.Event) (string, error) {
 	case codebuddy.EventToolUse, codebuddy.EventToolResult:
 		o.tools = append(o.tools, event)
 		return "", nil
+	case codebuddy.EventMeta:
+		if event.Type == "grok_switch_worktree" {
+			o.worktree = event.Text
+		}
+		return "", nil
 	case codebuddy.EventError:
 		return "", errors.New("CodeBuddy 返回错误事件")
 	default:
@@ -283,10 +296,13 @@ func (o *codeBuddyOutput) consumeDelta(event codebuddy.Event) (string, error) {
 func (o *codeBuddyOutput) text() string { return o.value }
 
 func (o *codeBuddyOutput) toolSummary() string {
-	if len(o.tools) == 0 {
+	if len(o.tools) == 0 && o.worktree == "" {
 		return ""
 	}
 	var sb strings.Builder
+	if o.worktree != "" {
+		fmt.Fprintf(&sb, "\n[隔离工作区] 本次非只读操作保留在 %s；尚未应用到当前工作区。", o.worktree)
+	}
 	for _, event := range o.tools {
 		if event.Tool == nil {
 			continue

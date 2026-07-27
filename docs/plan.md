@@ -8,7 +8,7 @@
 
 | 项目 | 状态 | 关键文件 |
 |:---|:---|:---|
-| CodeBuddy 权限扩展（只读→全工具执行） | ✅ 完成 | `internal/codebuddy/runner.go`、`events.go`、`prompt.go`、`server/codebuddy.go` |
+| CodeBuddy 工具历史兼容与只读边界 | ✅ 完成 | `internal/codebuddy/runner.go`、`events.go`、`prompt.go`、`server/codebuddy.go` |
 | 菜单栏常驻（macOS NSStatusItem） | ✅ 完成 | `gui_tray_darwin.go`、`gui_tray_darwin_provider.go`、`vendor/fyne.io/systray/systray_darwin.m` |
 | 订阅代理状态/控制修复 | ✅ 完成 | `internal/cliproxy/adapter.go`、`internal/server/subscription_proxy.go` |
 | stream_tool_calls 配置修复 | ✅ 完成 | `~/.grok/config.toml`（全局 false，按模型覆盖 true） |
@@ -177,11 +177,10 @@
 - Grok CLI 的 session ID 是供应商原生的，跨供应商无法直接 resume。
 - 逻辑 ID 作为稳定锚点，每个供应商分支独立管理。
 
-### 5.3 为什么 CodeBuddy 从只读改为全工具执行？
-- 原版设计假设 CodeBuddy CLI 不支持工具调用，但研究发现它支持 `--permission-mode` 和 `--tools` 参数。
-- CodeBuddy 的 stream-json 格式包含完整的 tool_use/tool_result 事件流，可解析并透传。
-- 「原生执行」模式让 CodeBuddy 自己调用工具（而非 Switch 转发），避免了协议不匹配。
-- 工具执行摘要作为响应末尾附加文本返回，用户可见但不可执行（安全提示仍保留）。
+### 5.3 为什么 CodeBuddy 保持只读？
+- CodeBuddy CLI 虽支持 Bash/Write/Edit，但 OpenAI 兼容请求中的工具 schema 可能只是 `/model` 切换后残留的会话元数据，不能据此推断用户授权执行。
+- 因此桥接层固定只开放 `Read/Grep/Glob`；历史 `tool_use/tool_result` 只作为引用文本进入 prompt，不会重放或升级权限。
+- 若未来开放写入能力，必须使用独立的显式授权字段和可审计的隔离/回收生命周期，不能通过工具名称自动触发。
 
 ### 5.4 为什么菜单栏常驻选择 systray 而非纯 cgo？
 - 纯 cgo 方案（自写 Objective-C NSStatusItem）导致 `AppDelegate` 符号与 Wails 冲突。
@@ -203,6 +202,13 @@
 - CLIProxyAPI v7.2.94 管理 API 不支持 PATCH（返回 404），无法通过 HTTP 接口修改账号。
 - Auth 文件存储在 `~/Library/Application Support/Grok Build Switch/cliproxy/auth/`，格式简单。
 - 直接 `os.Remove` 删除文件比 URL 编码的 DELETE 请求更可靠。
+
+---
+
+### 5.8 为什么 GitHub 是唯一代码真相源？
+- System 项目不是实验数据仓；代码、测试、轻量文档和发布记录适合由 GitHub 统一维护，本机只需保留工作 clone。
+- 本地构建产物和应用运行状态不应成为备份对象：构建产物由源码/锁定依赖重建，运行状态保存在 Application Support 且包含敏感凭证，不能进入 GitHub。
+- “GitHub 已维护”以远端分支包含对应 commit 为准；dirty 文件、仅本地 commit 或失效 remote 都不算已备份，清理 clone 前必须逐项核验。
 
 ---
 

@@ -8,6 +8,14 @@
 
 Grok Build Switch 是一个 macOS 桌面应用，作为 **Grok CLI 的统一代理与供应商路由器**。它让用户在多个 AI 供应商（OpenAI 兼容、Anthropic、CodeBuddy、订阅代理、官方 Grok 等）之间切换，而无需手动编辑 `~/.grok/config.toml`。
 
+### 1.1 代码与资产真相源
+
+- **GitHub `CyberStaZJU/grok-build-switch` 是代码、测试、轻量文档和发布记录的权威真相源**；本机 `~/Documents/System/grok-build-switch` 只是可丢弃、可重新 clone 的工作副本。
+- 本地未提交修改在 commit 并 push 到 GitHub 前仍是唯一副本，禁止把 dirty checkout 当作已备份内容删除或重建。
+- `dist/`、`.app/`、DMG、日志和运行配置不进入仓库；正式安装包通过 GitHub Releases 发布，需要时重新下载或构建。
+- `ui/vendor/` 是 tracked `go:embed` 前端资产，属于源码的一部分；根 `vendor/` 是 `go test -mod=vendor`/离线构建依赖并包含固定版本 CLIProxyAPI 包，只有在构建脚本能从锁定版本可靠重建并通过测试后才可清理。
+- API key、OAuth、Profile、路由、会话和本机应用状态只保存在 `~/Library/Application Support/Grok Build Switch/`，**绝不上传 GitHub**。
+
 核心能力：
 - **多供应商路由**：一个 GUI 管理多个 Profile，每个 Profile 含多个模型定义。
 - **会话保持**：跨供应商切换时，通过逻辑会话图（session graph）保留对话上下文。
@@ -257,7 +265,7 @@ logicalSession (稳定 ID)
 - `ParseEvent` 接收 `*toolAccumulator` 参数维护状态
 - `content_block_stop` 时发射完整的 `EventToolUse`
 
-**权限模式**：`--permission-mode acceptEdits` 允许工具修改文件；`--tools default` 启用全部工具。
+**权限模式**：桥接器固定使用只读工具白名单 `Read,Grep,Glob`。即使请求附带 Bash/Write/Edit 等工具 schema，也只视为可能残留的协议元数据，不自动提升 CodeBuddy 权限。
 
 ### 8.6 菜单栏常驻（NSStatusItem）实现
 

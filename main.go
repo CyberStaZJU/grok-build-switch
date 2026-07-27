@@ -15,6 +15,7 @@ import (
 
 	"grok_switch/internal/agentbridge"
 	"grok_switch/internal/autostart"
+	"grok_switch/internal/browseruse"
 	"grok_switch/internal/cliproxy"
 	"grok_switch/internal/cpamint"
 	"grok_switch/internal/crash"
@@ -35,6 +36,13 @@ import (
 
 func main() {
 	defer crash.RecoverMainThread()
+	if len(os.Args) > 1 && os.Args[1] == "browser-use-mcp" {
+		if err := browseruse.New().Serve(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	silent := flag.Bool("silent", false, "start without opening browser")
 	noTray := flag.Bool("no-tray", false, "run http server without tray")

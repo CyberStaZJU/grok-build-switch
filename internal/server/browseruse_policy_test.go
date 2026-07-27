@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -12,14 +13,19 @@ import (
 
 func withBrowserUseCommand(t *testing.T, available bool) {
 	t.Helper()
-	original := browserUseLookPath
-	browserUseLookPath = func(name string) (string, error) {
-		if available && name == "browser-use" {
-			return "/test/browser-use", nil
+	originalLookPath := browserUseLookPath
+	originalExecutable := browserUseExecutable
+	browserUseExecutable = func() (string, error) {
+		if available {
+			return os.Executable()
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { browserUseLookPath = original })
+	browserUseLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	t.Cleanup(func() {
+		browserUseLookPath = originalLookPath
+		browserUseExecutable = originalExecutable
+	})
 }
 
 func TestMcpServersForSubagent_GrokModel(t *testing.T) {
@@ -86,6 +92,9 @@ func TestMcpServersForSubagent_NonGrokModel(t *testing.T) {
 	}
 	if servers[0].Stdio.Name != "browser-use" {
 		t.Fatalf("Expected browser-use MCP server, got %q", servers[0].Stdio.Name)
+	}
+	if len(servers[0].Stdio.Args) != 1 || servers[0].Stdio.Args[0] != "browser-use-mcp" {
+		t.Fatalf("browser-use must use the bundled app subcommand, got %#v", servers[0].Stdio.Args)
 	}
 }
 

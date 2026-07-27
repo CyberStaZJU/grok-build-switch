@@ -270,7 +270,7 @@ grok-build-switch/
 
 | 文件 | 职责 |
 |------|------|
-| `codebuddy/runner.go` | `Runner` 结构体：前台非持久化调用 CodeBuddy CLI（`--print --output-format stream-json --permission-mode acceptEdits --tools default`）；`DefaultArgs` 安全基线 |
+| `codebuddy/runner.go` | `Runner` 结构体：前台非持久化调用 CodeBuddy CLI；默认仅开放 `Read/Grep/Glob`，禁用 MCP、会话持久化与后台任务；`DefaultArgs` 定义安全基线 |
 | `codebuddy/discovery.go` | CodeBuddy CLI 发现与状态检查（版本、可用模型列表、fallback 模型） |
 | `codebuddy/events.go` | CodeBuddy 事件类型定义 |
 | `codebuddy/prompt.go` | Prompt 构造逻辑 |
