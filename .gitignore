@@ -1,0 +1,93 @@
+# Build outputs
+grok_switch.exe
+grok_switch_gui.exe
+*.exe
+*.syso
+*.test
+*.out
+grok_switch.exe.sha256
+grok_switch_gui.exe.sha256
+site/
+
+# Code-signing private keys must never be committed
+*.pfx
+*.p12
+
+# Go
+bin/
+/vendor/
+
+# IDE / local agent
+.claude/
+.codex-*/
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local working notes (not required at runtime)
+notes.md
+task_plan.md
+problems.md
+notes_*.md
+task_plan_*.md
+*-implementation.md
+/docs/design/register-module-integration.md
+
+# Local registration credentials and runtime data
+/.grok_switch/
+/registrar.json
+/registrar/
+/cpa_auths/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+/docs/design/chat-agent-integration.md
+
+# Build artifacts / packaging (keep source; publish via Releases)
+/dist/
+*.dmg
+*.dmg.sha256
+*.app/
+
+# Local secrets / runtime (never commit)
+profiles.json
+settings.json
+**/config.yaml
+**/*auth*.json
+**/selected-models.json
+/cliproxy/
+
+# Local Grok / Grok Build Switch state and credentials
+.grok/
+.grok_switch/
+**/profiles.json
+**/routing.json
+**/settings.json
+**/remote_access.json
+**/session_graph.json
+**/ssh_connections.json
+**/grok_auth.json
+**/grok_pool/
+**/registrar.json
+**/cpa_auths/
+
+# Common secret-bearing files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.mobileprovision
+*credentials*.json
+*secrets*.json
+
+# Personal contact exports and local review artifacts
+/QQ.jpg
