@@ -3,6 +3,7 @@ package profiles
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,17 @@ func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
 	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 	if !stringSlicesEqual(got.Models[0].ReasoningEfforts, want) || got.Models[0].ReasoningEffortsSource != "declared" {
 		t.Fatalf("model metadata = %#v", got.Models[0])
+	}
+}
+
+func TestStoreRejectsUnsupportedDefaultReasoningEffort(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	_, err := store.Create(Profile{
+		Name: "strict", DefaultModel: "m", DefaultReasoningEffort: "xhigh",
+		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"low", "medium", "high"}, ReasoningEffortsSource: "declared"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
+		t.Fatalf("Create() error = %v", err)
 	}
 }
 

@@ -377,17 +377,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.Routing != nil {
 		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
 			policy := stored.Policy
-			if route, ok := stored.Route(policy.Default); ok {
-				defaultModel = route.Name
-			}
-			if route, ok := stored.Route(policy.WebSearch); ok {
-				webSearchModel = route.Name
-			}
-			if route, ok := stored.Route(policy.Subagents.Explore); ok {
-				exploreModel = route.Name
-			}
-			if route, ok := stored.Route(policy.Subagents.Plan); ok {
-				planModel = route.Name
+			if policy.Official {
+				defaultModel = policy.Default
+				webSearchModel = policy.WebSearch
+				exploreModel = policy.Subagents.Explore
+				planModel = policy.Subagents.Plan
+			} else {
+				if route, ok := stored.Route(policy.Default); ok {
+					defaultModel = route.Name
+				}
+				if route, ok := stored.Route(policy.WebSearch); ok {
+					webSearchModel = route.Name
+				}
+				if route, ok := stored.Route(policy.Subagents.Explore); ok {
+					exploreModel = route.Name
+				}
+				if route, ok := stored.Route(policy.Subagents.Plan); ok {
+					planModel = route.Name
+				}
 			}
 		}
 	}

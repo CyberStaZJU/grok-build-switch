@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"grok_switch/internal/agentbridge"
@@ -26,6 +28,21 @@ func TestGenerateSessionTitleHandlesShortErrorResponse(t *testing.T) {
 	}, "hello", "test")
 	if title != "" || shouldDelete || reason != "" {
 		t.Fatalf("unexpected result: title=%q shouldDelete=%v reason=%q", title, shouldDelete, reason)
+	}
+}
+
+func TestGenerateSessionTitleStopsOnSubscriptionOverload(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"code":"server_is_overloaded"}}`, http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	s := &Server{}
+	_, _, _, err := s.generateSessionTitleContext(context.Background(), routing.ModelRoute{
+		Model: "test-model", BaseURL: upstream.URL, APIBackend: "chat_completions",
+	}, "hello", "test")
+	if err == nil || !strings.Contains(err.Error(), "已停止整理") {
+		t.Fatalf("expected overload to stop analysis, got %v", err)
 	}
 }
 

@@ -137,11 +137,11 @@
                     <option value="medium">中 (medium)</option>
                     <option value="high">高 (high)</option>
                     <option value="xhigh">超高 (xhigh)</option>
-                    <option value="max">最大 (max，仅部分模型；当前 Grok CLI 不支持)</option>
+                    <option value="max">最大 (max，仅部分模型)</option>
                   </select>
                   <button type="button" id="detectReasoningEffortsBtn" class="btn sm">检测支持档位</button>
                 </div>
-                <span id="reasoningEffortStatus" class="muted tiny" role="status">选择默认模型后可检测；所有档位均可手动选择。</span>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">选择默认模型后，将按该模型能力显示推理档位。</span>
               </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
@@ -206,7 +206,10 @@
               <span class="nativeEyebrow">GROK VAULT</span>
               <strong>对话库</strong>
             </div>
-            <button type="button" id="closeSessionSidebarBtn" class="nativeIconBtn" aria-label="隐藏会话列表">×</button>
+            <div class="nativePaneActions">
+              <button type="button" id="refreshAgentSessionsBtn" class="nativeIconBtn" aria-label="刷新对话库" title="重新扫描本地对话">↻</button>
+              <button type="button" id="closeSessionSidebarBtn" class="nativeIconBtn" aria-label="隐藏会话列表">×</button>
+            </div>
           </div>
           <button type="button" id="agentNewSessionBtn" class="newChatBtn">新对话</button>
           <button type="button" id="agentOrganizeSessionsBtn" class="organizeSessionsBtn">对话整理</button>

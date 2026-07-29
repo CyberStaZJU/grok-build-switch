@@ -35,6 +35,103 @@ func TestStatusDoesNotExposeActiveProfileCredentials(t *testing.T) {
 	}
 }
 
+func TestRoutingGETIncludesOfficialModelsWhenLoggedIn(t *testing.T) {
+	s := newRoutingTestServer(t)
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"secret":"never-return-this"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := loopbackRequest(http.MethodGet, "/api/routing", "")
+	response := httptest.NewRecorder()
+	s.handleRouting(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var snapshot routingSnapshotDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.OfficialLoggedIn || len(snapshot.OfficialModels) == 0 || snapshot.OfficialModels[0].Name != "grok-4.5" {
+		t.Fatalf("official routing metadata = %#v", snapshot)
+	}
+	if strings.Contains(response.Body.String(), "never-return-this") {
+		t.Fatal("routing response leaked official auth contents")
+	}
+}
+
+func TestRoutingPolicyPUTSelectsOfficialGrokModel(t *testing.T) {
+	s := newRoutingTestServer(t)
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"logged_in":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"official":true,"default":"grok-4.5","default_reasoning_effort":"high","web_search":"grok-4.5","subagents":{"explore":"grok-4.5","plan":"grok-4.5"}}`
+	request := loopbackRequest(http.MethodPut, "/api/routing/policy", payload)
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Policy.Official || stored.Policy.Default != "grok-4.5" || stored.Policy.WebSearch != "grok-4.5" {
+		t.Fatalf("stored official policy = %#v", stored.Policy)
+	}
+	config, err := os.ReadFile(s.Paths.GrokConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	for _, want := range []string{`default = 'grok-4.5'`, `web_search = 'grok-4.5'`, `explore = 'grok-4.5'`, `plan = 'grok-4.5'`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("official config missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "private-one.example") || strings.Contains(text, "provider-secret-one") {
+		t.Fatalf("official config retained custom provider data:\n%s", text)
+	}
+}
+
+func TestStatusReportsOfficialModelPins(t *testing.T) {
+	s := newRoutingTestServer(t)
+	s.Settings = settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"logged_in":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profileList, err := s.Profiles.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := routing.RoutingPolicy{Official: true, Default: "grok-4.5", WebSearch: "grok-4.5", Subagents: routing.SubagentsPolicy{Explore: "grok-4.5", Plan: "grok-4.5"}}
+	if _, err := s.applyRoutingPolicyTransaction(profileList, policy); err != nil {
+		t.Fatal(err)
+	}
+	request := loopbackRequest(http.MethodGet, "/api/status", "")
+	response := httptest.NewRecorder()
+	s.handleStatus(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var status map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"default_model", "web_search_model", "explore_model", "plan_model"} {
+		if status[field] != "grok-4.5" {
+			t.Fatalf("%s = %#v, want grok-4.5", field, status[field])
+		}
+	}
+}
+
 func TestRoutingGETReturnsSafeMultiProviderCatalog(t *testing.T) {
 	s := newRoutingTestServer(t)
 	request := loopbackRequest(http.MethodGet, "/api/routing", "")
@@ -407,6 +504,20 @@ func TestCurrentRoutingRepairsStalePersistedPolicy(t *testing.T) {
 	}
 	if hydrated.Policy.Default == catalog.ModelRoutes[0].Name || hydrated.Policy.Default == "" {
 		t.Fatalf("repaired default = %q", hydrated.Policy.Default)
+	}
+}
+
+func TestRoutingPolicyPUTRejectsUnsupportedReasoningEffort(t *testing.T) {
+	s := newRoutingTestServer(t)
+	catalog, _, err := s.currentRouting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := loopbackRequest(http.MethodPut, "/api/routing/policy", `{"default":"`+catalog.ModelRoutes[0].Name+`","default_reasoning_effort":"xhigh"}`)
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "不支持推理强度") {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
 	}
 }
 

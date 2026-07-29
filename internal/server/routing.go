@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -49,6 +51,8 @@ type routingSnapshotDTO struct {
 	Version          int                   `json:"version"`
 	Providers        []routingProviderDTO  `json:"providers"`
 	ModelRoutes      []routingModelDTO     `json:"model_routes"`
+	OfficialModels   []routingModelDTO     `json:"official_models,omitempty"`
+	OfficialLoggedIn bool                  `json:"official_logged_in"`
 	Policy           routing.RoutingPolicy `json:"policy"`
 	WebSearchCapable bool                  `json:"web_search_capable"`
 	BrowserUse       browserUseStatusDTO   `json:"browser_use"`
@@ -146,6 +150,16 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if policy.Official {
+		if _, loggedIn := s.officialRoutingModels(); !loggedIn {
+			writeError(w, fmt.Errorf("尚未登录 Grok 官方账号"), http.StatusBadRequest)
+			return
+		}
+		if err := validateOfficialRoutingPolicy(policy); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+	}
 
 	currentHydrated, err := routing.ProjectWithPolicy(profilesList, currentStored.Policy)
 	if err != nil {
@@ -155,6 +169,10 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 	sourceProvider, _ := providerIdentityForRouting(currentHydrated)
 	hydrated, err := routing.ProjectWithPolicy(profilesList, policy)
 	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := validateRoutingReasoningEffort(hydrated); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
@@ -215,7 +233,7 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
 	s.changed()
-	writeJSON(w, routingDTO(hydrated))
+	writeJSON(w, s.routingDTO(hydrated))
 }
 
 func (s *Server) activateProfileRouting(id string) (profiles.Profile, error) {
@@ -305,6 +323,9 @@ func (s *Server) applyCurrentRoutingLocked() error {
 func (s *Server) applyRoutingPolicyTransaction(profileList []profiles.Profile, policy routing.RoutingPolicy) (routing.Snapshot, error) {
 	hydrated, err := routing.ProjectWithPolicy(profileList, policy)
 	if err != nil {
+		return routing.Snapshot{}, err
+	}
+	if err := validateRoutingReasoningEffort(hydrated); err != nil {
 		return routing.Snapshot{}, err
 	}
 	if _, err := grokconfig.PreviewRouting(s.Switcher.ConfigPath, hydrated); err != nil {
@@ -457,10 +478,10 @@ func (s *Server) currentRouting() (routingSnapshotDTO, routing.Snapshot, error) 
 	}
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
-	return routingDTO(hydrated), hydrated, nil
+	return s.routingDTO(hydrated), hydrated, nil
 }
 
-func routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
+func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 	providers := make([]routingProviderDTO, 0, len(snapshot.Providers))
 	for _, provider := range snapshot.Providers {
 		providers = append(providers, routingProviderDTO{
@@ -480,6 +501,7 @@ func routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 			ContextWindow:           route.ContextWindow, MaxCompletionTokens: route.MaxCompletionTokens,
 		})
 	}
+	officialModels, officialLoggedIn := s.officialRoutingModels()
 	command, _, browserUseAvailable := BrowserUseCommand()
 	browserUseStatus := browserUseStatusDTO{Available: browserUseAvailable, Command: command}
 	if !browserUseAvailable {
@@ -487,9 +509,88 @@ func routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 	}
 	return routingSnapshotDTO{
 		Version: snapshot.Version, Providers: providers, ModelRoutes: models,
+		OfficialModels: officialModels, OfficialLoggedIn: officialLoggedIn,
 		Policy: snapshot.Policy, WebSearchCapable: snapshot.Policy.WebSearchCapable,
 		BrowserUse: browserUseStatus, UpdatedAt: snapshot.UpdatedAt,
 	}
+}
+
+func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {
+	effort := strings.TrimSpace(snapshot.Policy.DefaultReasoningEffort)
+	if effort == "" {
+		return nil
+	}
+	if snapshot.Policy.Official {
+		for _, model := range defaultOfficialRoutingModels {
+			if model.Name == snapshot.Policy.Default {
+				if containsReasoningEffort(model.ReasoningEfforts, effort) {
+					return nil
+				}
+				return fmt.Errorf("官方模型 %q 不支持推理强度 %q；可用档位：%s", model.Name, effort, strings.Join(model.ReasoningEfforts, "、"))
+			}
+		}
+		return fmt.Errorf("官方默认模型 %q 不可用", snapshot.Policy.Default)
+	}
+	route, ok := snapshot.Route(snapshot.Policy.Default)
+	if !ok {
+		return fmt.Errorf("默认路由模型 %q 不可用", snapshot.Policy.Default)
+	}
+	if containsReasoningEffort(route.ReasoningEfforts, effort) {
+		return nil
+	}
+	return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", route.Name, effort, strings.Join(route.ReasoningEfforts, "、"))
+}
+
+func containsReasoningEffort(efforts []string, target string) bool {
+	for _, effort := range efforts {
+		if effort == target {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOfficialRoutingPolicy(policy routing.RoutingPolicy) error {
+	allowed := make(map[string]bool, len(defaultOfficialRoutingModels))
+	for _, model := range defaultOfficialRoutingModels {
+		allowed[model.Name] = true
+	}
+	for label, model := range map[string]string{
+		"default":           policy.Default,
+		"web_search":        policy.WebSearch,
+		"subagents.explore": policy.Subagents.Explore,
+		"subagents.plan":    policy.Subagents.Plan,
+	} {
+		if model != "" && !allowed[model] {
+			return fmt.Errorf("官方路由 %s 引用了不可用模型 %q", label, model)
+		}
+	}
+	if policy.Default == "" {
+		return fmt.Errorf("请选择官方默认模型")
+	}
+	return nil
+}
+
+func (s *Server) officialRoutingModels() ([]routingModelDTO, bool) {
+	if s.Paths.GrokHome == "" {
+		return nil, false
+	}
+	if _, err := os.Stat(filepath.Join(s.Paths.GrokHome, "auth.json")); err != nil {
+		return nil, false
+	}
+	models := make([]routingModelDTO, 0, len(defaultOfficialRoutingModels))
+	for _, model := range defaultOfficialRoutingModels {
+		models = append(models, routingModelDTO{
+			ID: model.Name, Name: model.Name, ProviderID: "official", ProfileModel: model.Name,
+			Model: model.Model, APIBackend: "official",
+			SupportsBackendSearch:   model.SupportsBackendSearch,
+			SupportsReasoningEffort: model.SupportsReasoningEffort,
+			ReasoningEfforts:        append([]string(nil), model.ReasoningEfforts...),
+			ReasoningEffortsSource:  model.ReasoningEffortsSource,
+			ContextWindow:           model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+		})
+	}
+	return models, true
 }
 
 func decodeRoutingJSON(w http.ResponseWriter, r *http.Request, out any) error {

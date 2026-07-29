@@ -2618,6 +2618,11 @@ body.resizingChatPanels * {
 }
 
 .nativePaneHead > div { display: grid; gap: 2px; }
+.nativePaneHead > .nativePaneActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 .nativePaneHead strong { font-size: 14px; font-weight: 650; }
 .nativeEyebrow {
   color: var(--muted);

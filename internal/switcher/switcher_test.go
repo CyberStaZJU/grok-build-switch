@@ -9,11 +9,10 @@ import (
 	"grok_switch/internal/profiles"
 )
 
-func TestActivateRejectsMaxBeforeWritingConfig(t *testing.T) {
+func TestActivateAllowsMaxWhenDefaultModelAdvertisesIt(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
-	original := []byte("[models]\ndefault = \"old\"\ndefault_reasoning_effort = \"low\"\n")
-	if err := os.WriteFile(configPath, original, 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("[models]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := profiles.NewStore(filepath.Join(dir, "profiles.json"))
@@ -25,14 +24,14 @@ func TestActivateRejectsMaxBeforeWritingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Switcher{ConfigPath: configPath, BackupsDir: filepath.Join(dir, "backups"), Profiles: store}
-	if _, err := s.Activate(profile.ID); err == nil || !strings.Contains(err.Error(), "不支持 max") {
+	if _, err := s.Activate(profile.ID); err != nil {
 		t.Fatalf("Activate() error = %v", err)
 	}
 	got, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(original) {
-		t.Fatalf("config was modified:\n%s", got)
+	if !strings.Contains(string(got), "default_reasoning_effort = 'max'") && !strings.Contains(string(got), "default_reasoning_effort = \"max\"") {
+		t.Fatalf("max effort was not written:\n%s", got)
 	}
 }

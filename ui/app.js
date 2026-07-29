@@ -47,6 +47,11 @@ let agentActiveAssistant = null;
 let agentActiveThought = null;
 let agentRetryNotice = null;
 let agentSessionSearchTimer = null;
+let agentSessionRefreshTimer = null;
+let agentSessionRefreshGeneration = 0;
+let agentSessionsLastLoadedAt = 0;
+const AGENT_SESSION_REFRESH_INTERVAL_MS = 15000;
+const AGENT_SESSION_REFRESH_STALE_MS = 3000;
 let mermaidReady = false;
 let mermaidRenderID = 0;
 let chatLayoutResizeTimer = null;
@@ -364,7 +369,7 @@ const TEMPLATES = {
 const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const REASONING_EFFORT_LABELS = {
-  none: "禁用推理 (none)", minimal: "最小 (minimal)", low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max，仅部分模型；当前 Grok CLI 不支持)",
+  none: "禁用推理 (none)", minimal: "最小 (minimal)", low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max，仅部分模型)",
 };
 
 function normalizeReasoningEffort(effort) {
@@ -679,9 +684,12 @@ function showView(name) {
     clearSubscriptionLoginPoll();
   }
   if (name === "chat") {
-    openAgentView().catch((err) => toast(err.message, "error"));
+    openAgentView()
+      .catch((err) => toast(err.message, "error"))
+      .finally(syncAgentSessionAutoRefresh);
   } else {
     closeNativeChatPanels();
+    syncAgentSessionAutoRefresh();
   }
 }
 
@@ -818,10 +826,44 @@ async function restoreLastChatContext(status, last = readLastChatContext()) {
 }
 
 async function loadAgentSessions(query = $("agentSessionSearch")?.value || "") {
-  const sessions = await api(`/api/agent/sessions?limit=100&query=${encodeURIComponent(query.trim())}`);
+  const normalizedQuery = query.trim();
+  const generation = ++agentSessionRefreshGeneration;
+  const sessions = await api(`/api/agent/sessions?limit=100&query=${encodeURIComponent(normalizedQuery)}`);
+  if (generation !== agentSessionRefreshGeneration) return state.agentSessions;
   state.agentSessions = Array.isArray(sessions) ? sessions : [];
+  agentSessionsLastLoadedAt = Date.now();
   renderAgentSessionList();
   return state.agentSessions;
+}
+
+function agentSessionLibraryVisible() {
+  if (state.view !== "chat" || document.hidden) return false;
+  if (window.matchMedia("(max-width: 820px)").matches) {
+    return !!$("sessionSidebar")?.classList.contains("open");
+  }
+  return !$("viewChat")?.querySelector(".nativeChatShell")?.classList.contains("sidebarCollapsed");
+}
+
+function refreshAgentSessionsIfStale(force = false) {
+  if (state.view !== "chat" || document.hidden) return Promise.resolve(state.agentSessions);
+  if (!force && Date.now() - agentSessionsLastLoadedAt < AGENT_SESSION_REFRESH_STALE_MS) {
+    return Promise.resolve(state.agentSessions);
+  }
+  return loadAgentSessions();
+}
+
+function syncAgentSessionAutoRefresh() {
+  clearInterval(agentSessionRefreshTimer);
+  agentSessionRefreshTimer = null;
+  if (!agentSessionLibraryVisible()) return;
+  refreshAgentSessionsIfStale().catch(() => {});
+  agentSessionRefreshTimer = setInterval(() => {
+    if (!agentSessionLibraryVisible()) {
+      syncAgentSessionAutoRefresh();
+      return;
+    }
+    loadAgentSessions().catch(() => {});
+  }, AGENT_SESSION_REFRESH_INTERVAL_MS);
 }
 
 function renderAgentSessionList() {
@@ -1142,6 +1184,7 @@ function setNativePanel(name, open) {
 function toggleSessionSidebar(forceOpen) {
   if (window.matchMedia("(max-width: 820px)").matches) {
     setNativePanel("sessions", forceOpen ?? !$("sessionSidebar")?.classList.contains("open"));
+    syncAgentSessionAutoRefresh();
     return;
   }
   const shell = $("viewChat")?.querySelector(".nativeChatShell");
@@ -1150,6 +1193,7 @@ function toggleSessionSidebar(forceOpen) {
   shell.classList.toggle("sidebarCollapsed", collapsed);
   localStorage.setItem("gs_chat_sidebar_hidden", collapsed ? "1" : "0");
   requestAnimationFrame(applyStoredChatPanelWidths);
+  syncAgentSessionAutoRefresh();
 }
 
 function toggleContextRail(forceOpen) {
@@ -1169,6 +1213,7 @@ function closeNativeChatPanels() {
   $("sessionSidebar")?.classList.remove("open");
   $("contextRail")?.classList.remove("open");
   if ($("nativeChatScrim")) $("nativeChatScrim").hidden = true;
+  syncAgentSessionAutoRefresh();
 }
 
 function chatPanelWidthLimit(side, shell) {
@@ -3652,29 +3697,27 @@ function defaultModelCard() {
   }) || null;
 }
 
-function setReasoningEffortOptions(recommended = [], statuses = {}) {
+function fallbackReasoningEffort(efforts) {
+  for (const effort of ["medium", "high", "low", ...efforts]) {
+    if (efforts.includes(effort)) return effort;
+  }
+  return efforts[0] || "";
+}
+
+function setReasoningEffortOptions(supported = REASONING_EFFORTS, statuses = {}) {
   const select = $("defaultReasoningEffort");
   if (!select) return;
-  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "low";
-  const recommendedSet = new Set(recommended.filter((effort) => REASONING_EFFORTS.includes(effort)));
-  select.replaceChildren(...REASONING_EFFORTS.map((effort) => {
+  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "";
+  const allowed = unique(supported.filter((effort) => REASONING_EFFORTS.includes(effort)));
+  const options = allowed.length ? allowed : ["low", "medium", "high"];
+  select.replaceChildren(...options.map((effort) => {
     const option = document.createElement("option");
     option.value = effort;
-    const status = statuses[effort];
-    const suffix = status === "unsupported" ? " — 不支持" : status === "unknown" ? " — 未知" : recommendedSet.has(effort) ? " — 推荐" : "";
+    const suffix = statuses[effort] === "accepted" ? " — 已检测" : "";
     option.textContent = `${REASONING_EFFORT_LABELS[effort]}${suffix}`;
     return option;
   }));
-  if (current === "max" && statuses.max === "unsupported") {
-    select.value = "low";
-    const statusElement = $("reasoningEffortStatus");
-    if (statusElement) {
-      statusElement.textContent = "当前模型明确不支持 max，已自动回退到 low。";
-      statusElement.classList.add("warn");
-    }
-    return;
-  }
-  select.value = current;
+  select.value = options.includes(current) ? current : fallbackReasoningEffort(options);
 }
 
 function updateReasoningEffortMetadata() {
@@ -3684,16 +3727,15 @@ function updateReasoningEffortMetadata() {
   const selected = $("defaultModel")?.value || "";
   const card = defaultModelCard();
   const efforts = card ? JSON.parse(card.dataset.reasoningEfforts || "[]") : [];
-  const source = card?.dataset.reasoningEffortsSource || "";
-  const declared = source === "declared" ? efforts : [];
-  setReasoningEffortOptions(declared);
+  const supported = efforts.length ? efforts : ["low", "medium", "high"];
+  setReasoningEffortOptions(supported);
   if (!selected) {
-    status.textContent = "选择默认模型后可检测；所有档位均可手动选择。";
-  } else if (declared.length) {
-    status.textContent = `模型明确声明支持：${declared.join("、")}；其他档位仍可手动选择。`;
+    status.textContent = "选择默认模型后，将按该模型能力显示推理档位。";
+  } else if (efforts.length) {
+    status.textContent = `当前模型可用档位：${supported.join("、")}。`;
     status.classList.add("ok");
   } else {
-    status.textContent = "模型未声明支持档位，可检测；所有档位仍可手动选择。";
+    status.textContent = "模型未声明档位，暂按兼容默认值 low、medium、high；可点击检测更新。";
   }
 }
 
@@ -3728,7 +3770,11 @@ async function detectReasoningEfforts() {
     const recommended = data.source === "declared"
       ? (data.efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort))
       : (data.results || []).filter((item) => item.status === "accepted").map((item) => item.effort);
-    setReasoningEffortOptions(recommended, statuses);
+    if (recommended.length && latestCard) {
+      latestCard.dataset.reasoningEfforts = JSON.stringify(recommended);
+      latestCard.dataset.reasoningEffortsSource = data.source === "declared" ? "declared" : "probe";
+    }
+    setReasoningEffortOptions(recommended.length ? recommended : ["low", "medium", "high"], statuses);
     const details = data.source === "declared"
       ? [`模型明确声明支持：${recommended.join("、") || "未提供档位"}`]
       : (data.results || []).map((item) => {
@@ -3737,12 +3783,12 @@ async function detectReasoningEfforts() {
       return `${item.effort}：未知`;
     });
     if (status) {
-      status.textContent = [details.join("；"), data.note].filter(Boolean).join("。") || "检测完成；所有档位仍可手动选择。";
+      status.textContent = [details.join("；"), data.note].filter(Boolean).join("。") || "检测完成，已按模型能力更新可选档位。";
       status.classList.add(recommended.length ? "ok" : "warn");
     }
   } catch (err) {
     if (status) {
-      status.textContent = `检测失败：${err.message || String(err)}；仍可手动选择所有档位。`;
+      status.textContent = `检测失败：${err.message || String(err)}；继续使用模型已保存的能力档位。`;
       status.classList.add("fail");
     }
     throw err;
@@ -4725,6 +4771,22 @@ $("agentSessionSearch").oninput = () => {
   clearTimeout(agentSessionSearchTimer);
   agentSessionSearchTimer = setTimeout(() => loadAgentSessions().catch((err) => toast(err.message, "error")), 180);
 };
+$("refreshAgentSessionsBtn").onclick = () => run(
+  () => loadAgentSessions(),
+  { button: $("refreshAgentSessionsBtn"), busyLabel: "…", success: "对话库已刷新" },
+);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    syncAgentSessionAutoRefresh();
+    return;
+  }
+  refreshAgentSessionsIfStale(true).catch(() => {});
+  syncAgentSessionAutoRefresh();
+});
+window.addEventListener("focus", () => {
+  refreshAgentSessionsIfStale().catch(() => {});
+  syncAgentSessionAutoRefresh();
+});
 $("openSessionSidebarBtn").onclick = () => toggleSessionSidebar();
 $("closeSessionSidebarBtn").onclick = () => toggleSessionSidebar(false);
 $("openContextRailBtn").onclick = () => toggleContextRail();
@@ -5529,9 +5591,16 @@ function renderRouting(snapshot) {
   const modelCount = $("routingModelCount");
   const policy = snapshot.policy || {};
   const modelRoutes = snapshot.model_routes || [];
+  const officialModels = snapshot.official_logged_in ? (snapshot.official_models || []) : [];
   const providers = snapshot.providers || [];
+  const selectableRoutes = [
+    ...officialModels.map((route) => ({ ...route, official: true })),
+    ...modelRoutes.map((route) => ({ ...route, official: false })),
+  ];
 
-  // Populate policy dropdowns
+  // Populate policy dropdowns. Official models are exposed only when the
+  // native Grok login exists; selecting one switches the whole policy to
+  // official auth because official and custom endpoints cannot be mixed.
   const dropdownValues = {
     routingDefault: policy.default || "",
     routingWebSearch: policy.web_search || "",
@@ -5541,26 +5610,62 @@ function renderRouting(snapshot) {
   for (const [selectId, policyValue] of Object.entries(dropdownValues)) {
     const sel = $(selectId);
     if (!sel) continue;
-    const current = policyValue;
+    const current = policy.official && policyValue ? `official:${policyValue}` : policyValue;
     sel.innerHTML = '<option value="">（未设置）</option>';
-    for (const route of modelRoutes) {
+    for (const route of selectableRoutes) {
       const opt = document.createElement("option");
-      opt.value = route.name;
-      const nativeSearch = routeHasNativeSearch(route);
+      opt.value = route.official ? `official:${route.name}` : route.name;
+      opt.dataset.routeName = route.name;
+      opt.dataset.official = route.official ? "1" : "0";
+      const nativeSearch = route.official || routeHasNativeSearch(route);
+      const providerLabel = route.official ? "官方账号" : "自定义路由";
       if (selectId === "routingWebSearch" && !nativeSearch) {
         opt.textContent = `${route.name} — ${route.model}（浏览器回退）`;
         opt.disabled = snapshot.browser_use?.available !== true;
       } else {
-        opt.textContent = `${route.name} — ${route.model}`;
+        opt.textContent = `${route.name} — ${route.model}（${providerLabel}）`;
       }
       sel.appendChild(opt);
     }
     sel.value = current;
   }
 
-  // Populate reasoning effort
-  const effortSel = $("routingReasoningEffort");
-  if (effortSel) effortSel.value = policy.default_reasoning_effort || "none";
+  const updateRoutingReasoningEfforts = () => {
+    const selected = $("routingDefault")?.selectedOptions?.[0];
+    const routeName = selected?.dataset.routeName || "";
+    const official = selected?.dataset.official === "1";
+    const route = selectableRoutes.find((item) => item.name === routeName && item.official === official);
+    const supported = (route?.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort));
+    const options = supported.length ? supported : ["low", "medium", "high"];
+    const effortSel = $("routingReasoningEffort");
+    if (!effortSel) return;
+    const current = REASONING_EFFORTS.includes(effortSel.value) ? effortSel.value : policy.default_reasoning_effort;
+    effortSel.replaceChildren(...options.map((effort) => {
+      const option = document.createElement("option");
+      option.value = effort;
+      option.textContent = REASONING_EFFORT_LABELS[effort];
+      return option;
+    }));
+    effortSel.value = options.includes(current) ? current : fallbackReasoningEffort(options);
+  };
+
+  const defaultSelect = $("routingDefault");
+  if (defaultSelect) {
+    defaultSelect.onchange = () => {
+      const selected = defaultSelect.selectedOptions?.[0];
+      if (!selected?.value) return;
+      const official = selected.dataset.official === "1";
+      for (const selectId of ["routingWebSearch", "routingExplore", "routingPlan"]) {
+        const target = $(selectId);
+        const currentOption = target?.selectedOptions?.[0];
+        if (!target || !currentOption?.value || (currentOption.dataset.official === "1") === official) continue;
+        const matching = [...target.options].find((option) => option.dataset.official === selected.dataset.official && option.dataset.routeName === selected.dataset.routeName);
+        target.value = matching?.value || "";
+      }
+      updateRoutingReasoningEfforts();
+    };
+  }
+  updateRoutingReasoningEfforts();
 
   if (routingStatus) {
     routingStatus.textContent = `更新于 ${snapshot.updated_at ? new Date(snapshot.updated_at).toLocaleTimeString("zh-CN") : "—"} · ${providers.length} 个供应商 · ${modelRoutes.length} 个模型`;
@@ -5624,13 +5729,24 @@ function renderCodeBuddyStatus(status) {
 }
 
 function saveRoutingPolicy() {
+  const defaultSelect = $("routingDefault");
+  const selectedRoute = (selectId) => {
+    const option = $(selectId)?.selectedOptions?.[0];
+    return { name: option?.dataset.routeName || "", official: option?.dataset.official === "1" };
+  };
+  const defaultRoute = selectedRoute("routingDefault");
+  const webSearchRoute = selectedRoute("routingWebSearch");
+  const exploreRoute = selectedRoute("routingExplore");
+  const planRoute = selectedRoute("routingPlan");
+  const official = defaultRoute.official;
   const policy = {
-    default: $("routingDefault")?.value || "",
+    official,
+    default: defaultRoute.name,
     default_reasoning_effort: $("routingReasoningEffort")?.value || "none",
-    web_search: $("routingWebSearch")?.value || "",
+    web_search: webSearchRoute.official === official ? webSearchRoute.name : "",
     subagents: {
-      explore: $("routingExplore")?.value || "",
-      plan: $("routingPlan")?.value || "",
+      explore: exploreRoute.official === official ? exploreRoute.name : "",
+      plan: planRoute.official === official ? planRoute.name : "",
     },
   };
   run(async () => {
@@ -5654,6 +5770,10 @@ $("backFromSessionGraphBtn").onclick = () => showView("home");
 let organizeState = { taskID: null, results: [], selected: new Set(), timer: null };
 
 function openOrganizePanel() {
+  if (organizeState.taskID) {
+    api("/api/agent/sessions/analyze?task_id=" + encodeURIComponent(organizeState.taskID), { method: "DELETE" }).catch(() => {});
+  }
+  if (organizeState.timer) clearInterval(organizeState.timer);
   organizeState = { taskID: null, results: [], selected: new Set(), timer: null };
   const panel = $("organizePanel");
   if (!panel) return;
@@ -5669,9 +5789,14 @@ function openOrganizePanel() {
 }
 
 function closeOrganizePanel() {
+  const taskID = organizeState.taskID;
   const panel = $("organizePanel");
   if (panel) { panel.hidden = true; panel.style.display = "none"; }
   if (organizeState.timer) { clearInterval(organizeState.timer); organizeState.timer = null; }
+  if (taskID) {
+    api("/api/agent/sessions/analyze?task_id=" + encodeURIComponent(taskID), { method: "DELETE" }).catch(() => {});
+    organizeState.taskID = null;
+  }
 }
 
 async function startOrganizeAnalysis() {
@@ -5696,10 +5821,11 @@ async function pollOrganizeProgress() {
     const pct = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
     $("organizeProgressBarFill").style.width = pct + "%";
     $("organizeProgressText").textContent = `分析中… ${task.completed} / ${task.total}`;
-    if (task.status === "completed" || task.status === "failed") {
+    if (["completed", "failed", "cancelled"].includes(task.status)) {
       if (organizeState.timer) { clearInterval(organizeState.timer); organizeState.timer = null; }
-      if (task.status === "failed") {
-        $("organizeProgressText").textContent = "分析失败: " + (task.error || "未知错误");
+      organizeState.taskID = null;
+      if (task.status !== "completed") {
+        $("organizeProgressText").textContent = (task.status === "cancelled" ? "分析已取消" : "分析失败") + ": " + (task.error || "未知错误");
         return;
       }
       organizeState.results = task.results || [];

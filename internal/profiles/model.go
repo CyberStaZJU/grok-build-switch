@@ -1,6 +1,10 @@
 package profiles
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 type ModelDef struct {
 	Name                    string            `json:"name"`
@@ -18,19 +22,19 @@ type ModelDef struct {
 }
 
 type Profile struct {
-	ID                     string          `json:"id"`
-	Name                   string          `json:"name"`
-	Source                 string          `json:"source,omitempty"`
-	Template               string          `json:"template,omitempty"`
-	UpstreamFormat         string          `json:"upstream_format"`
-	BaseURL                string          `json:"base_url"`
-	APIKey                 string          `json:"api_key"`
-	AvailableModels        []string        `json:"available_models"`
-	DefaultModel           string          `json:"default_model"`
-	DefaultReasoningEffort string          `json:"default_reasoning_effort"`
-	Models                 []ModelDef      `json:"models"`
-	CreatedAt              time.Time       `json:"created_at"`
-	UpdatedAt              time.Time       `json:"updated_at"`
+	ID                     string     `json:"id"`
+	Name                   string     `json:"name"`
+	Source                 string     `json:"source,omitempty"`
+	Template               string     `json:"template,omitempty"`
+	UpstreamFormat         string     `json:"upstream_format"`
+	BaseURL                string     `json:"base_url"`
+	APIKey                 string     `json:"api_key"`
+	AvailableModels        []string   `json:"available_models"`
+	DefaultModel           string     `json:"default_model"`
+	DefaultReasoningEffort string     `json:"default_reasoning_effort"`
+	Models                 []ModelDef `json:"models"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 func (p Profile) Matches(other Profile) bool {
@@ -99,6 +103,27 @@ func modelEqual(a, b ModelDef) bool {
 
 func (p Profile) EffectiveAPIKey() string {
 	return effectiveAPIKey(p)
+}
+
+// ValidateDefaultReasoningEffort ensures the profile-level default is accepted
+// by the selected default model. Grok Build treats each model's advertised
+// reasoning menu as authoritative rather than accepting every canonical tier.
+func ValidateDefaultReasoningEffort(p Profile) error {
+	p = Normalize(p)
+	effort := strings.TrimSpace(p.DefaultReasoningEffort)
+	if effort == "" || strings.TrimSpace(p.DefaultModel) == "" {
+		return nil
+	}
+	for _, model := range p.Models {
+		if model.Name != p.DefaultModel && model.Model != p.DefaultModel {
+			continue
+		}
+		if containsString(model.ReasoningEfforts, effort) {
+			return nil
+		}
+		return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", p.DefaultModel, effort, strings.Join(model.ReasoningEfforts, "、"))
+	}
+	return fmt.Errorf("默认模型 %q 不在已启用模型列表中", p.DefaultModel)
 }
 
 func Normalize(p Profile) Profile {
@@ -198,6 +223,15 @@ func effectiveAPIKey(p Profile) string {
 		}
 	}
 	return ""
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueStrings(in []string) []string {

@@ -106,6 +106,47 @@ func TestOrganizePanelRespectsHiddenAttribute(t *testing.T) {
 	}
 }
 
+func TestOrganizeSessionsCancelsBackgroundWork(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`method: "DELETE"`,
+		`/api/agent/sessions/analyze?task_id=`,
+		`["completed", "failed", "cancelled"]`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("organize cancellation behavior is missing %q", fragment)
+		}
+	}
+}
+
+func TestSessionLibraryRefreshesFromDisk(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(htmlData, []byte(`id="refreshAgentSessionsBtn"`)) {
+		t.Fatal("session library must expose a manual refresh control")
+	}
+	for _, fragment := range []string{
+		"AGENT_SESSION_REFRESH_INTERVAL_MS",
+		"syncAgentSessionAutoRefresh",
+		`document.addEventListener("visibilitychange"`,
+		`window.addEventListener("focus"`,
+		`$("refreshAgentSessionsBtn").onclick`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("session library refresh behavior is missing %q", fragment)
+		}
+	}
+}
+
 func TestProfileEditorUsesSaveOnly(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
@@ -153,6 +194,11 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 	appData, err := assets.ReadFile("ui/app.js")
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, expected := range []string{"snapshot.official_models", "snapshot.official_logged_in", "opt.dataset.official", "official,"} {
+		if !bytes.Contains(appData, []byte(expected)) {
+			t.Fatalf("official Grok routing UI behavior missing: %s", expected)
+		}
 	}
 	for _, stale := range []string{`$("webSearchModel")`, `$("subagentsExploreModel")`, `$("subagentsPlanModel")`} {
 		if bytes.Contains(appData, []byte(stale)) {
@@ -245,7 +291,7 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 		}
 	}
 	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-	wantLabels := []string{"禁用推理 (none)", "最小 (minimal)", "低 (low)", "中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max，仅部分模型；当前 Grok CLI 不支持)"}
+	wantLabels := []string{"禁用推理 (none)", "最小 (minimal)", "低 (low)", "中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max，仅部分模型)"}
 	if len(values) != len(want) {
 		t.Fatalf("defaultReasoningEffort options = %v, want %v", values, want)
 	}
@@ -270,6 +316,11 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	}
 	if !bytes.Contains(appData, []byte("/api/models/reasoning-efforts")) {
 		t.Fatal("reasoning effort discovery endpoint not found")
+	}
+	for _, fragment := range []string{"fallbackReasoningEffort", "updateRoutingReasoningEfforts", "route?.reasoning_efforts", "已按模型能力更新可选档位"} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("model-aware reasoning effort behavior missing: %s", fragment)
+		}
 	}
 	if !bytes.Contains(appData, []byte("上游接受请求，可能静默忽略")) {
 		t.Fatal("accepted reasoning effort disclaimer not found")

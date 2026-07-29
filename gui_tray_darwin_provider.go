@@ -15,11 +15,11 @@ import (
 
 // routingSnapshot carries macOS menu-bar routing state.
 type routingSnapshot struct {
-	Official        bool          `json:"official"`
-	DefaultModel    string        `json:"default_model"`
-	WebSearchModel  string        `json:"web_search_model"`
-	ExploreModel    string        `json:"explore_model"`
-	PlanModel       string        `json:"plan_model"`
+	Official        bool           `json:"official"`
+	DefaultModel    string         `json:"default_model"`
+	WebSearchModel  string         `json:"web_search_model"`
+	ExploreModel    string         `json:"explore_model"`
+	PlanModel       string         `json:"plan_model"`
 	AvailableModels []routingModel `json:"available_models"`
 }
 
@@ -40,10 +40,10 @@ func (s routingSnapshot) fingerprint() string {
 
 // cacheStatsSnapshot holds a summary of cache statistics for menu display.
 type cacheStatsSnapshot struct {
-	Turns              int     `json:"turns"`
-	PromptTokens       int64   `json:"prompt_tokens"`
-	CachedPromptTokens int64   `json:"cached_prompt_tokens"`
-	CompletionTokens   int64   `json:"completion_tokens"`
+	Turns              int      `json:"turns"`
+	PromptTokens       int64    `json:"prompt_tokens"`
+	CachedPromptTokens int64    `json:"cached_prompt_tokens"`
+	CompletionTokens   int64    `json:"completion_tokens"`
 	HitRate            *float64 `json:"hit_rate"`
 }
 
@@ -87,13 +87,21 @@ func (c *darwinTrayProviderClient) snapshot(ctx context.Context) (routingSnapsho
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"model_routes"`
+		OfficialModels []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"official_models"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/api/routing", &routingResp); err != nil {
 		return routingSnapshot{}, err
 	}
 
-	models := make([]routingModel, 0, len(routingResp.ModelRoutes))
-	for _, m := range routingResp.ModelRoutes {
+	routes := routingResp.ModelRoutes
+	if status.OfficialActive {
+		routes = routingResp.OfficialModels
+	}
+	models := make([]routingModel, 0, len(routes))
+	for _, m := range routes {
 		models = append(models, routingModel{ID: m.ID, Name: m.Name})
 	}
 

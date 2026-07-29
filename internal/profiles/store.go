@@ -65,6 +65,9 @@ func (s *Store) Create(profile Profile) (Profile, error) {
 		profile.CreatedAt = now
 	}
 	profile = Normalize(profile)
+	if err := ValidateDefaultReasoningEffort(profile); err != nil {
+		return Profile{}, err
+	}
 	profile.UpdatedAt = now
 	profiles = append(profiles, profile)
 	if err := s.writeLocked(profiles); err != nil {
@@ -86,6 +89,9 @@ func (s *Store) Update(id string, next Profile) (Profile, error) {
 			next.CreatedAt = profiles[i].CreatedAt
 			next.UpdatedAt = time.Now()
 			next = Normalize(next)
+			if err := ValidateDefaultReasoningEffort(next); err != nil {
+				return Profile{}, err
+			}
 			profiles[i] = next
 			if err := s.writeLocked(profiles); err != nil {
 				return Profile{}, err
@@ -118,8 +124,6 @@ func (s *Store) Delete(id string) error {
 	return s.writeLocked(next)
 }
 
-
-
 func (s *Store) EnsureDir() error {
 	return os.MkdirAll(filepath.Dir(s.path), 0o700)
 }
@@ -128,7 +132,7 @@ func (s *Store) EnsureDir() error {
 // on the Profile struct. These are now owned by the routing policy, but old
 // profiles.json files may still carry them and need one-time migration.
 type LegacyRoutingFields struct {
-	WebSearch   string `json:"web_search_model"`
+	WebSearch        string `json:"web_search_model"`
 	SubagentsExplore string `json:"subagents_explore_model"`
 	SubagentsPlan    string `json:"subagents_plan_model"`
 }

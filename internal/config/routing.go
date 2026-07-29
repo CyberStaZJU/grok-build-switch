@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"grok_switch/internal/profiles"
@@ -54,7 +55,11 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 
 func ApplyRoutingToFile(path string, snapshot routing.Snapshot) error {
 	if snapshot.Policy.Official {
-		return UseOfficialAuthToFile(path)
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return atomicWrite(path, ApplyOfficialRoutingText(data, snapshot.Policy))
 	}
 	profile, err := ProfileForRouting(snapshot)
 	if err != nil {
@@ -82,7 +87,7 @@ func PreviewRouting(path string, snapshot routing.Snapshot) ([]byte, error) {
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		return UseOfficialAuthText(data), nil
+		return ApplyOfficialRoutingText(data, snapshot.Policy), nil
 	}
 	profile, err := ProfileForRouting(snapshot)
 	if err != nil {
@@ -96,6 +101,82 @@ func PreviewRouting(path string, snapshot routing.Snapshot) ([]byte, error) {
 		full = []byte(strings.TrimRight(strings.Join(policyLines, "\n"), "\n") + "\n")
 	}
 	return full, nil
+}
+
+// ApplyOfficialRoutingText removes custom provider definitions while retaining
+// the user's selected official Grok model pins. Official model IDs do not need
+// [model.*] definitions: the logged-in Grok CLI resolves them from grok.com.
+func ApplyOfficialRoutingText(data []byte, policy routing.RoutingPolicy) []byte {
+	clean := UseOfficialAuthText(data)
+	values := map[string]string{}
+	if model := strings.TrimSpace(policy.Default); model != "" {
+		values["default"] = quote(model)
+	}
+	if effort := strings.TrimSpace(policy.DefaultReasoningEffort); effort != "" && effort != "none" {
+		values["default_reasoning_effort"] = quote(effort)
+	}
+	if model := strings.TrimSpace(policy.WebSearch); model != "" {
+		values["web_search"] = quote(model)
+	}
+	if len(values) == 0 && policy.Subagents.Explore == "" && policy.Subagents.Plan == "" {
+		return clean
+	}
+	lines := rewriteOfficialPolicySections(splitLines(string(clean)), values, policy.Subagents)
+	if len(lines) == 0 {
+		return nil
+	}
+	return []byte(strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n")
+}
+
+func rewriteOfficialPolicySections(lines []string, modelValues map[string]string, subagents routing.SubagentsPolicy) []string {
+	sectionValues := map[string]map[string]string{}
+	if len(modelValues) > 0 {
+		sectionValues["models"] = modelValues
+	}
+	subagentValues := map[string]string{}
+	if value := strings.TrimSpace(subagents.Explore); value != "" {
+		subagentValues["explore"] = quote(value)
+	}
+	if value := strings.TrimSpace(subagents.Plan); value != "" {
+		subagentValues["plan"] = quote(value)
+	}
+	if len(subagentValues) > 0 {
+		sectionValues["subagents.models"] = subagentValues
+	}
+	out := make([]string, 0, len(lines)+len(modelValues)+len(subagentValues)+4)
+	seen := map[string]bool{}
+	for i := 0; i < len(lines); {
+		header := parseHeader(lines[i])
+		values, managed := sectionValues[header]
+		if !managed {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+		end := skipSection(lines, i+1)
+		out = append(out, rewriteValues(lines[i:end], values)...)
+		seen[header] = true
+		i = end
+	}
+	for _, section := range []string{"models", "subagents.models"} {
+		values := sectionValues[section]
+		if len(values) == 0 || seen[section] {
+			continue
+		}
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+		out = append(out, "["+section+"]")
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			out = append(out, key+" = "+values[key])
+		}
+	}
+	return out
 }
 
 func SnippetForRouting(snapshot routing.Snapshot) (string, error) {
@@ -135,7 +216,7 @@ func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error)
 		if err != nil {
 			return false, err
 		}
-		official := UseOfficialAuthText(data)
+		official := ApplyOfficialRoutingText(data, snapshot.Policy)
 		return string(data) == string(official), nil
 	}
 	profile, err := ProfileForRouting(snapshot)

@@ -219,3 +219,38 @@ func mustJSON(t *testing.T, value any) string {
 	}
 	return string(data)
 }
+
+func TestApplyOfficialRoutingTextKeepsOfficialModelPins(t *testing.T) {
+	input := []byte(`[endpoints]
+models_base_url = "https://private.example/v1"
+image_base_url = "https://images.example/v1"
+
+[models]
+default = "custom-model"
+web_search = "custom-search"
+temperature = 0.2
+
+[model.custom-model]
+model = "upstream-model"
+api_key = "secret"
+
+[subagents.models]
+explore = "custom-model"
+plan = "custom-model"
+`)
+	policy := routing.RoutingPolicy{
+		Official: true, Default: "grok-4.5", DefaultReasoningEffort: "high", WebSearch: "grok-4.5",
+		Subagents: routing.SubagentsPolicy{Explore: "grok-4.5", Plan: "grok-4.5"},
+	}
+	text := string(ApplyOfficialRoutingText(input, policy))
+	for _, want := range []string{`default = 'grok-4.5'`, `default_reasoning_effort = 'high'`, `web_search = 'grok-4.5'`, `explore = 'grok-4.5'`, `plan = 'grok-4.5'`, `temperature = 0.2`, `image_base_url = "https://images.example/v1"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("official routing output missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"models_base_url", "private.example", "upstream-model", "api_key", "secret"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("official routing output retained %q:\n%s", forbidden, text)
+		}
+	}
+}

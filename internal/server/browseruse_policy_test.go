@@ -123,7 +123,7 @@ func TestMcpServersForSubagent_MissingBrowserUseIsExplicitlyUnavailable(t *testi
 	if servers := McpServersForSubagent(snapshot, "explore"); len(servers) != 0 {
 		t.Fatalf("missing browser-use command should not create a server: %#v", servers)
 	}
-	dto := routingDTO(snapshot)
+	dto := (&Server{}).routingDTO(snapshot)
 	if dto.BrowserUse.Available || dto.BrowserUse.Error == "" {
 		t.Fatalf("browser-use status = %#v", dto.BrowserUse)
 	}

@@ -20,6 +20,20 @@ import (
 
 const grokAuthProfileName = "Grok Auth（本地代理）"
 
+var defaultOfficialRoutingModels = []profiles.ModelDef{
+	{
+		Name:                    "grok-4.5",
+		Model:                   "grok-4.5",
+		APIBackend:              "official",
+		SupportsBackendSearch:   true,
+		SupportsReasoningEffort: true,
+		ReasoningEfforts:        []string{"low", "medium", "high"},
+		ReasoningEffortsSource:  "declared",
+		ContextWindow:           500000,
+		MaxCompletionTokens:     65536,
+	},
+}
+
 var defaultGrokAuthModels = []profiles.ModelDef{
 	{
 		Name:                  "grok-4.5",

@@ -37,8 +37,8 @@ func (s *Switcher) Activate(id string) (profiles.Profile, error) {
 	if err != nil {
 		return profiles.Profile{}, err
 	}
-	if profile.DefaultReasoningEffort == "max" {
-		return profiles.Profile{}, fmt.Errorf("无法启用：当前 Grok CLI 的 models.default_reasoning_effort schema 不支持 max；该档位已保存在模型能力元数据中，请改用 xhigh 或更低档位后再启用")
+	if err := profiles.ValidateDefaultReasoningEffort(profile); err != nil {
+		return profiles.Profile{}, fmt.Errorf("无法启用：%w", err)
 	}
 	if _, err := s.Backup(); err != nil {
 		return profiles.Profile{}, err

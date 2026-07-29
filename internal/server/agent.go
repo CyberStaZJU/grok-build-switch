@@ -605,13 +605,41 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // ——— Session Analysis (对话整理) ———
 
 type sessionAnalysisTask struct {
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	ID        string
+	Status    string // running, completed, failed, cancelled
+	Total     int
+	Completed int
+	Results   []sessionAnalysisResult
+	Error     string
+	CreatedAt time.Time
+}
+
+type sessionAnalysisTaskSnapshot struct {
 	ID        string                  `json:"id"`
-	Status    string                  `json:"status"` // pending, running, completed, failed
+	Status    string                  `json:"status"`
 	Total     int                     `json:"total"`
 	Completed int                     `json:"completed"`
 	Results   []sessionAnalysisResult `json:"results"`
 	Error     string                  `json:"error,omitempty"`
 	CreatedAt time.Time               `json:"created_at"`
+}
+
+func (t *sessionAnalysisTask) snapshot() sessionAnalysisTaskSnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	results := append([]sessionAnalysisResult(nil), t.Results...)
+	return sessionAnalysisTaskSnapshot{
+		ID: t.ID, Status: t.Status, Total: t.Total, Completed: t.Completed,
+		Results: results, Error: t.Error, CreatedAt: t.CreatedAt,
+	}
+}
+
+func (t *sessionAnalysisTask) update(fn func(*sessionAnalysisTask)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fn(t)
 }
 
 type sessionAnalysisResult struct {
@@ -637,6 +665,8 @@ func (s *Server) handleAgentSessionsAnalyze(w http.ResponseWriter, r *http.Reque
 		s.startSessionAnalysis(w, r)
 	case http.MethodGet:
 		s.getSessionAnalysis(w, r)
+	case http.MethodDelete:
+		s.cancelSessionAnalysis(w, r)
 	default:
 		methodNotAllowed(w)
 	}
@@ -670,22 +700,32 @@ func (s *Server) startSessionAnalysis(w http.ResponseWriter, r *http.Request) {
 		BaseURL:    route.BaseURL,
 		APIKey:     route.APIKey,
 	}
-	// Create task.
+	// Only one organizer may run at a time. Multiple abandoned background tasks
+	// can otherwise overload a single subscription account and make CLIProxyAPI
+	// temporarily mark its only auth entry unavailable.
 	analysisTasksMu.Lock()
+	for _, existing := range analysisTasks {
+		if existing.snapshot().Status == "running" {
+			analysisTasksMu.Unlock()
+			writeError(w, errors.New("已有对话整理任务正在运行，请等待完成或先取消"), http.StatusConflict)
+			return
+		}
+	}
 	atomic.AddUint64(&analysisCounter, 1)
 	taskID := fmt.Sprintf("analysis-%d", analysisCounter)
+	ctx, cancel := context.WithCancel(context.Background())
 	task := &sessionAnalysisTask{
 		ID:        taskID,
 		Status:    "running",
 		Total:     len(sessions),
 		CreatedAt: time.Now(),
 		Results:   make([]sessionAnalysisResult, 0, len(sessions)),
+		cancel:    cancel,
 	}
 	analysisTasks[taskID] = task
 	analysisTasksMu.Unlock()
 
-	// Start background analysis.
-	go s.runSessionAnalysis(task, sessions, llmRoute)
+	go s.runSessionAnalysis(ctx, task, sessions, llmRoute)
 
 	writeJSON(w, map[string]any{"task_id": taskID, "total": len(sessions)})
 }
@@ -703,23 +743,54 @@ func (s *Server) getSessionAnalysis(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("任务不存在"), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, task)
+	writeJSON(w, task.snapshot())
 }
 
-func (s *Server) runSessionAnalysis(task *sessionAnalysisTask, sessions []agentbridge.SessionSummary, route routing.ModelRoute) {
+func (s *Server) cancelSessionAnalysis(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
+	if taskID == "" {
+		writeError(w, errors.New("task_id 不能为空"), http.StatusBadRequest)
+		return
+	}
+	analysisTasksMu.Lock()
+	task, ok := analysisTasks[taskID]
+	analysisTasksMu.Unlock()
+	if !ok {
+		writeError(w, errors.New("任务不存在"), http.StatusNotFound)
+		return
+	}
+	task.mu.Lock()
+	cancel := task.cancel
+	if task.Status == "running" {
+		task.Status = "cancelled"
+		task.Error = "用户已取消"
+	}
+	task.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) runSessionAnalysis(ctx context.Context, task *sessionAnalysisTask, sessions []agentbridge.SessionSummary, route routing.ModelRoute) {
 	defer func() {
 		if r := recover(); r != nil {
-			task.Status = "failed"
-			task.Error = fmt.Sprintf("分析 panic: %v", r)
+			task.update(func(task *sessionAnalysisTask) {
+				task.Status = "failed"
+				task.Error = fmt.Sprintf("分析 panic: %v", r)
+			})
 		}
 	}()
 
 	for i, session := range sessions {
+		if ctx.Err() != nil {
+			return
+		}
 		// Read session history.
 		history, err := s.Agent.StoredSessionHistory(session.ID)
 		if err != nil {
 			// Session might have been deleted, skip.
-			task.Completed = i + 1
+			task.update(func(task *sessionAnalysisTask) { task.Completed = i + 1 })
 			continue
 		}
 		// Build conversation summary.
@@ -757,28 +828,45 @@ func (s *Server) runSessionAnalysis(task *sessionAnalysisTask, sessions []agentb
 			if len(conversation) > 3000 {
 				conversation = conversation[:3000]
 			}
-			title, shouldDelete, reason := s.analyzeSessionConversation(route, conversation)
+			title, shouldDelete, reason, err := s.analyzeSessionConversation(ctx, route, conversation)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				task.update(func(task *sessionAnalysisTask) {
+					task.Status = "failed"
+					task.Error = err.Error()
+				})
+				return
+			}
 			result.SuggestedTitle = title
 			result.ShouldDelete = shouldDelete
 			result.Reason = reason
 		}
 
-		task.Results = append(task.Results, result)
-		task.Completed = i + 1
+		task.update(func(task *sessionAnalysisTask) {
+			task.Results = append(task.Results, result)
+			task.Completed = i + 1
+		})
 	}
-	task.Status = "completed"
+	task.update(func(task *sessionAnalysisTask) { task.Status = "completed" })
 }
 
 // analyzeSessionConversation calls the default model to analyze a single session.
 // It looks up the profile to get connection info (BaseURL, APIKey).
-func (s *Server) analyzeSessionConversation(route routing.ModelRoute, conversation string) (title string, shouldDelete bool, reason string) {
+func (s *Server) analyzeSessionConversation(ctx context.Context, route routing.ModelRoute, conversation string) (title string, shouldDelete bool, reason string, err error) {
 	// Route is already hydrated with BaseURL and APIKey. Use route.Name as provider name.
-	return s.generateSessionTitle(route, conversation, route.Name)
+	return s.generateSessionTitleContext(ctx, route, conversation, route.Name)
 }
 
 // generateSessionTitle calls the LLM to analyze the conversation and generate a title.
-// Returns (title, shouldDelete, reason).
+// It remains best-effort for automatic single-session titles.
 func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, providerName string) (string, bool, string) {
+	title, shouldDelete, reason, _ := s.generateSessionTitleContext(context.Background(), route, conversation, providerName)
+	return title, shouldDelete, reason
+}
+
+func (s *Server) generateSessionTitleContext(ctx context.Context, route routing.ModelRoute, conversation, providerName string) (string, bool, string, error) {
 	prompt := fmt.Sprintf(
 		"Analyze this conversation and respond in JSON format with three fields:\n"+
 			"- title: a concise session title (max 10 words, in the language of the conversation)\n"+
@@ -819,12 +907,12 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] marshal error: %v\n", err)
-		return "", false, ""
+		return "", false, "", err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] request error: %v\n", err)
-		return "", false, ""
+		return "", false, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if route.APIKey != "" {
@@ -837,24 +925,27 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] LLM call error: %v\n", err)
-		return "", false, ""
+		return "", false, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		preview := respBody[:min(len(respBody), 200)]
 		fmt.Fprintf(os.Stderr, "[organize] LLM status %d: %s\n", resp.StatusCode, string(preview))
-		return "", false, ""
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || bytes.Contains(bytes.ToLower(respBody), []byte("auth_unavailable")) {
+			return "", false, "", fmt.Errorf("订阅模型暂时不可用（HTTP %d），已停止整理以避免持续冲击账号；请稍后重试", resp.StatusCode)
+		}
+		return "", false, "", fmt.Errorf("整理模型返回 HTTP %d", resp.StatusCode)
 	}
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] read error: %v\n", err)
-		return "", false, ""
+		return "", false, "", err
 	}
 	content, err := organizeResponseContent(backend, respBody)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[organize] response error: %v\n", err)
-		return "", false, ""
+		return "", false, "", err
 	}
 	content = strings.TrimSpace(content)
 	fmt.Fprintf(os.Stderr, "[organize] LLM raw response: %q\n", content)
@@ -874,17 +965,17 @@ func (s *Server) generateSessionTitle(route routing.ModelRoute, conversation, pr
 	}
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
 		// Fallback: use raw content as title.
-		return strings.Trim(content, "\"' \n\t"), false, ""
+		return strings.Trim(content, "\"' \n\t"), false, "", nil
 	}
 	title := strings.TrimSpace(parsed.Title)
 	if title == "" {
-		return "", parsed.ShouldDelete, strings.TrimSpace(parsed.Reason)
+		return "", parsed.ShouldDelete, strings.TrimSpace(parsed.Reason), nil
 	}
 	// Prefix with provider name for handoff title.
 	if providerName != "" {
 		title = fmt.Sprintf("%s: %s", providerName, title)
 	}
-	return title, parsed.ShouldDelete, strings.TrimSpace(parsed.Reason)
+	return title, parsed.ShouldDelete, strings.TrimSpace(parsed.Reason), nil
 }
 
 func organizeResponseContent(backend string, data []byte) (string, error) {
