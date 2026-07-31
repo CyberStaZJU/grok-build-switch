@@ -14,6 +14,13 @@ const state = {
 const OFFICIAL_PROVIDER_KEY = "official";
 
 const $ = (id) => document.getElementById(id);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+
 let toastTimer = null;
 let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
@@ -108,6 +115,70 @@ async function api(path, options = {}) {
       throw error;
     }
   }
+}
+
+function formatTokenCount(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 10_000) return `${(v / 1000).toFixed(1)}k`;
+  if (v >= 1000) return `${(v / 1000).toFixed(2)}k`;
+  return String(v);
+}
+
+function formatHitRate(rate) {
+  if (rate == null || Number.isNaN(Number(rate))) return "—";
+  return `${(Number(rate) * 100).toFixed(1)}%`;
+}
+
+function cacheTableHTML(headers, rows) {
+  if (!rows.length) return `<p class="muted tiny">暂无数据</p>`;
+  const head = headers.map((heading) => `<th>${escapeHtml(heading)}</th>`).join("");
+  const body = rows.map((columns) => `<tr>${columns.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("");
+  return `<table class="cacheDataTable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadCacheStats() {
+  const hours = Number($("cacheStatsHours")?.value || 24);
+  const data = await api(`/api/cache-stats?hours=${encodeURIComponent(hours)}`);
+  const overall = data.overall || {};
+  if ($("cacheHitRate")) $("cacheHitRate").textContent = formatHitRate(overall.hit_rate);
+  if ($("cacheTurns")) $("cacheTurns").textContent = String(overall.turns || 0);
+  if ($("cachePromptTokens")) $("cachePromptTokens").textContent = formatTokenCount(overall.prompt_tokens);
+  if ($("cacheCachedTokens")) $("cacheCachedTokens").textContent = formatTokenCount(overall.cached_prompt_tokens);
+  if ($("cacheStatsHint")) {
+    if (!data.log_exists) {
+      $("cacheStatsHint").textContent = "未找到 Grok 日志 unified.jsonl。运行 Grok CLI 后会自动生成。";
+    } else if (!(overall.turns > 0)) {
+      $("cacheStatsHint").textContent = `已扫描日志，近 ${hours} 小时暂无推理事件。`;
+    } else {
+      $("cacheStatsHint").textContent = `统计窗口 ${hours}h · 事件 ${data.scanned_events || overall.turns} · 命中率 = cached_prompt_tokens / prompt_tokens`;
+    }
+  }
+  if ($("cacheByModel")) {
+    const rows = (data.by_model || []).map((row) => [
+      escapeHtml(row.model || "—"),
+      formatHitRate(row.hit_rate),
+      String(row.turns || 0),
+      formatTokenCount(row.prompt_tokens),
+      formatTokenCount(row.cached_prompt_tokens),
+    ]);
+    $("cacheByModel").innerHTML = cacheTableHTML(["模型", "命中率", "次数", "Prompt", "Cached"], rows);
+  }
+  if ($("cacheRecent")) {
+    const rows = (data.recent || []).map((row) => {
+      const ts = row.ts ? new Date(row.ts).toLocaleString() : "—";
+      const sid = row.session_id ? String(row.session_id).slice(0, 8) : "—";
+      return [
+        escapeHtml(ts),
+        escapeHtml(row.model || "—"),
+        escapeHtml(sid),
+        formatHitRate(row.hit_rate),
+        formatTokenCount(row.prompt_tokens),
+      ];
+    });
+    $("cacheRecent").innerHTML = cacheTableHTML(["时间", "模型", "会话", "命中率", "Prompt"], rows);
+  }
+  return data;
 }
 
 // Custom prompt dialog (window.prompt is unreliable in Wails WebView2)
@@ -1185,12 +1256,6 @@ function readForm() {
       };
     }).filter((m) => m.name || m.model),
   };
-}
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[ch]));
 }
 
 function escapeAttr(value) {

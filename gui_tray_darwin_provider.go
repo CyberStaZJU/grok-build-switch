@@ -120,11 +120,13 @@ func (c *darwinTrayProviderClient) snapshot(ctx context.Context) (routingSnapsho
 
 // cacheStats fetches cache hit statistics.
 func (c *darwinTrayProviderClient) cacheStats(ctx context.Context) (cacheStatsSnapshot, error) {
-	var stats cacheStatsSnapshot
-	if err := c.do(ctx, http.MethodGet, "/api/cache-stats?hours=24", &stats); err != nil {
+	var report struct {
+		Overall cacheStatsSnapshot `json:"overall"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/cache-stats?hours=24", &report); err != nil {
 		return cacheStatsSnapshot{}, err
 	}
-	return stats, nil
+	return report.Overall, nil
 }
 
 // updatePolicy sends a partial policy update to /api/routing/policy.

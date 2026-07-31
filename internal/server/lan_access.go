@@ -82,6 +82,9 @@ func loopbackOnlyRequest(r *http.Request) bool {
 	if requestPath == "/api/ssh" || strings.HasPrefix(requestPath, "/api/ssh/") {
 		return true
 	}
+	if requestPath == "/api/subscription-proxy" || strings.HasPrefix(requestPath, "/api/subscription-proxy/") {
+		return true
+	}
 	if requestPath == "/api/official/activate" || requestPath == "/api/import" ||
 		requestPath == "/api/models/fetch" || requestPath == "/api/models/reasoning-efforts" ||
 		requestPath == "/api/connection/test" || requestPath == "/api/cache-stats" {

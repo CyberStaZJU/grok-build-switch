@@ -15,6 +15,10 @@ this.appTest = {
   csrfToken,
   newProfileDraft,
   normalizeReasoningEffort,
+  formatTokenCount,
+  formatHitRate,
+  cacheTableHTML,
+  loadCacheStats,
   resetCSRF() { csrfTokenPromise = null; },
 };
 `;
@@ -28,10 +32,11 @@ function response(status, data = {}, statusText = "") {
   };
 }
 
-function loadApp(fetchImpl) {
+function loadApp(fetchImpl, elements = {}) {
   const context = {
     console,
     fetch: fetchImpl,
+    document: { getElementById(id) { return elements[id] || null; } },
     localStorage: { getItem() { return null; } },
     setTimeout,
     clearTimeout,
@@ -40,6 +45,74 @@ function loadApp(fetchImpl) {
   vm.runInContext(testableSource, context, { filename: appPath });
   return context.appTest;
 }
+
+test("cache statistics render the nested report and escape labels", async () => {
+  const elements = Object.fromEntries([
+    "cacheStatsHours", "cacheHitRate", "cacheTurns", "cachePromptTokens", "cacheCachedTokens",
+    "cacheStatsHint", "cacheByModel", "cacheRecent",
+  ].map((id) => [id, { value: id === "cacheStatsHours" ? "24" : "", textContent: "", innerHTML: "" }]));
+  let requestedURL = "";
+  const app = loadApp(async (url) => {
+    requestedURL = url;
+    return response(200, {
+      log_exists: true,
+      scanned_events: 12,
+      overall: {
+        turns: 12,
+        prompt_tokens: 1_000_000,
+        cached_prompt_tokens: 750_000,
+        hit_rate: 0.75,
+      },
+      by_model: [{
+        model: `<img src=x onerror="fail()">`,
+        turns: 12,
+        prompt_tokens: 1_000_000,
+        cached_prompt_tokens: 750_000,
+        hit_rate: 0.75,
+      }],
+      recent: [{
+        ts: "2026-07-31T12:00:00Z",
+        session_id: `<bad-session>`,
+        model: `<script>fail()</script>`,
+        prompt_tokens: 1000,
+        hit_rate: 0.5,
+      }],
+    });
+  }, elements);
+
+  await app.loadCacheStats();
+  assert.equal(requestedURL, "/api/cache-stats?hours=24");
+  assert.equal(elements.cacheHitRate.textContent, "75.0%");
+  assert.equal(elements.cacheTurns.textContent, "12");
+  assert.equal(elements.cachePromptTokens.textContent, "1.00M");
+  assert.equal(elements.cacheCachedTokens.textContent, "750.0k");
+  assert.match(elements.cacheStatsHint.textContent, /事件 12/);
+  assert.match(elements.cacheByModel.innerHTML, /&lt;img src=x onerror=&quot;fail\(\)&quot;&gt;/);
+  assert.doesNotMatch(elements.cacheByModel.innerHTML, /<img/);
+  assert.match(elements.cacheRecent.innerHTML, /&lt;script&gt;fail\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(elements.cacheRecent.innerHTML, /<script>/);
+});
+
+test("cache statistics render empty and missing-log states", async () => {
+  const elements = Object.fromEntries([
+    "cacheStatsHours", "cacheHitRate", "cacheTurns", "cachePromptTokens", "cacheCachedTokens",
+    "cacheStatsHint", "cacheByModel", "cacheRecent",
+  ].map((id) => [id, { value: id === "cacheStatsHours" ? "6" : "", textContent: "", innerHTML: "" }]));
+  const app = loadApp(async () => response(200, {
+    log_exists: false,
+    overall: {},
+    by_model: [],
+    recent: [],
+  }), elements);
+
+  await app.loadCacheStats();
+  assert.equal(elements.cacheHitRate.textContent, "—");
+  assert.equal(elements.cacheTurns.textContent, "0");
+  assert.equal(elements.cachePromptTokens.textContent, "0");
+  assert.match(elements.cacheStatsHint.textContent, /未找到 Grok 日志/);
+  assert.match(elements.cacheByModel.innerHTML, /暂无数据/);
+  assert.match(elements.cacheRecent.innerHTML, /暂无数据/);
+});
 
 test("official Anthropic template is absent and unknown reasoning defaults to none", () => {
   const app = loadApp(async () => response(500));

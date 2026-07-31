@@ -893,6 +893,82 @@ textarea {
   align-items: center;
 }
 
+.cacheStatsSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+
+.cacheStatTile {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cacheStatTile strong {
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.cacheStatsTables {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.tinyTitle {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.cacheTable {
+  overflow: auto;
+  max-height: 260px;
+}
+
+.cacheDataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.cacheDataTable th,
+.cacheDataTable td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cacheDataTable th {
+  color: var(--muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.smSelect {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .cacheStatsSummary { grid-template-columns: 1fr 1fr; }
+  .cacheStatsTables { grid-template-columns: 1fr; }
+}
+
 #driftBanner[hidden] {
   display: none !important;
 }

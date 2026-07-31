@@ -35,7 +35,7 @@ func TestFetchModelListFallsBackAndUsesOnlyCallableIDs(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{
 			map[string]any{"id": "provider/model-id", "name": "Friendly Model Name"},
-			map[string]any{"name": "name-only-id"},
+			map[string]any{"name": "Claude Sonnet 4"},
 		}})
 	}))
 	defer upstream.Close()
@@ -46,10 +46,11 @@ func TestFetchModelListFallsBackAndUsesOnlyCallableIDs(t *testing.T) {
 	if !reflect.DeepEqual(paths, []string{"/models", "/v1/models"}) {
 		t.Fatalf("paths=%v", paths)
 	}
-	if !reflect.DeepEqual(models, []string{"provider/model-id", "name-only-id"}) {
+	if !reflect.DeepEqual(models, []string{"provider/model-id"}) {
 		t.Fatalf("models=%v", models)
 	}
-	if strings.Contains(strings.Join(models, ","), "Friendly Model Name") {
+	joined := strings.Join(models, ",")
+	if strings.Contains(joined, "Friendly Model Name") || strings.Contains(joined, "Claude Sonnet 4") {
 		t.Fatalf("display name leaked into callable IDs: %v", models)
 	}
 }

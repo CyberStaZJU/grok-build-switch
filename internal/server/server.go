@@ -132,10 +132,9 @@ func newApplicationHTTPServer(handler http.Handler) *http.Server {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    256 << 10,
-		// WriteTimeout remains zero because subscription inference can stream for
-		// longer than ordinary management requests.
 	}
 }
 
@@ -1291,13 +1290,6 @@ func extractModels(payload any) []string {
 			if id != "" && !seen[id] {
 				seen[id] = true
 				out = append(out, id)
-			} else if id == "" {
-				name, _ := x["name"].(string)
-				name = strings.TrimSpace(name)
-				if name != "" && !seen[name] {
-					seen[name] = true
-					out = append(out, name)
-				}
 			}
 			for key, child := range x {
 				if key == "data" || key == "models" {

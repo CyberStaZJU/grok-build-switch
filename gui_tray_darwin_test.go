@@ -41,6 +41,34 @@ func TestDarwinTrayProviderClientAddsCSRFToken(t *testing.T) {
 	}
 }
 
+func TestDarwinTrayProviderClientDecodesCacheStatsOverall(t *testing.T) {
+	rate := 0.75
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/cache-stats" || r.URL.Query().Get("hours") != "24" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"hours":24,"overall":{"turns":12,"prompt_tokens":1000,"cached_prompt_tokens":750,"completion_tokens":125,"hit_rate":0.75}}`))
+	}))
+	defer server.Close()
+
+	stats, err := newDarwinTrayProviderClient(server.URL).cacheStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := cacheStatsSnapshot{
+		Turns:              12,
+		PromptTokens:       1000,
+		CachedPromptTokens: 750,
+		CompletionTokens:   125,
+		HitRate:            &rate,
+	}
+	if stats.fingerprint() != want.fingerprint() {
+		t.Fatalf("cache stats = %#v, want %#v", stats, want)
+	}
+}
+
 func TestDarwinCloseHidesWindowToMenuBar(t *testing.T) {
 	controller := newGUITrayController("http://127.0.0.1:17878", nil)
 	var hidden, quit int
