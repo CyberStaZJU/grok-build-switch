@@ -204,7 +204,9 @@
           <div><h2 class="sectionTitle">路由策略</h2><p class="muted tiny">保存后用于默认对话、联网搜索及子代理任务。</p></div>
           <button type="button" id="saveRoutingPolicyBtn" class="btn primary">保存策略</button>
         </div>
+        <div id="routingCompatibilityWarning" class="alert" hidden></div>
         <div class="routingPolicyGrid">
+          <label class="field">启用供应商<select id="routingProvider" class="mono"></select></label>
           <label class="field">default<select id="routingDefault" class="mono"><option value="">（未设置）</option></select></label>
           <label class="field">默认推理强度
             <select id="routingReasoningEffort" class="mono">

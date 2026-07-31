@@ -116,45 +116,17 @@ func TestRepairPolicyClearsInvalidWebSearch(t *testing.T) {
 	}
 }
 
-// TestSubagentProviderBackendMismatch 验证跨供应商子代理的工具适配。
-// 当子代理指向与主对话不同后端的供应商时，工具 schema 应该被正确过滤。
-func TestSubagentProviderBackendMismatch(t *testing.T) {
+func TestProjectWithPolicyRejectsCrossProviderSubagents(t *testing.T) {
 	source := []profiles.Profile{
-		{
-			ID: "p1", Name: "Responses", DefaultModel: "main",
-			Models: []profiles.ModelDef{
-				{Name: "main", Model: "main", APIBackend: "responses", SupportsBackendSearch: true},
-			},
-		},
-		{
-			ID: "p2", Name: "ChatCompletions", DefaultModel: "sub",
-			Models: []profiles.ModelDef{
-				{Name: "sub", Model: "sub", APIBackend: "chat_completions", SupportsBackendSearch: false},
-			},
-		},
+		{ID: "p1", Name: "Responses", DefaultModel: "main", Models: []profiles.ModelDef{{Name: "main", Model: "main", APIBackend: "responses", SupportsBackendSearch: true}}},
+		{ID: "p2", Name: "ChatCompletions", DefaultModel: "sub", Models: []profiles.ModelDef{{Name: "sub", Model: "sub", APIBackend: "chat_completions"}}},
 	}
-	// 主对话使用 responses 后端（支持 x_search），子代理指向 chat_completions 后端
-	policy := RoutingPolicy{
-		Default:   "main",
-		WebSearch: "main",
-		Subagents: SubagentsPolicy{Explore: "sub", Plan: "sub"},
-	}
-	snapshot, err := ProjectWithPolicy(source, policy)
+	snapshot, err := ProjectWithPolicy(source, RoutingPolicy{Default: "main", Subagents: SubagentsPolicy{Explore: "sub", Plan: "sub"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// 验证主对话的 web_search 能力（responses + backend_search = true）
-	if !snapshot.WebSearchCapable() {
-		t.Fatal("main conversation should be web_search capable (responses + backend_search)")
-	}
-
-	// 验证子代理的 web_search 能力：chat_completions 后端不应该支持 x_search
-	if snapshot.SubagentWebSearchCapable("explore") {
-		t.Fatal("explore subagent should NOT be web_search capable (chat_completions backend)")
-	}
-	if snapshot.SubagentWebSearchCapable("plan") {
-		t.Fatal("plan subagent should NOT be web_search capable (chat_completions backend)")
+	if snapshot.ActivePolicy().Subagents.Explore != "" || snapshot.ActivePolicy().Subagents.Plan != "" {
+		t.Fatalf("cross-provider subagent routes survived: %#v", snapshot.ActivePolicy())
 	}
 }
 

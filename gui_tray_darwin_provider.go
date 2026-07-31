@@ -86,9 +86,11 @@ func (c *darwinTrayProviderClient) snapshot(ctx context.Context) (routingSnapsho
 	}
 
 	var routingResp struct {
-		ModelRoutes []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+		ActiveProviderID string `json:"active_provider_id"`
+		ModelRoutes      []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			ProviderID string `json:"provider_id"`
 		} `json:"model_routes"`
 		OfficialModels []struct {
 			ID   string `json:"id"`
@@ -99,13 +101,17 @@ func (c *darwinTrayProviderClient) snapshot(ctx context.Context) (routingSnapsho
 		return routingSnapshot{}, err
 	}
 
-	routes := routingResp.ModelRoutes
+	models := make([]routingModel, 0, len(routingResp.ModelRoutes))
 	if status.OfficialActive {
-		routes = routingResp.OfficialModels
-	}
-	models := make([]routingModel, 0, len(routes))
-	for _, m := range routes {
-		models = append(models, routingModel{ID: m.ID, Name: m.Name})
+		for _, m := range routingResp.OfficialModels {
+			models = append(models, routingModel{ID: m.ID, Name: m.Name})
+		}
+	} else {
+		for _, m := range routingResp.ModelRoutes {
+			if m.ProviderID == routingResp.ActiveProviderID {
+				models = append(models, routingModel{ID: m.ID, Name: m.Name})
+			}
+		}
 	}
 
 	return routingSnapshot{

@@ -298,7 +298,7 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"snapshot.official_models", "snapshot.official_logged_in", "opt.dataset.official", "official,"} {
+	for _, expected := range []string{"snapshot.official_models", "snapshot.official_logged_in", "snapshot.active_provider_id", "routingProvider"} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("official Grok routing UI behavior missing: %s", expected)
 		}
@@ -308,7 +308,7 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 			t.Fatalf("profile editor still reads removed or synthetic routing control %s", stale)
 		}
 	}
-	for _, expected := range []string{`route?.supports_reasoning_effort === true`, `const options = supported.length ? supported : ["none"]`, `effortSel.disabled = supported.length === 0`, `default_reasoning_effort: $("routingReasoningEffort")?.value || "none"`} {
+	for _, expected := range []string{`route?.supports_reasoning_effort`, `const options = supported.length ? supported : ["none"]`, `select.disabled = supported.length === 0`, `default_reasoning_effort: $("routingReasoningEffort").value || "none"`} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("reasoning capability contract missing: %s", expected)
 		}

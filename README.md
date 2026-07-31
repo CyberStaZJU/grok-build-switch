@@ -8,7 +8,7 @@ Grok Build Switch 是面向 macOS 的本地菜单栏/桌面工具，用于管理
 
 - **官方 Grok CLI**：使用 Grok CLI 官方登录流程，并在登录后应用官方模型路由
 - **普通 Profile**：管理供应商名称、Base URL、API Key、上游格式和模型
-- **统一模型路由**：配置 `default`、`web_search`、`subagents.explore` 与 `subagents.plan`
+- **单一启用供应商路由**：官方或自定义供应商互斥启用；每个供应商记忆自己的 `default`、`web_search`、`subagents.explore` 与 `subagents.plan`，自定义切换保留组合模型目录以兼容旧会话别名
 - **订阅代理**：通过内嵌 CLIProxyAPI 接入和管理受支持的第三方订阅
 - **配置编辑**：查看、校验并编辑 `~/.grok/config.toml`
 - **远程访问**：支持 LAN 配对访问和 SSH 连接管理

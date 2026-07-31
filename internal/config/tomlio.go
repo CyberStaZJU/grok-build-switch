@@ -455,17 +455,9 @@ func rewriteRoutingPolicySections(lines []string, policy routing.RoutingPolicy) 
 	if v := strings.TrimSpace(policy.Subagents.Plan); v != "" {
 		values["plan"] = quote(v)
 	}
-	if len(values) == 0 {
-		return nil
-	}
-	sectionManaged := map[string]bool{}
-	for key := range values {
-		if key == "web_search" {
-			sectionManaged["models"] = true
-		} else {
-			sectionManaged["subagents.models"] = true
-		}
-	}
+	// Both sections are always managed so clearing optional policy fields also
+	// removes stale TOML assignments instead of leaving the old route active.
+	sectionManaged := map[string]bool{"models": true, "subagents.models": true}
 	sectionValues := map[string]map[string]string{}
 	for key, val := range values {
 		section := "models"
@@ -494,9 +486,10 @@ func rewriteRoutingPolicySections(lines []string, policy routing.RoutingPolicy) 
 			for key := range sv {
 				seen[key] = true
 			}
-		} else {
-			out = append(out, lines[i:end]...)
+		} else if header == "models" {
+			out = append(out, removeAssignments(lines[i:end], "web_search")...)
 		}
+		// An empty subagents.models policy removes the managed section entirely.
 		i = end
 	}
 	for _, section := range []string{"models", "subagents.models"} {

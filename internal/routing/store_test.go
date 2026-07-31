@@ -55,8 +55,8 @@ func TestInitializePersistsOnlyCatalogAndPolicy(t *testing.T) {
 	if snapshot.ModelRoutes[0].ProfileModel != "shared" || snapshot.ModelRoutes[1].ProviderID != second.ID {
 		t.Fatalf("route references = %#v", snapshot.ModelRoutes)
 	}
-	if snapshot.Policy.Default != "shared@Acme" {
-		t.Fatalf("policy = %#v", snapshot.Policy)
+	if snapshot.Version != 2 || snapshot.ActiveProviderID != snapshot.Providers[0].ID || snapshot.ActivePolicy().Default != snapshot.ModelRoutes[0].ID {
+		t.Fatalf("v2 snapshot = %#v", snapshot)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -215,44 +215,38 @@ func TestReadRewritesLegacyCredentialFields(t *testing.T) {
 	}
 }
 
-func TestUpdatePolicyPersistsAndValidates(t *testing.T) {
+func TestUpdateActiveProviderPersistsAndValidates(t *testing.T) {
 	dir := t.TempDir()
 	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
-	if _, err := profileStore.Create(profiles.Profile{Name: "P", Models: []profiles.ModelDef{{Name: "a", Model: "a"}, {Name: "b", Model: "b"}}}); err != nil {
-		t.Fatal(err)
-	}
-	store := NewStore(filepath.Join(dir, "routing.json"))
-	if _, err := store.Initialize(profileStore); err != nil {
-		t.Fatal(err)
-	}
-	policy := RoutingPolicy{
-		Default:                "b",
-		DefaultReasoningEffort: "medium",
-		WebSearch:              "a",
-		Subagents:              SubagentsPolicy{Explore: "a", Plan: "b"},
-	}
-	updated, err := store.UpdatePolicy(policy)
+	profile, err := profileStore.Create(profiles.Profile{Name: "P", Models: []profiles.ModelDef{{Name: "a", Model: "a"}, {Name: "b", Model: "b"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Policy != policy {
-		t.Fatalf("updated policy = %#v, want %#v", updated.Policy, policy)
+	store := NewStore(filepath.Join(dir, "routing.json"))
+	snapshot, err := store.Initialize(profileStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := RoutingPolicy{Default: profile.ID + ":b", DefaultReasoningEffort: "medium", WebSearch: profile.ID + ":a", Subagents: SubagentsPolicy{Explore: profile.ID + ":a", Plan: profile.ID + ":b"}}
+	updated, err := store.UpdateActiveProvider(profile.ID, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ActiveProviderID != profile.ID || updated.ProviderPolicies[profile.ID] != policy {
+		t.Fatalf("updated = %#v", updated)
 	}
 	reloaded, err := NewStore(store.Path()).Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Policy != policy {
-		t.Fatalf("reloaded policy = %#v, want %#v", reloaded.Policy, policy)
+	if reloaded.ProviderPolicies[profile.ID] != policy {
+		t.Fatalf("reloaded = %#v", reloaded)
 	}
-	if _, err := store.UpdatePolicy(RoutingPolicy{Default: "missing"}); err == nil {
+	if _, err := store.UpdateActiveProvider(profile.ID, RoutingPolicy{Default: "missing"}); err == nil {
 		t.Fatal("expected unknown route validation error")
 	}
-	after, err := store.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Policy != policy {
-		t.Fatalf("invalid update changed persisted policy: %#v", after.Policy)
+	after, _ := store.Snapshot()
+	if after.ProviderPolicies[profile.ID] != policy || after.ActiveProviderID != snapshot.ActiveProviderID {
+		t.Fatalf("invalid update changed state: %#v", after)
 	}
 }
