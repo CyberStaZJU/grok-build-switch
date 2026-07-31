@@ -14,11 +14,11 @@ import (
 
 func TestApplicationHTTPServerTimeoutProfile(t *testing.T) {
 	srv := newApplicationHTTPServer(http.NotFoundHandler())
-	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.IdleTimeout <= 0 || srv.MaxHeaderBytes <= 0 {
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 || srv.MaxHeaderBytes <= 0 {
 		t.Fatalf("incomplete server limits: %#v", srv)
 	}
-	if srv.WriteTimeout != 0 {
-		t.Fatalf("streaming application server WriteTimeout=%s, want 0", srv.WriteTimeout)
+	if srv.WriteTimeout < time.Minute {
+		t.Fatalf("application server WriteTimeout=%s is too short for inference streaming", srv.WriteTimeout)
 	}
 }
 

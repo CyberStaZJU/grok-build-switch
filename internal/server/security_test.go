@@ -139,7 +139,7 @@ func TestLANAccessMatrixRedactsProfilesAndBlocksSensitiveRoutes(t *testing.T) {
 		t.Fatalf("loopback profile management data unavailable: status=%d body=%s", loopback.Code, loopback.Body.String())
 	}
 
-	for _, target := range []string{"/api/config", "/api/ssh/connections"} {
+	for _, target := range []string{"/api/config", "/api/ssh/connections", "/api/subscription-proxy"} {
 		res := request("192.168.1.20:40003", http.MethodGet, target, "", true)
 		if res.Code != http.StatusForbidden {
 			t.Fatalf("paired %s status=%d want 403 body=%s", target, res.Code, res.Body.String())
@@ -152,6 +152,60 @@ func TestLANAccessMatrixRedactsProfilesAndBlocksSensitiveRoutes(t *testing.T) {
 	sshList := request("127.0.0.1:40005", http.MethodGet, "/api/ssh/connections", "", false)
 	if sshList.Code != http.StatusOK {
 		t.Fatalf("loopback ssh status=%d body=%s", sshList.Code, sshList.Body.String())
+	}
+}
+
+func TestPairedLANSubscriptionProxyManagementIsBlockedBeforeSensitiveFacade(t *testing.T) {
+	settingsStore := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	current := settings.Default()
+	current.LANAccessEnabled = true
+	if _, err := settingsStore.Update(current); err != nil {
+		t.Fatal(err)
+	}
+	remoteStore := remoteaccess.NewStore(filepath.Join(t.TempDir(), "remote.json"))
+	snapshot, err := remoteStore.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &serviceActionProxy{status: SubscriptionProxyStatus{
+		Installed:  true,
+		Running:    true,
+		Healthy:    true,
+		State:      "running",
+		ConfigPath: "/sensitive/cliproxy/config.yaml",
+		BaseURL:    "http://127.0.0.1:9999",
+	}}
+	s := &Server{Settings: settingsStore, RemoteAccess: remoteStore, SubscriptionProxy: proxy}
+	mux := http.NewServeMux()
+	s.routes(mux)
+	req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:17878/api/subscription-proxy", nil)
+	req.RemoteAddr = "192.168.1.20:42000"
+	req.Host = "192.168.1.10:17878"
+	req.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
+	res := httptest.NewRecorder()
+	s.withAccess(mux).ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("paired subscription status=%d want 403 body=%s", res.Code, res.Body.String())
+	}
+	for _, secret := range []string{"/sensitive/cliproxy/config.yaml", "127.0.0.1:9999"} {
+		if strings.Contains(res.Body.String(), secret) {
+			t.Fatalf("paired subscription response leaked %q: %s", secret, res.Body.String())
+		}
+	}
+	if proxy.accountsCalls != 0 || proxy.modelsCalls != 0 {
+		t.Fatalf("sensitive subscription facade was called: accounts=%d models=%d", proxy.accountsCalls, proxy.modelsCalls)
+	}
+
+	loopback := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17878/api/subscription-proxy", nil)
+	loopback.RemoteAddr = "127.0.0.1:42001"
+	loopback.Host = "127.0.0.1:17878"
+	loopbackRes := httptest.NewRecorder()
+	s.withAccess(mux).ServeHTTP(loopbackRes, loopback)
+	if loopbackRes.Code != http.StatusOK || !strings.Contains(loopbackRes.Body.String(), "/sensitive/cliproxy/config.yaml") {
+		t.Fatalf("loopback subscription management unavailable: status=%d body=%s", loopbackRes.Code, loopbackRes.Body.String())
+	}
+	if proxy.accountsCalls != 1 || proxy.modelsCalls != 1 {
+		t.Fatalf("loopback subscription facade calls: accounts=%d models=%d", proxy.accountsCalls, proxy.modelsCalls)
 	}
 }
 

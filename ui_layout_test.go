@@ -60,6 +60,42 @@ func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
 	}
 }
 
+func TestCacheStatisticsUIContract(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleData, err := assets.ReadFile("ui/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{
+		"cacheStatsHours", "refreshCacheStatsBtn", "cacheHitRate", "cacheTurns",
+		"cachePromptTokens", "cacheCachedTokens", "cacheStatsHint", "cacheByModel", "cacheRecent",
+	} {
+		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
+			t.Fatalf("cache statistics control %q is missing", id)
+		}
+	}
+	for _, fragment := range []string{
+		"async function loadCacheStats()", "/api/cache-stats?hours=", "const overall = data.overall || {}",
+		`$("cacheHitRate").textContent`, `$("cacheByModel").innerHTML`, `$("cacheRecent").innerHTML`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("cache statistics renderer is missing %q", fragment)
+		}
+	}
+	for _, selector := range []string{".cacheStatsSummary", ".cacheStatTile", ".cacheStatsTables", ".cacheDataTable", ".smSelect"} {
+		if !bytes.Contains(styleData, []byte(selector)) {
+			t.Fatalf("cache statistics style %q is missing", selector)
+		}
+	}
+}
+
 func TestStaticDollarIDReferencesExistInHTML(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
