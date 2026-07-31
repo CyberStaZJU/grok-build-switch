@@ -224,6 +224,10 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
+	if err := validateActiveWebSearch(hydrated); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
 	if err := validateRoutingReasoningEffort(hydrated); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -347,6 +351,9 @@ func (s *Server) applyRoutingSnapshotTransaction(profileList []profiles.Profile,
 	if err != nil {
 		return routing.Snapshot{}, err
 	}
+	if err := validateActiveWebSearch(hydrated); err != nil {
+		return routing.Snapshot{}, err
+	}
 	if err := validateRoutingReasoningEffort(hydrated); err != nil {
 		return routing.Snapshot{}, err
 	}
@@ -457,6 +464,21 @@ func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 		Policy: policy, ProviderPolicies: providerPolicies, WebSearchCapable: policy.WebSearchCapable,
 		UpdatedAt: snapshot.UpdatedAt,
 	}
+}
+
+func validateActiveWebSearch(snapshot routing.Snapshot) error {
+	policy := snapshot.ActivePolicy()
+	if snapshot.IsOfficial() || strings.TrimSpace(policy.WebSearch) == "" {
+		return nil
+	}
+	route, ok := snapshot.Route(policy.WebSearch)
+	if !ok || route.ProviderID != snapshot.ActiveProviderID {
+		return fmt.Errorf("web_search 模型 %q 不属于当前供应商", policy.WebSearch)
+	}
+	if route.APIBackend != "responses" || !route.SupportsBackendSearch {
+		return fmt.Errorf("web_search 模型 %q 必须使用 responses 后端并支持后端搜索", route.Name)
+	}
+	return nil
 }
 
 func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {

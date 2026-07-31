@@ -16,6 +16,9 @@ this.appTest = {
   newProfileDraft,
   normalizeReasoningEffort,
   customPrompt,
+  customProviderSwitchWarning,
+  officialProviderSwitchWarning,
+  capableWebSearchRoutes,
   renderDrift,
   reapplyRouting,
   deleteSSHFiles,
@@ -98,6 +101,26 @@ test("SSH filename glob treats question mark as one arbitrary character", () => 
   assert.equal(app.minimatch("aX.txt", "a?.txt"), true);
   assert.equal(app.minimatch("a[.txt", "a[.txt"), true);
   assert.equal(app.minimatch("a/b.txt", "a/b.txt"), true);
+});
+
+test("provider switch warnings distinguish custom and official activation", () => {
+  const app = loadApp(async () => response(500));
+  assert.equal(app.customProviderSwitchWarning("provider-one", { id: "provider-one", name: "One" }), "");
+  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /另一个自定义供应商/);
+  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /Two/);
+  assert.equal(app.officialProviderSwitchWarning("official"), "");
+  assert.match(app.officialProviderSwitchWarning("provider-one"), /移除 config\.toml 中全部自定义模型定义、自定义端点和认证/);
+});
+
+test("web search dropdown routes require responses backend and backend search support", () => {
+  const app = loadApp(async () => response(500));
+  const routes = [
+    { id: "capable", api_backend: "responses", supports_backend_search: true },
+    { id: "no-flag", api_backend: "responses", supports_backend_search: false },
+    { id: "wrong-backend", api_backend: "chat_completions", supports_backend_search: true },
+  ];
+  assert.deepEqual(Array.from(app.capableWebSearchRoutes(routes)).map((route) => route.id), ["capable"]);
+  assert.deepEqual(Array.from(app.capableWebSearchRoutes(routes, true)).map((route) => route.id), ["capable", "no-flag", "wrong-backend"]);
 });
 
 test("manual models do not claim backend search unless explicitly enabled", () => {

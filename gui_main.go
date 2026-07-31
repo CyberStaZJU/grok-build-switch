@@ -96,7 +96,7 @@ func main() {
 	if err := sw.ApplyRouting(hydratedRouting); err != nil {
 		guiFatal(fmt.Errorf("应用启动路由配置失败: %w", err))
 	}
-	if hydratedRouting.ActiveProviderID != routingSnapshot.ActiveProviderID || hydratedRouting.ActivePolicy() != routingSnapshot.ActivePolicy() {
+	if !routing.PersistedEqual(hydratedRouting, routingSnapshot) {
 		if _, err := routingStore.Replace(hydratedRouting); err != nil {
 			guiFatal(fmt.Errorf("修复启动路由策略失败: %w", err))
 		}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"grok_switch/internal/profiles"
 )
@@ -39,10 +40,50 @@ func TestSchemaV1MigrationChoosesDefaultProviderAndRemembersLocalPolicies(t *tes
 		t.Fatalf("active policy = %#v", snapshot.ProviderPolicies["two"])
 	}
 	if snapshot.ProviderPolicies["two"].WebSearch != "" || snapshot.ProviderPolicies["two"].Subagents.Explore != "" {
-		t.Fatalf("cross-provider routes migrated: %#v", snapshot.ProviderPolicies["two"])
+		t.Fatalf("active provider absorbed cross-provider routes: %#v", snapshot.ProviderPolicies["two"])
 	}
-	if snapshot.ProviderPolicies["one"].Default != "one:a" {
-		t.Fatalf("provider one policy = %#v", snapshot.ProviderPolicies["one"])
+	if snapshot.ProviderPolicies["one"].Default != "one:a" || snapshot.ProviderPolicies["one"].WebSearch != "one:a" || snapshot.ProviderPolicies["one"].Subagents.Explore != "one:a" {
+		t.Fatalf("provider one policy did not preserve its legacy selections: %#v", snapshot.ProviderPolicies["one"])
+	}
+}
+
+func TestSchemaV1MigrationUsesDefaultOwnerEvenWhenOptionalRouteComesFirst(t *testing.T) {
+	snapshot := migrateV1(
+		[]Provider{{ID: "one"}, {ID: "two"}},
+		[]ModelRoute{{ID: "one:a", Name: "a", ProviderID: "one"}, {ID: "two:b", Name: "b", ProviderID: "two"}},
+		RoutingPolicy{Default: "missing", WebSearch: "two:b", Subagents: SubagentsPolicy{Explore: "one:a", Plan: "two:b"}},
+		time.Time{},
+	)
+	if snapshot.ActiveProviderID != "one" {
+		t.Fatalf("active provider = %q, want deterministic first provider when default is unavailable", snapshot.ActiveProviderID)
+	}
+	if snapshot.ProviderPolicies["two"].WebSearch != "two:b" || snapshot.ProviderPolicies["two"].Subagents.Plan != "two:b" {
+		t.Fatalf("provider two optional memory = %#v", snapshot.ProviderPolicies["two"])
+	}
+	if snapshot.ProviderPolicies["one"].Subagents.Explore != "one:a" {
+		t.Fatalf("provider one optional memory = %#v", snapshot.ProviderPolicies["one"])
+	}
+}
+
+func TestPersistedEqualDetectsInactiveProviderPolicyRepairs(t *testing.T) {
+	left := Snapshot{
+		Version:          CurrentVersion,
+		ActiveProviderID: "one",
+		Providers:        []Provider{{ID: "one"}, {ID: "two"}},
+		ModelRoutes:      []ModelRoute{{ID: "one:a", Name: "a", ProviderID: "one"}, {ID: "two:b", Name: "b", ProviderID: "two"}},
+		ProviderPolicies: map[string]RoutingPolicy{"one": {Default: "one:a"}, "two": {Default: "two:b", WebSearch: "two:removed"}},
+	}
+	right := left
+	right.ProviderPolicies = map[string]RoutingPolicy{"one": {Default: "one:a"}, "two": {Default: "two:b"}}
+	if PersistedEqual(left, right) {
+		t.Fatal("inactive provider policy change was ignored")
+	}
+	baseline := right
+	baseline.Policy = RoutingPolicy{Default: "display-name"}
+	baseline.UpdatedAt = time.Now()
+	baseline.Hydrated = true
+	if !PersistedEqual(baseline, right) {
+		t.Fatal("runtime compatibility fields or timestamps affected persisted equality")
 	}
 }
 

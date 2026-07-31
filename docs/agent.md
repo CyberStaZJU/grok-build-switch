@@ -72,7 +72,8 @@ HTTP request
 重要约束：
 
 - `routing.json` schema v2 保存唯一 `active_provider_id`、稳定的 `provider_id:model` 引用和每个供应商的记忆策略；
-- default、web_search、explore、plan 必须全部属于启用供应商，不能重新引入跨供应商会话图；
+- default、web_search、explore、plan 必须全部属于启用供应商，不能重新引入跨供应商会话图；v1 跨供应商可选字段仅迁移进各自供应商的策略记忆；
+- 自定义非空 web_search 还必须是 `responses` 后端且明确支持后端搜索；UI 过滤不是安全边界，服务端拒绝无能力路由且不得产生持久化副作用；
 - 有自定义供应商时必须存在启用项；启用供应商不能删除，需先启用另一个供应商；
 - 自定义供应商切换保留 `config.toml` 的组合自定义模型目录，以兼容旧会话固定的旧别名；
 - 官方供应商是互斥特例：使用 Grok CLI 官方登录，切换时清除自定义模型定义和认证，不允许混合；
