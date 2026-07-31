@@ -127,6 +127,38 @@ func TestHydrateUsesLatestProfileCredentials(t *testing.T) {
 	}
 }
 
+func TestInitializeRejectsQuarantinedProfilesWithoutCreatingRouting(t *testing.T) {
+	dir := t.TempDir()
+	profilesPath := filepath.Join(dir, "profiles.json")
+	original := []byte(`[
+  {"id":"duplicate","name":"first","models":[{"name":"m1","model":"m1"}]},
+  {"id":"duplicate","name":"second","models":[{"name":"m2","model":"m2"}]}
+]
+`)
+	if err := os.WriteFile(profilesPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	routingPath := filepath.Join(dir, "routing.json")
+	_, err := NewStore(routingPath).Initialize(profiles.NewStore(profilesPath))
+	if err == nil || !strings.Contains(err.Error(), `duplicate profile id "duplicate"`) {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if _, statErr := os.Stat(routingPath); !os.IsNotExist(statErr) {
+		t.Fatalf("routing.json exists after quarantined profiles: %v", statErr)
+	}
+	matches, globErr := filepath.Glob(profilesPath + ".corrupt-*.bak")
+	if globErr != nil || len(matches) != 1 {
+		t.Fatalf("profile quarantine backups = %#v, err = %v", matches, globErr)
+	}
+	got, readErr := os.ReadFile(matches[0])
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("quarantine changed original bytes\nwant=%q\ngot=%q", original, got)
+	}
+}
+
 func TestInitializeIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
