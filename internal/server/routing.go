@@ -424,12 +424,39 @@ func (s *Server) currentRouting() (routingSnapshotDTO, routing.Snapshot, error) 
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
 	dto := s.routingDTO(hydrated)
-	if hydrated.ActiveProviderID != stored.ActiveProviderID || hydrated.ActivePolicy() != stored.ActivePolicy() {
+	// Flag repair only when the active provider or remembered route selections
+	// would change. Ignore route-name mirrors, capability flags, and catalog
+	// metadata so a healthy page does not keep showing a false repair banner.
+	if routingNeedsRepair(stored, hydrated) {
 		dto.RepairRequired = true
 		suggested := hydrated.ActivePolicy()
 		dto.SuggestedPolicy = &suggested
 	}
 	return dto, hydrated, nil
+}
+
+func routingNeedsRepair(stored, hydrated routing.Snapshot) bool {
+	if stored.ActiveProviderID != hydrated.ActiveProviderID {
+		return true
+	}
+	if len(stored.ProviderPolicies) != len(hydrated.ProviderPolicies) {
+		return true
+	}
+	for providerID, want := range hydrated.ProviderPolicies {
+		got, ok := stored.ProviderPolicies[providerID]
+		if !ok || !durablePolicyEqual(got, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func durablePolicyEqual(left, right routing.RoutingPolicy) bool {
+	return left.Default == right.Default &&
+		left.DefaultReasoningEffort == right.DefaultReasoningEffort &&
+		left.WebSearch == right.WebSearch &&
+		left.Subagents.Explore == right.Subagents.Explore &&
+		left.Subagents.Plan == right.Subagents.Plan
 }
 
 func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {

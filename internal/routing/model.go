@@ -389,6 +389,30 @@ func ProjectWithSnapshot(source []profiles.Profile, previous Snapshot) (Snapshot
 	return hydrated, nil
 }
 
+// RepairUnsupportedWebSearch clears legacy custom web_search selections that
+// cannot satisfy the schema-v2 backend contract. It is intended for explicit
+// startup migration, not interactive policy updates, which must reject invalid
+// selections instead of silently changing them.
+func RepairUnsupportedWebSearch(snapshot Snapshot) (Snapshot, bool) {
+	out := cloneSnapshot(snapshot)
+	changed := false
+	for providerID, policy := range out.ProviderPolicies {
+		if providerID == OfficialProviderID || strings.TrimSpace(policy.WebSearch) == "" {
+			continue
+		}
+		route, ok := out.Route(policy.WebSearch)
+		if !ok || route.ProviderID != providerID || route.APIBackend != "responses" || !route.SupportsBackendSearch {
+			policy.WebSearch = ""
+			policy.WebSearchCapable = true
+			out.ProviderPolicies[providerID] = policy
+			changed = true
+		}
+	}
+	out.Policy = out.ProviderPolicies[out.ActiveProviderID]
+	out.Policy.Official = out.IsOfficial()
+	return out, changed
+}
+
 func repairProviderPolicy(snapshot Snapshot, providerID string, policy, defaults RoutingPolicy) RoutingPolicy {
 	valid := func(ref string) string {
 		route, ok := snapshot.Route(ref)
