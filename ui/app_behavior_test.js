@@ -15,6 +15,9 @@ this.appTest = {
   csrfToken,
   newProfileDraft,
   normalizeReasoningEffort,
+  renderDrift,
+  reapplyRouting,
+  setStatus(value) { state.status = value; },
   formatTokenCount,
   formatHitRate,
   cacheTableHTML,
@@ -45,6 +48,45 @@ function loadApp(fetchImpl, elements = {}) {
   vm.runInContext(testableSource, context, { filename: appPath });
   return context.appTest;
 }
+
+test("routing drift banner follows config_matches_routing without an active profile", () => {
+  const banner = { hidden: true, style: { display: "none" } };
+  const app = loadApp(async () => response(500), { driftBanner: banner });
+
+  app.setStatus({ config_matches_routing: false, active_profile: null, config_matches_active: true });
+  app.renderDrift();
+  assert.equal(banner.hidden, false);
+  assert.equal(banner.style.display, "");
+
+  app.setStatus({ config_matches_routing: true, active_profile: { id: "legacy-profile" }, config_matches_active: false });
+  app.renderDrift();
+  assert.equal(banner.hidden, true);
+  assert.equal(banner.style.display, "none");
+
+  app.setStatus({});
+  app.renderDrift();
+  assert.equal(banner.hidden, true);
+  assert.equal(banner.style.display, "none");
+});
+
+test("routing reapply uses the unified routing endpoint with CSRF", async () => {
+  const calls = [];
+  const replies = [
+    response(200, { token: "routing-token" }),
+    response(200, { message: "路由策略已重新应用" }),
+  ];
+  const app = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    return replies.shift();
+  });
+
+  await app.reapplyRouting();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/csrf");
+  assert.equal(calls[1].url, "/api/routing/reapply");
+  assert.equal(calls[1].options.method, "POST");
+  assert.equal(calls[1].options.headers["X-Grok-Switch-CSRF"], "routing-token");
+});
 
 test("cache statistics render the nested report and escape labels", async () => {
   const elements = Object.fromEntries([

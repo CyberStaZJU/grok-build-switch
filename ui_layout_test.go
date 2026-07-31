@@ -60,6 +60,44 @@ func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
 	}
 }
 
+func TestRoutingDriftUIUsesUnifiedRouting(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"配置与当前模型路由不一致",
+		"config.toml 内容与当前模型路由不匹配",
+		"用当前模型路由覆盖文件",
+	} {
+		if !bytes.Contains(htmlData, []byte(fragment)) {
+			t.Fatalf("routing drift copy is missing %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		`state.status?.config_matches_routing === false`,
+		`api("/api/routing/reapply", { method: "POST" })`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("unified routing drift behavior is missing %q", fragment)
+		}
+	}
+	for _, stale := range []string{
+		`state.status?.config_matches_active`,
+		`state.status?.active_profile?.id`,
+		`/api/profiles/${id}/activate`,
+		"用供应商覆盖文件",
+	} {
+		if bytes.Contains(appData, []byte(stale)) || bytes.Contains(htmlData, []byte(stale)) {
+			t.Fatalf("legacy profile drift behavior remains %q", stale)
+		}
+	}
+}
+
 func TestCacheStatisticsUIContract(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {

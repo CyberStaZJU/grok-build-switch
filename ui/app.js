@@ -137,6 +137,19 @@ function cacheTableHTML(headers, rows) {
   return `<table class="cacheDataTable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function renderDrift() {
+  const banner = $("driftBanner");
+  if (!banner) return;
+  // Strict: only show when the server explicitly reports routing drift.
+  const drifted = state.status?.config_matches_routing === false;
+  banner.hidden = !drifted;
+  banner.style.display = drifted ? "" : "none";
+}
+
+async function reapplyRouting() {
+  await api("/api/routing/reapply", { method: "POST" });
+}
+
 async function loadCacheStats() {
   const hours = Number($("cacheStatsHours")?.value || 24);
   const data = await api(`/api/cache-stats?hours=${encodeURIComponent(hours)}`);
@@ -286,10 +299,6 @@ async function refreshAll() {
   state.profiles = profiles;
   state.settings = settings;
   state.lanAccess = lanAccess;
-  // Coerce to strict boolean for UI.
-  if (state.status && typeof state.status.config_matches_active !== "boolean") {
-    state.status.config_matches_active = true;
-  }
   renderDrift();
   renderEmptyState();
   renderProfiles();
@@ -299,17 +308,6 @@ async function refreshAll() {
 
 function activeProfile() {
   return state.profiles.find((p) => p.is_active) || state.status?.active_profile || null;
-}
-
-function renderDrift() {
-  const banner = $("driftBanner");
-  if (!banner) return;
-  const matches = state.status?.config_matches_active;
-  const activeID = state.status?.active_profile?.id;
-  // Strict: only show for explicit boolean false.
-  const drifted = Boolean(activeID) && matches === false;
-  banner.hidden = !drifted;
-  banner.style.display = drifted ? "" : "none";
 }
 
 async function loadConfigEditor() {
@@ -652,19 +650,6 @@ async function activateOfficial(button) {
 		button,
 		busyLabel: "切换中…",
 	});
-}
-
-async function activateProfile(id, button, name) {
-  if (!id) return;
-  await run(async () => {
-    await api(`/api/profiles/${id}/activate`, { method: "POST" });
-    await refreshAll();
-    showView("home");
-  }, {
-    button,
-    busyLabel: "启用中…",
-    success: `已启用 ${name || "供应商"}。新开 grok 会话生效。`,
-  });
 }
 
 function renderSettings(settings) {
@@ -1953,11 +1938,14 @@ document.querySelectorAll(".sshFilter").forEach((btn) => {
 $("sshConnCancel").onclick = () => $("sshConnDialog").close();
 $("sshConnForm").onsubmit = (e) => { e.preventDefault(); saveSSHConnection(); };
 $("sshConnAuthType").onchange = updateSSHAuthUI;
-$("reapplyBtn").onclick = () => {
-  const id = state.status?.active_profile?.id;
-  const name = state.status?.active_profile?.name;
-  activateProfile(id, $("reapplyBtn"), name);
-};
+$("reapplyBtn").onclick = () => run(async () => {
+  await reapplyRouting();
+  await refreshAll();
+}, {
+  button: $("reapplyBtn"),
+  busyLabel: "重新应用中…",
+  success: "当前模型路由已重新应用",
+});
 $("openConfigFromDriftBtn").onclick = () => showView("settings");
 
 $("reloadConfigBtn").onclick = () => run(async () => {
