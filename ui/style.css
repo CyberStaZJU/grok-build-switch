@@ -843,6 +843,21 @@ textarea:focus,
   margin-top: 0;
 }
 
+.modelAdvanced {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.modelAdvanced summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.modelAdvanced .check {
+  margin-top: 8px;
+}
+
 textarea {
   resize: vertical;
   min-height: 56px;

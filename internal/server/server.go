@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -130,6 +131,7 @@ func (s *Server) Listen(preferred int) (*http.Server, int, error) {
 func newApplicationHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           handler,
+		ErrorLog:          log.New(os.Stderr, "http: ", log.LstdFlags),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      15 * time.Minute,

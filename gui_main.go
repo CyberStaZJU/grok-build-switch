@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -135,12 +134,6 @@ func main() {
 	if err := appServer.ApplyCurrentRouting(); err != nil {
 		_ = httpServer.Shutdown(context.Background())
 		guiFatal(fmt.Errorf("最终应用组合路由失败: %w", err))
-	}
-	if crashFile := resolved.LogFile; crashFile != "" {
-		if f, ferr := os.OpenFile(crashFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); ferr == nil {
-			httpServer.ErrorLog = log.New(f, "http: ", log.LstdFlags)
-			defer f.Close()
-		}
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

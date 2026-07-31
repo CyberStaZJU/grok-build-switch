@@ -14,6 +14,9 @@ import (
 
 func TestApplicationHTTPServerTimeoutProfile(t *testing.T) {
 	srv := newApplicationHTTPServer(http.NotFoundHandler())
+	if srv.ErrorLog == nil || srv.ErrorLog.Prefix() != "http: " {
+		t.Fatal("application server did not initialize its error logger before serving")
+	}
 	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 || srv.MaxHeaderBytes <= 0 {
 		t.Fatalf("incomplete server limits: %#v", srv)
 	}

@@ -31,6 +31,26 @@ func TestListenRejectsInvalidPreferredPort(t *testing.T) {
 	}
 }
 
+func TestListenInstallsHTTPErrorLogBeforeServing(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{}
+	httpServer, _, err := server.Listen(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpServer.Close()
+	if httpServer.ErrorLog == nil || httpServer.ErrorLog.Prefix() != "http: " {
+		t.Fatal("Listen returned a server without its error logger configured")
+	}
+}
+
 func TestOfficialAnthropicProfileMutationsLeaveRoutingAndConfigUnchanged(t *testing.T) {
 	s := newRoutingTestServer(t)
 	beforeProfiles, err := os.ReadFile(s.Profiles.Path())

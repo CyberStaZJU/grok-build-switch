@@ -6,9 +6,18 @@ cd "$SCRIPT_DIR"
 
 APP_NAME="${APP_NAME:-Grok Build Switch}"
 BUNDLE_ID="${BUNDLE_ID:-com.grokbuildswitch.app}"
-VERSION="${VERSION:-${GITHUB_REF_NAME:-0.0.0-dev}}"
-if [[ "$VERSION" =~ ^v[0-9] ]]; then
-  VERSION="${VERSION#v}"
+MARKETING_VERSION="${MARKETING_VERSION:-${VERSION:-0.0.0}}"
+if [[ "$MARKETING_VERSION" =~ ^v[0-9] ]]; then
+  MARKETING_VERSION="${MARKETING_VERSION#v}"
+fi
+BUILD_VERSION="${BUILD_VERSION:-${BUILD_NUMBER:-1}}"
+if [[ ! "$MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf 'error: MARKETING_VERSION must use numeric major.minor.patch format: %s\n' "$MARKETING_VERSION" >&2
+  exit 1
+fi
+if [[ ! "$BUILD_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+  printf 'error: BUILD_VERSION must contain one to three numeric components: %s\n' "$BUILD_VERSION" >&2
+  exit 1
 fi
 EXECUTABLE_NAME="grok_switch"
 ARCH="arm64"
@@ -16,7 +25,7 @@ MACOS_MIN_VERSION="15.0"
 BUILD_DIR="${BUILD_DIR:-dist/macos}"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
 CONTENTS="${APP_BUNDLE}/Contents"
-DMG_PATH="${BUILD_DIR}/${APP_NAME// /-}-${VERSION}-macOS-${ARCH}.dmg"
+DMG_PATH="${BUILD_DIR}/${APP_NAME// /-}-${MARKETING_VERSION}-macOS-${ARCH}.dmg"
 REQUIRE_SIGNATURE=false
 
 verify_macos_minos() {
@@ -69,7 +78,7 @@ fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-printf 'Building %s %s (%s, macOS %s+)...\n' "$APP_NAME" "$VERSION" "$ARCH" "$MACOS_MIN_VERSION"
+printf 'Building %s %s (build %s, %s, macOS %s+)...\n' "$APP_NAME" "$MARKETING_VERSION" "$BUILD_VERSION" "$ARCH" "$MACOS_MIN_VERSION"
 go test -mod=readonly ./...
 CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" MACOSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION" go build -mod=readonly \
   -tags "wailsgui,desktop,production" \
@@ -129,8 +138,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>${APP_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
   <key>CFBundleIconFile</key><string>AppIcon.icns</string>
   <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
   <key>NSHighResolutionCapable</key><true/>

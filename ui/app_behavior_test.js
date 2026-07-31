@@ -8,15 +8,19 @@ const vm = require("node:vm");
 
 const appPath = path.join(__dirname, "app.js");
 const appSource = fs.readFileSync(appPath, "utf8");
-const testableSource = appSource.split("// Custom prompt dialog")[0] + `
+const testableSource = appSource.split("// Custom confirm dialog")[0] + `
 this.appTest = {
   TEMPLATES,
   api,
   csrfToken,
   newProfileDraft,
   normalizeReasoningEffort,
+  customPrompt,
   renderDrift,
   reapplyRouting,
+  deleteSSHFiles,
+  modelSupportsBackendSearch,
+  minimatch,
   setStatus(value) { state.status = value; },
   formatTokenCount,
   formatHitRate,
@@ -48,6 +52,60 @@ function loadApp(fetchImpl, elements = {}) {
   vm.runInContext(testableSource, context, { filename: appPath });
   return context.appTest;
 }
+
+test("custom prompt resolves null on Escape and clears every handler", async () => {
+  const dialog = {
+    open: false,
+    oncancel: null,
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+  };
+  const input = {
+    value: "",
+    onkeydown: null,
+    focus() {},
+    select() {},
+  };
+  const label = { textContent: "" };
+  const ok = { onclick: null };
+  const cancel = { onclick: null };
+  const app = loadApp(async () => response(500), {
+    promptDialog: dialog,
+    promptInput: input,
+    promptLabel: label,
+    promptOk: ok,
+    promptCancel: cancel,
+  });
+
+  const pending = app.customPrompt("SSH password", "secret");
+  assert.equal(typeof dialog.oncancel, "function");
+  let prevented = false;
+  dialog.oncancel({ preventDefault() { prevented = true; } });
+  assert.equal(await pending, null);
+  assert.equal(prevented, true);
+  assert.equal(dialog.open, false);
+  assert.equal(input.onkeydown, null);
+  assert.equal(ok.onclick, null);
+  assert.equal(cancel.onclick, null);
+  assert.equal(dialog.oncancel, null);
+});
+
+test("SSH filename glob treats question mark as one arbitrary character", () => {
+  const app = loadApp(async () => response(500));
+  assert.equal(app.minimatch("ab.txt", "a?.txt"), true);
+  assert.equal(app.minimatch("a..txt", "a?.txt"), true);
+  assert.equal(app.minimatch("abc.txt", "a?.txt"), false);
+  assert.equal(app.minimatch("aX.txt", "a?.txt"), true);
+  assert.equal(app.minimatch("a[.txt", "a[.txt"), true);
+  assert.equal(app.minimatch("a/b.txt", "a/b.txt"), true);
+});
+
+test("manual models do not claim backend search unless explicitly enabled", () => {
+  const app = loadApp(async () => response(500));
+  assert.equal(app.modelSupportsBackendSearch({}), false);
+  assert.equal(app.modelSupportsBackendSearch({ supports_backend_search: false }), false);
+  assert.equal(app.modelSupportsBackendSearch({ supports_backend_search: true }), true);
+});
 
 test("routing drift banner follows config_matches_routing without an active profile", () => {
   const banner = { hidden: true, style: { display: "none" } };
@@ -86,6 +144,26 @@ test("routing reapply uses the unified routing endpoint with CSRF", async () => 
   assert.equal(calls[1].url, "/api/routing/reapply");
   assert.equal(calls[1].options.method, "POST");
   assert.equal(calls[1].options.headers["X-Grok-Switch-CSRF"], "routing-token");
+});
+
+test("SSH file deletion includes the encoded active connection ID", async () => {
+  const calls = [];
+  const replies = [
+    response(200, { token: "ssh-delete-token" }),
+    response(200, { ok: true }),
+  ];
+  const app = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    return replies.shift();
+  });
+
+  await app.deleteSSHFiles("connection id/with?reserved", ["/tmp/a.txt", "/tmp/b.txt"]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/csrf");
+  assert.equal(calls[1].url, "/api/ssh/files?conn_id=connection%20id%2Fwith%3Freserved");
+  assert.equal(calls[1].options.method, "DELETE");
+  assert.equal(calls[1].options.headers["X-Grok-Switch-CSRF"], "ssh-delete-token");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { paths: ["/tmp/a.txt", "/tmp/b.txt"] });
 });
 
 test("cache statistics render the nested report and escape labels", async () => {

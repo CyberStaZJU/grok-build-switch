@@ -51,7 +51,7 @@ func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
 		"Grok Auth JSON", "Grok 注册机", "Grok 账号池", "CPA 设备授权", "CodeBuddy", "备份与恢复", "OAuth Client ID",
 		`id="grokAuthCard"`, `id="registrarCard"`, `id="grokPoolCard"`, `id="backupFold"`, `id="oauthClientID"`,
 		`id="toggleAdvancedBtn"`, "advancedOnly", `data-field="base_url"`, `data-field="api_backend"`,
-		`data-field="context_window"`, `data-field="max_completion_tokens"`, `data-field="supports_backend_search"`, `data-field="extra_headers"`,
+		`data-field="context_window"`, `data-field="max_completion_tokens"`, `data-field="extra_headers"`,
 		"/api/backups", "/api/grok-auth", "/api/grok-pool", "/api/registrar", "/api/cpa-mint", "/api/codebuddy",
 	} {
 		if bytes.Contains(combined, []byte(removed)) {
@@ -95,6 +95,49 @@ func TestRoutingDriftUIUsesUnifiedRouting(t *testing.T) {
 		if bytes.Contains(appData, []byte(stale)) || bytes.Contains(htmlData, []byte(stale)) {
 			t.Fatalf("legacy profile drift behavior remains %q", stale)
 		}
+	}
+}
+
+func TestFrontendPromptGlobAndSearchCapabilityContracts(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"dialog.oncancel = (event) =>",
+		"ok.onclick = null",
+		"cancel.onclick = null",
+		"dialog.oncancel = null",
+		`.replace(/[.+^${}()|[\]\\/]/g, "\\$&")`,
+		"return model.supports_backend_search ?? false",
+		`data-field="supports_backend_search"`,
+		"仅在上游明确支持时启用",
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("frontend hardening contract is missing %q", fragment)
+		}
+	}
+	if bytes.Contains(appData, []byte("model.supports_backend_search ?? true")) {
+		t.Fatal("manual models still default to backend search support")
+	}
+}
+
+func TestSSHFileDeleteIncludesConnectionID(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"async function deleteSSHFiles(connID, paths)",
+		"`/api/ssh/files?conn_id=${encodeURIComponent(connID)}`",
+		"await deleteSSHFiles(ssh.activeConn, paths)",
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("SSH file deletion is missing %q", fragment)
+		}
+	}
+	if bytes.Contains(appData, []byte(`api("/api/ssh/files", { method: "DELETE"`)) {
+		t.Fatal("SSH file deletion still omits conn_id")
 	}
 }
 
