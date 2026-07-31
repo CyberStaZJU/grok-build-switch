@@ -53,16 +53,18 @@ type routingModelDTO struct {
 }
 
 type routingSnapshotDTO struct {
-	Version          int                    `json:"version"`
-	Providers        []routingProviderDTO   `json:"providers"`
-	ModelRoutes      []routingModelDTO      `json:"model_routes"`
-	OfficialModels   []routingModelDTO      `json:"official_models,omitempty"`
-	OfficialLoggedIn bool                   `json:"official_logged_in"`
-	Policy           routing.RoutingPolicy  `json:"policy"`
-	RepairRequired   bool                   `json:"repair_required"`
-	SuggestedPolicy  *routing.RoutingPolicy `json:"suggested_policy,omitempty"`
-	WebSearchCapable bool                   `json:"web_search_capable"`
-	UpdatedAt        time.Time              `json:"updated_at"`
+	Version          int                              `json:"version"`
+	ActiveProviderID string                           `json:"active_provider_id"`
+	Providers        []routingProviderDTO             `json:"providers"`
+	ModelRoutes      []routingModelDTO                `json:"model_routes"`
+	OfficialModels   []routingModelDTO                `json:"official_models,omitempty"`
+	OfficialLoggedIn bool                             `json:"official_logged_in"`
+	Policy           routing.RoutingPolicy            `json:"policy"`
+	ProviderPolicies map[string]routing.RoutingPolicy `json:"provider_policies"`
+	RepairRequired   bool                             `json:"repair_required"`
+	SuggestedPolicy  *routing.RoutingPolicy           `json:"suggested_policy,omitempty"`
+	WebSearchCapable bool                             `json:"web_search_capable"`
+	UpdatedAt        time.Time                        `json:"updated_at"`
 }
 
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +98,7 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Support partial updates while strictly validating field names and types.
 	var rawPatch struct {
+		ActiveProviderID       *string `json:"active_provider_id"`
 		Official               *bool   `json:"official"`
 		Default                *string `json:"default"`
 		DefaultReasoningEffort *string `json:"default_reasoning_effort"`
@@ -120,29 +123,84 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Merge: start from the current stored policy, override only provided fields.
-	policy := currentStored.Policy
+	activeProviderID := currentStored.ActiveProviderID
+	if rawPatch.ActiveProviderID != nil {
+		activeProviderID = strings.TrimSpace(*rawPatch.ActiveProviderID)
+	}
 	if rawPatch.Official != nil {
-		policy.Official = *rawPatch.Official
+		if *rawPatch.Official {
+			activeProviderID = routing.OfficialProviderID
+		} else if activeProviderID == routing.OfficialProviderID {
+			activeProviderID = ""
+		}
+	}
+	if activeProviderID == "" && rawPatch.Default != nil {
+		if route, ok := currentStored.Route(*rawPatch.Default); ok {
+			activeProviderID = route.ProviderID
+		}
+	}
+	if activeProviderID == "" {
+		writeError(w, fmt.Errorf("请选择要启用的供应商"), http.StatusBadRequest)
+		return
+	}
+	if activeProviderID != routing.OfficialProviderID {
+		if _, ok := currentStored.Provider(activeProviderID); !ok {
+			writeError(w, fmt.Errorf("供应商不可用"), http.StatusBadRequest)
+			return
+		}
+	}
+	// Merge only the selected provider's remembered policy.
+	policy := currentStored.ProviderPolicies[activeProviderID]
+	policy.Official = activeProviderID == routing.OfficialProviderID
+	resolveRef := func(ref string) (string, error) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || activeProviderID == routing.OfficialProviderID {
+			return ref, nil
+		}
+		route, ok := currentStored.Route(ref)
+		if !ok || route.ProviderID != activeProviderID {
+			return "", fmt.Errorf("模型 %q 不属于当前供应商", ref)
+		}
+		return route.ID, nil
 	}
 	if rawPatch.Default != nil {
-		policy.Default = *rawPatch.Default
+		ref, resolveErr := resolveRef(*rawPatch.Default)
+		if resolveErr != nil {
+			writeError(w, resolveErr, http.StatusBadRequest)
+			return
+		}
+		policy.Default = ref
 	}
 	if rawPatch.DefaultReasoningEffort != nil {
 		policy.DefaultReasoningEffort = *rawPatch.DefaultReasoningEffort
 	}
 	if rawPatch.WebSearch != nil {
-		policy.WebSearch = *rawPatch.WebSearch
+		ref, resolveErr := resolveRef(*rawPatch.WebSearch)
+		if resolveErr != nil {
+			writeError(w, resolveErr, http.StatusBadRequest)
+			return
+		}
+		policy.WebSearch = ref
 	}
 	if rawPatch.Subagents != nil {
 		if rawPatch.Subagents.Explore != nil {
-			policy.Subagents.Explore = *rawPatch.Subagents.Explore
+			ref, resolveErr := resolveRef(*rawPatch.Subagents.Explore)
+			if resolveErr != nil {
+				writeError(w, resolveErr, http.StatusBadRequest)
+				return
+			}
+			policy.Subagents.Explore = ref
 		}
 		if rawPatch.Subagents.Plan != nil {
-			policy.Subagents.Plan = *rawPatch.Subagents.Plan
+			ref, resolveErr := resolveRef(*rawPatch.Subagents.Plan)
+			if resolveErr != nil {
+				writeError(w, resolveErr, http.StatusBadRequest)
+				return
+			}
+			policy.Subagents.Plan = ref
 		}
 	}
-	if policy.Official {
+	if activeProviderID == routing.OfficialProviderID {
 		if _, loggedIn := s.officialRoutingModels(); !loggedIn {
 			writeError(w, fmt.Errorf("尚未登录 Grok 官方账号"), http.StatusBadRequest)
 			return
@@ -153,7 +211,15 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hydrated, err := routing.ProjectWithPolicy(profilesList, policy)
+	nextState := currentStored
+	nextState.Policy = routing.RoutingPolicy{}
+	nextState.ActiveProviderID = activeProviderID
+	if nextState.ProviderPolicies == nil {
+		nextState.ProviderPolicies = map[string]routing.RoutingPolicy{}
+	}
+	policy.Official = false
+	nextState.ProviderPolicies[activeProviderID] = policy
+	hydrated, err := routing.ProjectWithSnapshot(profilesList, nextState)
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -186,7 +252,7 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hydrated, err = routing.ProjectWithPolicy(profilesList, stored.Policy)
+	hydrated, err = routing.ProjectWithSnapshot(profilesList, stored)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -241,18 +307,43 @@ func (s *Server) applyCurrentRoutingLocked() error {
 	if err != nil {
 		return err
 	}
-	policy := routing.RepairPolicy(profileList, stored.Policy)
-	_, err = s.applyRoutingPolicyTransaction(profileList, policy)
+	_, err = s.applyRoutingSnapshotTransaction(profileList, stored)
 	return err
 }
 
 func (s *Server) applyRoutingPolicyTransaction(profileList []profiles.Profile, policy routing.RoutingPolicy) (routing.Snapshot, error) {
+	current, err := s.Routing.Snapshot()
+	if err != nil {
+		return routing.Snapshot{}, err
+	}
+	providerID := current.ActiveProviderID
 	if policy.Official {
-		if err := validateOfficialRoutingPolicy(policy); err != nil {
+		providerID = routing.OfficialProviderID
+		policy.Official = false
+	} else {
+		for _, ref := range []string{policy.Default, policy.WebSearch, policy.Subagents.Explore, policy.Subagents.Plan} {
+			if route, ok := current.Route(ref); ok {
+				providerID = route.ProviderID
+				break
+			}
+		}
+	}
+	current.Policy = routing.RoutingPolicy{}
+	current.ActiveProviderID = providerID
+	if current.ProviderPolicies == nil {
+		current.ProviderPolicies = map[string]routing.RoutingPolicy{}
+	}
+	current.ProviderPolicies[providerID] = policy
+	return s.applyRoutingSnapshotTransaction(profileList, current)
+}
+
+func (s *Server) applyRoutingSnapshotTransaction(profileList []profiles.Profile, state routing.Snapshot) (routing.Snapshot, error) {
+	if state.IsOfficial() {
+		if err := validateOfficialRoutingPolicy(state.ActivePolicy()); err != nil {
 			return routing.Snapshot{}, err
 		}
 	}
-	hydrated, err := routing.ProjectWithPolicy(profileList, policy)
+	hydrated, err := routing.ProjectWithSnapshot(profileList, state)
 	if err != nil {
 		return routing.Snapshot{}, err
 	}
@@ -283,7 +374,7 @@ func (s *Server) applyRoutingPolicyTransaction(profileList []profiles.Profile, p
 }
 
 func hydratedRouteProviderID(snapshot routing.Snapshot) string {
-	route, ok := snapshot.Route(snapshot.Policy.Default)
+	route, ok := snapshot.Route(snapshot.ActivePolicy().Default)
 	if !ok {
 		return ""
 	}
@@ -319,17 +410,16 @@ func (s *Server) currentRouting() (routingSnapshotDTO, routing.Snapshot, error) 
 	if err != nil {
 		return routingSnapshotDTO{}, routing.Snapshot{}, err
 	}
-	policy := routing.RepairPolicy(profilesList, stored.Policy)
-	hydrated, err := routing.ProjectWithPolicy(profilesList, policy)
+	hydrated, err := routing.ProjectWithSnapshot(profilesList, stored)
 	if err != nil {
 		return routingSnapshotDTO{}, routing.Snapshot{}, err
 	}
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
 	dto := s.routingDTO(hydrated)
-	if policy != stored.Policy {
+	if hydrated.ActiveProviderID != stored.ActiveProviderID || hydrated.ActivePolicy() != stored.ActivePolicy() {
 		dto.RepairRequired = true
-		suggested := policy
+		suggested := hydrated.ActivePolicy()
 		dto.SuggestedPolicy = &suggested
 	}
 	return dto, hydrated, nil
@@ -356,33 +446,39 @@ func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 		})
 	}
 	officialModels, officialLoggedIn := s.officialRoutingModels()
+	policy := snapshot.ActivePolicy()
+	providerPolicies := make(map[string]routing.RoutingPolicy, len(snapshot.ProviderPolicies))
+	for providerID, remembered := range snapshot.ProviderPolicies {
+		providerPolicies[providerID] = remembered
+	}
 	return routingSnapshotDTO{
-		Version: snapshot.Version, Providers: providers, ModelRoutes: models,
+		Version: snapshot.Version, ActiveProviderID: snapshot.ActiveProviderID, Providers: providers, ModelRoutes: models,
 		OfficialModels: officialModels, OfficialLoggedIn: officialLoggedIn,
-		Policy: snapshot.Policy, WebSearchCapable: snapshot.Policy.WebSearchCapable,
+		Policy: policy, ProviderPolicies: providerPolicies, WebSearchCapable: policy.WebSearchCapable,
 		UpdatedAt: snapshot.UpdatedAt,
 	}
 }
 
 func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {
-	effort := strings.TrimSpace(snapshot.Policy.DefaultReasoningEffort)
+	policy := snapshot.ActivePolicy()
+	effort := strings.TrimSpace(policy.DefaultReasoningEffort)
 	if effort == "" || effort == "none" {
 		return nil
 	}
-	if snapshot.Policy.Official {
+	if snapshot.IsOfficial() {
 		for _, model := range defaultOfficialRoutingModels {
-			if model.Name == snapshot.Policy.Default {
+			if model.Name == policy.Default {
 				if containsReasoningEffort(model.ReasoningEfforts, effort) {
 					return nil
 				}
 				return fmt.Errorf("官方模型 %q 不支持推理强度 %q；可用档位：%s", model.Name, effort, strings.Join(model.ReasoningEfforts, "、"))
 			}
 		}
-		return fmt.Errorf("官方默认模型 %q 不可用", snapshot.Policy.Default)
+		return fmt.Errorf("官方默认模型 %q 不可用", policy.Default)
 	}
-	route, ok := snapshot.Route(snapshot.Policy.Default)
+	route, ok := snapshot.Route(policy.Default)
 	if !ok {
-		return fmt.Errorf("默认路由模型 %q 不可用", snapshot.Policy.Default)
+		return fmt.Errorf("默认路由模型 %q 不可用", policy.Default)
 	}
 	if containsReasoningEffort(route.ReasoningEfforts, effort) {
 		return nil
@@ -421,7 +517,7 @@ func validateOfficialRoutingPolicy(policy routing.RoutingPolicy) error {
 }
 
 func (s *Server) resolveRoutingModel(snapshot routing.Snapshot, name string) (routing.ModelRoute, bool) {
-	if !snapshot.Policy.Official {
+	if !snapshot.IsOfficial() {
 		return snapshot.Route(name)
 	}
 	baseURL, apiKey := "", ""

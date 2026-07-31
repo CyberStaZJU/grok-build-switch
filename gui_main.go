@@ -89,16 +89,15 @@ func main() {
 	if err != nil {
 		guiFatal(err)
 	}
-	startupPolicy := routing.RepairPolicy(profileList, routingSnapshot.Policy)
-	hydratedRouting, err := routing.ProjectWithPolicy(profileList, startupPolicy)
+	hydratedRouting, err := routing.ProjectWithSnapshot(profileList, routingSnapshot)
 	if err != nil {
 		guiFatal(err)
 	}
 	if err := sw.ApplyRouting(hydratedRouting); err != nil {
 		guiFatal(fmt.Errorf("应用启动路由配置失败: %w", err))
 	}
-	if startupPolicy != routingSnapshot.Policy {
-		if _, err := routingStore.UpdatePolicy(startupPolicy); err != nil {
+	if hydratedRouting.ActiveProviderID != routingSnapshot.ActiveProviderID || hydratedRouting.ActivePolicy() != routingSnapshot.ActivePolicy() {
+		if _, err := routingStore.Replace(hydratedRouting); err != nil {
 			guiFatal(fmt.Errorf("修复启动路由策略失败: %w", err))
 		}
 	}

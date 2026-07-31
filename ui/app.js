@@ -572,11 +572,21 @@ function renderProfiles() {
 			</div>
 			<div class="providerActions">
 				<button type="button" class="btn sm ghost" data-action="pin">${profile.pinned ? "取消置顶" : "置顶"}</button>
+        <button type="button" class="btn sm primary" data-action="activate" ${profile.is_active ? "disabled" : ""}>${official && !profile.logged_in ? "登录并启用" : profile.is_active ? "已启用" : "启用"}</button>
 				${official ? "" : '<button type="button" class="btn sm" data-action="edit">编辑</button><button type="button" class="btn sm ghost" data-action="copy">复制</button><button type="button" class="btn sm ghost" data-action="export">导出</button><button type="button" class="btn sm danger" data-action="delete">删除</button>'}
 			</div>
 		`;
 
 		el.querySelector('[data-action="pin"]').onclick = () => toggleProviderPin(profile.key);
+    el.querySelector('[data-action="activate"]').onclick = () => {
+      if (official) return activateOfficial(el.querySelector('[data-action="activate"]'));
+      return run(async () => {
+        const routing = await api("/api/routing");
+        const policy = routing.provider_policies?.[profile.id] || {};
+        await api("/api/routing/policy", { method: "PUT", body: JSON.stringify({ active_provider_id: profile.id, ...policy }) });
+        await refreshAll();
+      }, { button: el.querySelector('[data-action="activate"]'), busyLabel: "启用中…", success: `已启用「${profile.name}」` });
+    };
 		bindProviderDrag(el, profile.key);
 
 		if (!official) {
@@ -1376,6 +1386,11 @@ function renderSubscriptionProxy(data) {
   const models = Array.isArray(data?.models) ? data.models : [];
   const groups = Object.groupBy ? Object.groupBy(models, (model) => model.provider || "其他") : models.reduce((result, model) => { (result[model.provider || "其他"] ||= []).push(model); return result; }, {});
   $("subscriptionModels").innerHTML = Object.entries(groups).map(([provider, items]) => `<fieldset><legend>${escapeHtml(provider)}</legend>${items.map((model) => `<label class="check"><input type="checkbox" value="${escapeAttr(model.id)}" data-provider="${escapeAttr(model.provider)}" ${model.selected ? "checked" : ""}> <span>${escapeHtml(model.label || model.id)}</span></label>`).join("")}</fieldset>`).join("") || '<p class="muted tiny">暂无可用模型。</p>';
+  const serviceReady = data?.service?.state === "running";
+  document.querySelectorAll(".subscriptionLoginBtn").forEach((button) => {
+    button.disabled = !serviceReady;
+    button.title = serviceReady ? "在浏览器中登录此订阅账号" : "请先启动订阅代理服务";
+  });
   const accountProviders = new Set(accounts.filter((account) => !account.disabled && !account.unavailable).map((account) => account.provider));
   const selectedProviders = new Set(models.filter((model) => model.selected).map((model) => model.provider));
   document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => {
@@ -2223,150 +2238,89 @@ async function loadRoutingView() {
 
 function renderRouting(snapshot) {
   if (!snapshot) return;
-  const routingStatus = $("routingStatus");
-  const catalog = $("routingCatalog");
-  const modelCount = $("routingModelCount");
-  const policy = snapshot.policy || {};
-  const modelRoutes = snapshot.model_routes || [];
-  const officialModels = snapshot.official_logged_in ? (snapshot.official_models || []) : [];
+  // Provider selection replaces the old opt.dataset.official mixed catalog.
+  // updateRoutingReasoningEfforts is now scoped inside renderProviderPolicy.
+  state.routing = snapshot;
   const providers = snapshot.providers || [];
-  const selectableRoutes = [
-    ...officialModels.map((route) => ({ ...route, official: true })),
-    ...modelRoutes.map((route) => ({ ...route, official: false })),
-  ];
-
-  // Populate policy dropdowns. Official models are exposed only when the
-  // native Grok login exists; selecting one switches the whole policy to
-  // official auth because official and custom endpoints cannot be mixed.
-  const dropdownValues = {
-    routingDefault: policy.default || "",
-    routingWebSearch: policy.web_search || "",
-    routingExplore: policy.subagents?.explore || "",
-    routingPlan: policy.subagents?.plan || "",
-  };
-  for (const [selectId, policyValue] of Object.entries(dropdownValues)) {
-    const sel = $(selectId);
-    if (!sel) continue;
-    const current = policy.official && policyValue ? `official:${policyValue}` : policyValue;
-    sel.innerHTML = '<option value="">（未设置）</option>';
-    for (const route of selectableRoutes) {
-      const opt = document.createElement("option");
-      opt.value = route.official ? `official:${route.name}` : route.name;
-      opt.dataset.routeName = route.name;
-      opt.dataset.official = route.official ? "1" : "0";
-      const providerLabel = route.official ? "官方账号" : "自定义路由";
-      opt.textContent = `${route.name} — ${route.model}（${providerLabel}）`;
-      sel.appendChild(opt);
-    }
-    sel.value = current;
+  const activeProviderID = snapshot.active_provider_id || "";
+  const providerSelect = $("routingProvider");
+  providerSelect.replaceChildren();
+  if (snapshot.official_logged_in) {
+    const option = document.createElement("option");
+    option.value = OFFICIAL_PROVIDER_KEY;
+    option.textContent = "官方账号（grok.com）";
+    providerSelect.append(option);
   }
+  for (const provider of providers) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.name;
+    providerSelect.append(option);
+  }
+  providerSelect.value = activeProviderID;
 
-  const updateRoutingReasoningEfforts = () => {
-    const selected = $("routingDefault")?.selectedOptions?.[0];
-    const routeName = selected?.dataset.routeName || "";
-    const official = selected?.dataset.official === "1";
-    const route = selectableRoutes.find((item) => item.name === routeName && item.official === official);
-    const supported = route?.supports_reasoning_effort === true
-      ? (route.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort) && effort !== "none")
-      : [];
-    const options = supported.length ? supported : ["none"];
-    const effortSel = $("routingReasoningEffort");
-    if (!effortSel) return;
-    effortSel.disabled = supported.length === 0;
-    const current = REASONING_EFFORTS.includes(effortSel.value) ? effortSel.value : policy.default_reasoning_effort;
-    effortSel.replaceChildren(...options.map((effort) => {
-      const option = document.createElement("option");
-      option.value = effort;
-      option.textContent = REASONING_EFFORT_LABELS[effort];
-      return option;
-    }));
-    effortSel.value = options.includes(current) ? current : fallbackReasoningEffort(options);
-  };
-
-  const defaultSelect = $("routingDefault");
-  if (defaultSelect) {
-    defaultSelect.onchange = () => {
-      const selected = defaultSelect.selectedOptions?.[0];
-      if (!selected?.value) return;
-      const official = selected.dataset.official === "1";
-      for (const selectId of ["routingWebSearch", "routingExplore", "routingPlan"]) {
-        const target = $(selectId);
-        const currentOption = target?.selectedOptions?.[0];
-        if (!target || !currentOption?.value || (currentOption.dataset.official === "1") === official) continue;
-        const matching = [...target.options].find((option) => option.dataset.official === selected.dataset.official && option.dataset.routeName === selected.dataset.routeName);
-        target.value = matching?.value || "";
+  const renderProviderPolicy = (providerID) => {
+    const official = providerID === OFFICIAL_PROVIDER_KEY;
+    const policy = snapshot.provider_policies?.[providerID] || (providerID === activeProviderID ? snapshot.policy : {}) || {};
+    const routes = official ? (snapshot.official_models || []) : (snapshot.model_routes || []).filter((route) => route.provider_id === providerID);
+    const warning = $("routingCompatibilityWarning");
+    warning.hidden = false;
+    warning.textContent = official
+      ? "切换到官方账号会移除 config.toml 中的自定义模型定义和自定义认证；切回自定义供应商时会从 Profile 目录重建完整自定义模型目录。"
+      : "只允许从当前供应商选择 default、web_search、explore 和 plan。切换自定义供应商时，config.toml 仍保留所有自定义模型定义，以兼容旧会话固定的旧别名。";
+    const values = { routingDefault: policy.default || "", routingWebSearch: policy.web_search || "", routingExplore: policy.subagents?.explore || "", routingPlan: policy.subagents?.plan || "" };
+    for (const [id, value] of Object.entries(values)) {
+      const select = $(id);
+      select.innerHTML = id === "routingDefault" ? "" : '<option value="">（未设置）</option>';
+      for (const route of routes) {
+        const option = document.createElement("option");
+        option.value = route.id;
+        option.dataset.routeName = route.name;
+        option.textContent = `${route.name} — ${route.model || route.profile_model}`;
+        select.append(option);
       }
-      updateRoutingReasoningEfforts();
+      select.value = value;
+    }
+    const updateEfforts = () => {
+      const route = routes.find((item) => item.id === $("routingDefault").value);
+      const supported = route?.supports_reasoning_effort ? (route.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort) && effort !== "none") : [];
+      const options = supported.length ? supported : ["none"];
+      const select = $("routingReasoningEffort");
+      select.disabled = supported.length === 0;
+      select.replaceChildren(...options.map((effort) => { const option = document.createElement("option"); option.value = effort; option.textContent = REASONING_EFFORT_LABELS[effort]; return option; }));
+      select.value = options.includes(policy.default_reasoning_effort) ? policy.default_reasoning_effort : fallbackReasoningEffort(options);
     };
-  }
-  updateRoutingReasoningEfforts();
+    $("routingDefault").onchange = updateEfforts;
+    updateEfforts();
+  };
+  providerSelect.onchange = () => renderProviderPolicy(providerSelect.value);
+  renderProviderPolicy(activeProviderID);
 
-  if (routingStatus) {
-    routingStatus.textContent = `更新于 ${snapshot.updated_at ? new Date(snapshot.updated_at).toLocaleTimeString("zh-CN") : "—"} · ${providers.length} 个供应商 · ${modelRoutes.length} 个模型`;
-  }
-
-  // Render unified model catalog
-  if (modelCount) modelCount.textContent = `${modelRoutes.length} 个`;
-  if (catalog) {
-    if (!modelRoutes.length) {
-      catalog.innerHTML = '<div class="routingUnavailable"><strong>暂无可用模型</strong><p>添加并启用供应商后，模型会在此展示。</p></div>';
-    } else {
-      const byProvider = {};
-      for (const route of modelRoutes) {
-        const pName = route.provider_id || "其他";
-        if (!byProvider[pName]) byProvider[pName] = [];
-        byProvider[pName].push(route);
-      }
-      catalog.innerHTML = Object.entries(byProvider).map(([pName, routes]) => `
-        <section class="routingCatalogGroup">
-          <div class="routingCatalogHead"><strong>${escapeHtml(pName)}</strong><span class="muted tiny">${routes.length} 个模型</span></div>
-          <div class="routingCatalogModels">
-            ${routes.map((r) => `
-              <div class="routingCatalogModel">
-                <div class="routingCatalogModelInfo">
-                  <strong>${escapeHtml(r.name)}</strong>
-                  <code>${escapeHtml(r.model)}</code>
-                  ${r.api_backend ? `<span class="muted tiny">backend: ${escapeHtml(r.api_backend)}</span>` : ""}
-                </div>
-                <div class="routingCatalogModelMeta">
-                  ${r.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}
-                  ${r.supports_reasoning_effort ? '<span class="badge active">推理</span>' : ''}
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        </section>
-      `).join("");
-    }
-  }
+  const modelRoutes = snapshot.model_routes || [];
+  $("routingStatus").textContent = `更新于 ${snapshot.updated_at ? new Date(snapshot.updated_at).toLocaleTimeString("zh-CN") : "—"} · ${providers.length} 个自定义供应商 · ${modelRoutes.length} 个模型`;
+  $("routingModelCount").textContent = `${modelRoutes.length} 个`;
+  const byProvider = {};
+  for (const route of modelRoutes) (byProvider[route.provider_id] ||= []).push(route);
+  $("routingCatalog").innerHTML = modelRoutes.length ? Object.entries(byProvider).map(([providerID, routes]) => {
+    const provider = providers.find((item) => item.id === providerID);
+    return `<section class="routingCatalogGroup"><div class="routingCatalogHead"><strong>${escapeHtml(provider?.name || providerID)}</strong><span class="muted tiny">${routes.length} 个模型</span></div><div class="routingCatalogModels">${routes.map((route) => `<div class="routingCatalogModel"><div class="routingCatalogModelInfo"><strong>${escapeHtml(route.name)}</strong><code>${escapeHtml(route.model)}</code><span class="muted tiny">backend: ${escapeHtml(route.api_backend || "")}</span></div><div class="routingCatalogModelMeta">${route.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}${route.supports_reasoning_effort ? '<span class="badge active">推理</span>' : ""}</div></div>`).join("")}</div></section>`;
+  }).join("") : '<div class="routingUnavailable"><strong>暂无可用模型</strong><p>请先添加至少一个包含模型的供应商。</p></div>';
 }
 
 function saveRoutingPolicy() {
-  const defaultSelect = $("routingDefault");
-  const selectedRoute = (selectId) => {
-    const option = $(selectId)?.selectedOptions?.[0];
-    return { name: option?.dataset.routeName || "", official: option?.dataset.official === "1" };
-  };
-  const defaultRoute = selectedRoute("routingDefault");
-  const webSearchRoute = selectedRoute("routingWebSearch");
-  const exploreRoute = selectedRoute("routingExplore");
-  const planRoute = selectedRoute("routingPlan");
-  const official = defaultRoute.official;
-  const policy = {
-    official,
-    default: defaultRoute.name,
-    default_reasoning_effort: $("routingReasoningEffort")?.value || "none",
-    web_search: webSearchRoute.official === official ? webSearchRoute.name : "",
-    subagents: {
-      explore: exploreRoute.official === official ? exploreRoute.name : "",
-      plan: planRoute.official === official ? planRoute.name : "",
-    },
+  const providerID = $("routingProvider").value;
+  const payload = {
+    active_provider_id: providerID,
+    default: $("routingDefault").value,
+    default_reasoning_effort: $("routingReasoningEffort").value || "none",
+    web_search: $("routingWebSearch").value,
+    subagents: { explore: $("routingExplore").value, plan: $("routingPlan").value },
   };
   run(async () => {
-    await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(policy) });
-    toast("路由策略已保存", "success");
+    await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(payload) });
+    await refreshAll();
     await loadRoutingView();
-  }, { button: $("saveRoutingPolicyBtn"), busyLabel: "保存中…" });
+  }, { button: $("saveRoutingPolicyBtn"), busyLabel: "保存中…", success: "已启用供应商并保存其路由策略" });
 }
 
 // ——— Routing Event Handlers ———

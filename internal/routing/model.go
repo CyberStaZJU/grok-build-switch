@@ -8,7 +8,10 @@ import (
 	"grok_switch/internal/profiles"
 )
 
-const CurrentVersion = 1
+const (
+	CurrentVersion     = 2
+	OfficialProviderID = "official"
+)
 
 type Provider struct {
 	ID        string `json:"id"`
@@ -16,8 +19,6 @@ type Provider struct {
 	ProfileID string `json:"profile_id"`
 	Source    string `json:"source,omitempty"`
 
-	// Runtime fields are hydrated from the latest profiles and are never
-	// serialized to routing.json or exposed by the default JSON API.
 	UpstreamFormat string `json:"-"`
 	BaseURL        string `json:"-"`
 	APIKey         string `json:"-"`
@@ -29,8 +30,6 @@ type ModelRoute struct {
 	ProviderID   string `json:"provider_id"`
 	ProfileModel string `json:"profile_model"`
 
-	// Runtime fields are hydrated from the latest profiles. In particular,
-	// credentials and headers must never become part of persistent routing state.
 	Model                   string            `json:"-"`
 	APIBackend              string            `json:"-"`
 	BaseURL                 string            `json:"-"`
@@ -49,23 +48,32 @@ type SubagentsPolicy struct {
 	Plan    string `json:"plan,omitempty"`
 }
 
+// RoutingPolicy contains one provider's remembered route choices. Custom
+// policies use stable ModelRoute IDs; the special official policy uses official
+// model IDs because official models have no custom catalog entries.
 type RoutingPolicy struct {
-	Official               bool            `json:"official,omitempty"`
 	Default                string          `json:"default,omitempty"`
 	DefaultReasoningEffort string          `json:"default_reasoning_effort,omitempty"`
 	WebSearch              string          `json:"web_search,omitempty"`
 	WebSearchCapable       bool            `json:"web_search_capable"`
 	Subagents              SubagentsPolicy `json:"subagents,omitempty"`
+
+	// Official is accepted only while migrating schema v1 and is never emitted.
+	Official bool `json:"-"`
 }
 
 type Snapshot struct {
-	Version     int           `json:"version"`
-	Providers   []Provider    `json:"providers"`
-	ModelRoutes []ModelRoute  `json:"model_routes"`
-	Policy      RoutingPolicy `json:"policy"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	Version          int                      `json:"version"`
+	ActiveProviderID string                   `json:"active_provider_id,omitempty"`
+	Providers        []Provider               `json:"providers"`
+	ModelRoutes      []ModelRoute             `json:"model_routes"`
+	ProviderPolicies map[string]RoutingPolicy `json:"provider_policies"`
+	UpdatedAt        time.Time                `json:"updated_at"`
 
-	Hydrated bool `json:"-"`
+	// Policy mirrors the active provider policy for internal compatibility.
+	// It is derived from ProviderPolicies and never serialized.
+	Policy   RoutingPolicy `json:"-"`
+	Hydrated bool          `json:"-"`
 }
 
 func (s Snapshot) Provider(id string) (Provider, bool) {
@@ -77,119 +85,142 @@ func (s Snapshot) Provider(id string) (Provider, bool) {
 	return Provider{}, false
 }
 
-func (s Snapshot) Route(name string) (ModelRoute, bool) {
+func (s Snapshot) Route(ref string) (ModelRoute, bool) {
 	for _, route := range s.ModelRoutes {
-		if route.Name == name || route.ID == name {
+		if route.ID == ref || route.Name == ref {
 			return route, true
 		}
 	}
 	return ModelRoute{}, false
 }
 
-// WebSearchCapable 判断当前 web_search 路由目标模型是否支持 x_search 工具。
-// 仅可在 Hydrated 快照上调用：需要 APIBackend 与 SupportsBackendSearch 已填充。
-// 官方模式或 web_search 为空时返回 true（官方模型原生支持，空则不参与判断）。
-func (s Snapshot) WebSearchCapable() bool {
-	if s.Policy.Official || s.Policy.WebSearch == "" {
-		return true
+func (s Snapshot) ActivePolicy() RoutingPolicy {
+	if !policyEmpty(s.Policy) || s.Policy.Official {
+		return s.Policy
 	}
-	route, ok := s.Route(s.Policy.WebSearch)
-	if !ok {
-		return false
+	if policy, ok := s.ProviderPolicies[s.ActiveProviderID]; ok {
+		return policy
 	}
-	return route.APIBackend == "responses" && route.SupportsBackendSearch
+	return RoutingPolicy{}
 }
 
-// SubagentWebSearchCapable 判断指定子代理类型的目标模型是否支持 x_search 工具。
-// 仅可在 Hydrated 快照上调用。子代理的空路由或官方模式返回 true（不约束）。
+func (s Snapshot) IsOfficial() bool {
+	return s.ActiveProviderID == OfficialProviderID || s.Policy.Official
+}
+
+func (s Snapshot) RoutesForProvider(providerID string) []ModelRoute {
+	out := make([]ModelRoute, 0)
+	for _, route := range s.ModelRoutes {
+		if route.ProviderID == providerID {
+			out = append(out, route)
+		}
+	}
+	return out
+}
+
+func (s Snapshot) WebSearchCapable() bool {
+	policy := s.ActivePolicy()
+	if s.IsOfficial() || policy.WebSearch == "" {
+		return true
+	}
+	route, ok := s.Route(policy.WebSearch)
+	return ok && (s.ActiveProviderID == "" || route.ProviderID == s.ActiveProviderID) && route.APIBackend == "responses" && route.SupportsBackendSearch
+}
+
 func (s Snapshot) SubagentWebSearchCapable(subagent string) bool {
+	policy := s.ActivePolicy()
 	name := ""
 	switch subagent {
 	case "explore":
-		name = s.Policy.Subagents.Explore
+		name = policy.Subagents.Explore
 	case "plan":
-		name = s.Policy.Subagents.Plan
+		name = policy.Subagents.Plan
 	}
-	if name == "" || s.Policy.Official {
+	if name == "" || s.IsOfficial() {
 		return true
 	}
 	route, ok := s.Route(name)
-	if !ok {
-		return false
-	}
-	return route.APIBackend == "responses" && route.SupportsBackendSearch
-}
-
-// repairWebSearch 保留仍存在的 web_search 路由；路由失效时清空。
-// 不兼容 x_search 的模型不会被替换，WebSearchCapable=false 会明确暴露
-// 能力缺口，而不是擅自切换用户选择的模型。
-func repairWebSearch(name string, catalog Snapshot) string {
-	if name == "" {
-		return ""
-	}
-	if _, ok := catalog.Route(name); ok {
-		return name
-	}
-	return ""
+	return ok && (s.ActiveProviderID == "" || route.ProviderID == s.ActiveProviderID) && route.APIBackend == "responses" && route.SupportsBackendSearch
 }
 
 func (s Snapshot) Validate() error {
 	providers := make(map[string]bool, len(s.Providers))
 	for _, provider := range s.Providers {
-		if strings.TrimSpace(provider.ID) == "" {
-			return fmt.Errorf("routing provider id is empty")
+		if strings.TrimSpace(provider.ID) == "" || provider.ID == OfficialProviderID {
+			return fmt.Errorf("invalid routing provider id %q", provider.ID)
 		}
 		if providers[provider.ID] {
 			return fmt.Errorf("duplicate routing provider id %q", provider.ID)
 		}
 		providers[provider.ID] = true
 	}
-	routes := make(map[string]bool, len(s.ModelRoutes))
+	routes := make(map[string]ModelRoute, len(s.ModelRoutes))
+	names := make(map[string]bool, len(s.ModelRoutes))
 	for _, route := range s.ModelRoutes {
-		if strings.TrimSpace(route.Name) == "" {
-			return fmt.Errorf("routing model name is empty")
+		if strings.TrimSpace(route.ID) == "" || strings.TrimSpace(route.Name) == "" {
+			return fmt.Errorf("routing model id or name is empty")
 		}
-		if routes[route.Name] {
+		if _, exists := routes[route.ID]; exists {
+			return fmt.Errorf("duplicate routing model id %q", route.ID)
+		}
+		if names[route.Name] {
 			return fmt.Errorf("duplicate routing model name %q", route.Name)
 		}
 		if !providers[route.ProviderID] {
 			return fmt.Errorf("routing model %q references unknown provider %q", route.Name, route.ProviderID)
 		}
-		routes[route.Name] = true
+		routes[route.ID] = route
+		names[route.Name] = true
 	}
-	if s.Policy.Official {
-		return nil
+	if len(providers) > 0 && s.ActiveProviderID == "" {
+		return fmt.Errorf("active provider is required")
 	}
-	for label, name := range map[string]string{
-		"default":           s.Policy.Default,
-		"web_search":        s.Policy.WebSearch,
-		"subagents.explore": s.Policy.Subagents.Explore,
-		"subagents.plan":    s.Policy.Subagents.Plan,
-	} {
-		if name != "" && !routes[name] {
-			return fmt.Errorf("routing policy %s references unknown model %q", label, name)
+	if s.ActiveProviderID != "" && s.ActiveProviderID != OfficialProviderID && !providers[s.ActiveProviderID] {
+		return fmt.Errorf("active provider %q is unavailable", s.ActiveProviderID)
+	}
+	for providerID, policy := range s.ProviderPolicies {
+		if providerID != OfficialProviderID && !providers[providerID] {
+			return fmt.Errorf("policy references unknown provider %q", providerID)
+		}
+		if providerID == OfficialProviderID {
+			continue
+		}
+		for label, ref := range map[string]string{"default": policy.Default, "web_search": policy.WebSearch, "subagents.explore": policy.Subagents.Explore, "subagents.plan": policy.Subagents.Plan} {
+			if ref == "" {
+				continue
+			}
+			route, ok := routes[ref]
+			if !ok {
+				return fmt.Errorf("routing policy %s references unknown model %q", label, ref)
+			}
+			if route.ProviderID != providerID {
+				return fmt.Errorf("routing policy %s model %q belongs to provider %q, not active provider %q", label, ref, route.ProviderID, providerID)
+			}
+		}
+	}
+	if s.ActiveProviderID != "" {
+		policy, ok := s.ProviderPolicies[s.ActiveProviderID]
+		if !ok {
+			return fmt.Errorf("active provider %q has no remembered policy", s.ActiveProviderID)
+		}
+		if policy.Default == "" {
+			return fmt.Errorf("active provider %q has no default model", s.ActiveProviderID)
 		}
 	}
 	return nil
 }
 
-// Project converts legacy provider profiles into a deterministic multi-provider
-// routing snapshot. Model names that collide are qualified with a provider name.
+// Project creates stable provider/model identities and deterministic aliases.
 func Project(source []profiles.Profile) Snapshot {
 	items := append([]profiles.Profile(nil), source...)
 	providerNames := uniqueProviderNames(items)
 	nameCounts := map[string]int{}
-	for _, profile := range items {
-		profile = profiles.Normalize(profile)
-		for _, model := range profile.Models {
+	for _, original := range items {
+		for _, model := range profiles.Normalize(original).Models {
 			nameCounts[modelName(model)]++
 		}
 	}
-
-	snapshot := Snapshot{Version: CurrentVersion, UpdatedAt: time.Now().UTC()}
-	translations := make(map[string]map[string]string, len(items))
-	providerIDs := make([]string, len(items))
-	usedProviderIDs := map[string]int{}
+	snapshot := Snapshot{Version: CurrentVersion, UpdatedAt: time.Now().UTC(), ProviderPolicies: map[string]RoutingPolicy{}}
 	usedRouteNames := map[string]int{}
 	for i, original := range items {
 		profile := profiles.Normalize(original)
@@ -197,68 +228,149 @@ func Project(source []profiles.Profile) Snapshot {
 		if providerID == "" {
 			providerID = fmt.Sprintf("profile-%d", i+1)
 		}
-		usedProviderIDs[providerID]++
-		if usedProviderIDs[providerID] > 1 {
-			providerID = fmt.Sprintf("%s-%d", providerID, usedProviderIDs[providerID])
-		}
-		providerIDs[i] = providerID
-		provider := Provider{
-			ID:        providerID,
-			Name:      providerNames[i],
-			ProfileID: profile.ID,
-			Source:    profile.Source,
-		}
+		provider := Provider{ID: providerID, Name: providerNames[i], ProfileID: profile.ID, Source: profile.Source}
 		snapshot.Providers = append(snapshot.Providers, provider)
-		translations[providerID] = map[string]string{}
 		for modelIndex, model := range profile.Models {
 			localName := modelName(model)
+			if localName == "" {
+				localName = fmt.Sprintf("model-%d", modelIndex+1)
+			}
 			routeName := localName
 			if nameCounts[localName] > 1 {
-				routeName = localName + "@" + provider.Name
-			}
-			routeID := fmt.Sprintf("%s:%s", providerID, localName)
-			if localName == "" {
-				routeID = fmt.Sprintf("%s:model-%d", providerID, modelIndex+1)
-				routeName = fmt.Sprintf("model-%d@%s", modelIndex+1, provider.Name)
+				routeName += "@" + provider.Name
 			}
 			usedRouteNames[routeName]++
 			if usedRouteNames[routeName] > 1 {
 				routeName = fmt.Sprintf("%s (%d)", routeName, usedRouteNames[routeName])
 			}
-			translations[providerID][localName] = routeName
 			snapshot.ModelRoutes = append(snapshot.ModelRoutes, ModelRoute{
-				ID:                      routeID,
-				Name:                    routeName,
-				ProviderID:              providerID,
-				ProfileModel:            localName,
-				SupportsBackendSearch:   model.SupportsBackendSearch,
-				SupportsReasoningEffort: model.SupportsReasoningEffort,
-				ReasoningEfforts:        append([]string(nil), model.ReasoningEfforts...),
-				ReasoningEffortsSource:  model.ReasoningEffortsSource,
-				ContextWindow:           model.ContextWindow,
-				MaxCompletionTokens:     model.MaxCompletionTokens,
+				ID: providerID + ":" + localName, Name: routeName, ProviderID: providerID, ProfileModel: localName,
+				SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
+				ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
+				ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
 			})
 		}
-	}
-	// With routing as the single source of truth, there is no "active profile".
-	// Default to the first available route so the routing policy is never empty.
-	if len(snapshot.ModelRoutes) > 0 {
-		first := snapshot.ModelRoutes[0]
-		snapshot.Policy.Default = first.Name
-		if first.SupportsReasoningEffort && containsReasoningEffort(first.ReasoningEfforts, "high") {
-			snapshot.Policy.DefaultReasoningEffort = "high"
+		policy := defaultPolicyForProvider(snapshot, providerID, profile.DefaultModel, profile.DefaultReasoningEffort)
+		snapshot.ProviderPolicies[providerID] = policy
+		if snapshot.ActiveProviderID == "" && policy.Default != "" {
+			snapshot.ActiveProviderID = providerID
 		}
 	}
+	snapshot.Policy = snapshot.ProviderPolicies[snapshot.ActiveProviderID]
 	return snapshot
 }
 
-// ProjectWithPolicy rebuilds the routing catalog from current profiles while
-// retaining a previously selected policy whenever all referenced routes still
-// exist. The returned snapshot is hydrated in memory for config generation.
+func defaultPolicyForProvider(snapshot Snapshot, providerID, preferredModel, effort string) RoutingPolicy {
+	var selected ModelRoute
+	for _, route := range snapshot.ModelRoutes {
+		if route.ProviderID != providerID {
+			continue
+		}
+		if selected.ID == "" {
+			selected = route
+		}
+		if route.ProfileModel == preferredModel {
+			selected = route
+			break
+		}
+	}
+	policy := RoutingPolicy{Default: selected.ID, DefaultReasoningEffort: effort}
+	if policy.DefaultReasoningEffort == "" && selected.SupportsReasoningEffort && containsReasoningEffort(selected.ReasoningEfforts, "high") {
+		policy.DefaultReasoningEffort = "high"
+	}
+	return policy
+}
+
+// ProjectWithSnapshot rebuilds the catalog while retaining every provider's
+// remembered policy. Removed/renamed model references are repaired only within
+// that provider; policies never cross provider boundaries.
 func ProjectWithPolicy(source []profiles.Profile, policy RoutingPolicy) (Snapshot, error) {
+	base := Project(source)
+	active := ""
+	if route, ok := base.Route(policy.Default); ok {
+		active = route.ProviderID
+	}
+	if active == "" {
+		for _, ref := range []string{policy.WebSearch, policy.Subagents.Explore, policy.Subagents.Plan} {
+			if route, ok := base.Route(ref); ok {
+				active = route.ProviderID
+				break
+			}
+		}
+	}
+	if policy.Official {
+		active = OfficialProviderID
+	}
+	if active == "" {
+		active = base.ActiveProviderID
+	}
+	previous := base
+	previous.ActiveProviderID = active
+	if previous.ProviderPolicies == nil {
+		previous.ProviderPolicies = map[string]RoutingPolicy{}
+	}
+	translated := policy
+	translated.Official = false
+	if active != OfficialProviderID {
+		for field, ref := range map[string]string{"default": policy.Default, "web_search": policy.WebSearch, "explore": policy.Subagents.Explore, "plan": policy.Subagents.Plan} {
+			if route, ok := base.Route(ref); ok {
+				switch field {
+				case "default":
+					translated.Default = route.ID
+				case "web_search":
+					translated.WebSearch = route.ID
+				case "explore":
+					translated.Subagents.Explore = route.ID
+				case "plan":
+					translated.Subagents.Plan = route.ID
+				}
+			}
+		}
+	}
+	previous.ProviderPolicies[active] = translated
+	return ProjectWithSnapshot(source, previous)
+}
+
+// RepairPolicy is kept for callers migrating from schema v1. It returns the
+// active provider's repaired policy; new code should retain the full snapshot.
+func RepairPolicy(source []profiles.Profile, policy RoutingPolicy) RoutingPolicy {
+	snapshot, err := ProjectWithPolicy(source, policy)
+	if err != nil {
+		return policy
+	}
+	out := snapshot.ActivePolicy()
+	out.Official = snapshot.IsOfficial()
+	return out
+}
+
+func repairWebSearch(name string, catalog Snapshot) string {
+	if route, ok := catalog.Route(name); ok {
+		if strings.TrimSpace(route.ID) != "" {
+			return route.ID
+		}
+		return route.Name
+	}
+	return ""
+}
+
+func ProjectWithSnapshot(source []profiles.Profile, previous Snapshot) (Snapshot, error) {
 	snapshot := Project(source)
-	if !policyEmpty(policy) {
-		snapshot.Policy = policy
+	for providerID, defaults := range snapshot.ProviderPolicies {
+		if remembered, ok := previous.ProviderPolicies[providerID]; ok {
+			snapshot.ProviderPolicies[providerID] = repairProviderPolicy(snapshot, providerID, remembered, defaults)
+		}
+	}
+	if official, ok := previous.ProviderPolicies[OfficialProviderID]; ok {
+		snapshot.ProviderPolicies[OfficialProviderID] = official
+	}
+	snapshot.ActiveProviderID = previous.ActiveProviderID
+	if snapshot.ActiveProviderID != OfficialProviderID {
+		if _, ok := snapshot.Provider(snapshot.ActiveProviderID); !ok {
+			snapshot.ActiveProviderID = firstUsableProvider(snapshot)
+		}
+	}
+	if snapshot.ActiveProviderID == "" && len(snapshot.Providers) > 0 {
+		snapshot.ActiveProviderID = firstUsableProvider(snapshot)
 	}
 	if err := snapshot.Validate(); err != nil {
 		return Snapshot{}, err
@@ -267,45 +379,44 @@ func ProjectWithPolicy(source []profiles.Profile, policy RoutingPolicy) (Snapsho
 	if err != nil {
 		return Snapshot{}, err
 	}
-	hydrated.Policy.WebSearchCapable = hydrated.WebSearchCapable()
+	hydrated.Policy = hydrated.ProviderPolicies[hydrated.ActiveProviderID]
+	hydrated.Policy.Official = hydrated.IsOfficial()
+	policy := hydrated.ActivePolicy()
+	policy.WebSearchCapable = hydrated.WebSearchCapable()
+	hydrated.ProviderPolicies[hydrated.ActiveProviderID] = policy
+	hydrated.Policy = policy
+	hydrated.Policy.Official = hydrated.IsOfficial()
 	return hydrated, nil
 }
 
-// RepairPolicy retains routes that still exist after profile changes, clears
-// invalid optional routes, and chooses the active profile's default (or the
-// first available route) when the previous default disappeared.
-// web_search 路由失效或指向不支持 x_search 的模型时，自动回退到支持
-// responses+backend_search 的模型；找不到时清空。
-func RepairPolicy(source []profiles.Profile, policy RoutingPolicy) RoutingPolicy {
-	if policy.Official {
-		return policy
-	}
-	catalog := Project(source)
-	valid := func(name string) string {
-		if name == "" {
-			return ""
-		}
-		if _, ok := catalog.Route(name); ok {
-			return name
+func repairProviderPolicy(snapshot Snapshot, providerID string, policy, defaults RoutingPolicy) RoutingPolicy {
+	valid := func(ref string) string {
+		route, ok := snapshot.Route(ref)
+		if ok && route.ProviderID == providerID {
+			return route.ID
 		}
 		return ""
 	}
 	policy.Default = valid(policy.Default)
-	policy.WebSearch = repairWebSearch(policy.WebSearch, catalog)
+	policy.WebSearch = valid(policy.WebSearch)
 	policy.Subagents.Explore = valid(policy.Subagents.Explore)
 	policy.Subagents.Plan = valid(policy.Subagents.Plan)
-	if policy.Default != "" {
-		return policy
-	}
-	if len(catalog.ModelRoutes) > 0 {
-		policy.Default = catalog.ModelRoutes[0].Name
+	if policy.Default == "" {
+		policy.Default = defaults.Default
+		policy.DefaultReasoningEffort = defaults.DefaultReasoningEffort
 	}
 	return policy
 }
 
-// Hydrate injects runtime endpoints, credentials, headers, and concrete model
-// metadata from the latest profile list into a detached in-memory snapshot.
-// None of the injected fields participate in JSON serialization.
+func firstUsableProvider(snapshot Snapshot) string {
+	for _, provider := range snapshot.Providers {
+		if snapshot.ProviderPolicies[provider.ID].Default != "" {
+			return provider.ID
+		}
+	}
+	return ""
+}
+
 func Hydrate(snapshot Snapshot, source []profiles.Profile) (Snapshot, error) {
 	if err := snapshot.Validate(); err != nil {
 		return Snapshot{}, err
@@ -322,32 +433,22 @@ func Hydrate(snapshot Snapshot, source []profiles.Profile) (Snapshot, error) {
 		if !ok {
 			return Snapshot{}, fmt.Errorf("routing provider %q references missing profile %q", out.Providers[i].Name, out.Providers[i].ProfileID)
 		}
-		out.Providers[i].UpstreamFormat = profile.UpstreamFormat
-		out.Providers[i].BaseURL = profile.BaseURL
-		out.Providers[i].APIKey = profile.EffectiveAPIKey()
+		out.Providers[i].UpstreamFormat, out.Providers[i].BaseURL, out.Providers[i].APIKey = profile.UpstreamFormat, profile.BaseURL, profile.EffectiveAPIKey()
 	}
 	for i := range out.ModelRoutes {
 		route := &out.ModelRoutes[i]
-		provider, ok := out.Provider(route.ProviderID)
-		if !ok {
-			return Snapshot{}, fmt.Errorf("routing model %q references missing provider %q", route.Name, route.ProviderID)
-		}
+		provider, _ := out.Provider(route.ProviderID)
 		profile := byID[provider.ProfileID]
 		model, ok := profileModel(profile, route.ProfileModel)
 		if !ok {
 			return Snapshot{}, fmt.Errorf("routing model %q references missing profile model %q", route.Name, route.ProfileModel)
 		}
-		route.Model = model.Model
-		route.APIBackend = model.APIBackend
-		route.BaseURL = firstNonEmpty(model.BaseURL, provider.BaseURL)
-		route.APIKey = firstNonEmpty(model.APIKey, provider.APIKey)
+		route.Model, route.APIBackend = model.Model, model.APIBackend
+		route.BaseURL, route.APIKey = firstNonEmpty(model.BaseURL, provider.BaseURL), firstNonEmpty(model.APIKey, provider.APIKey)
 		route.ExtraHeaders = cloneMap(model.ExtraHeaders)
-		route.SupportsBackendSearch = model.SupportsBackendSearch
-		route.SupportsReasoningEffort = model.SupportsReasoningEffort
-		route.ReasoningEfforts = append([]string(nil), model.ReasoningEfforts...)
-		route.ReasoningEffortsSource = model.ReasoningEffortsSource
-		route.ContextWindow = model.ContextWindow
-		route.MaxCompletionTokens = model.MaxCompletionTokens
+		route.SupportsBackendSearch, route.SupportsReasoningEffort = model.SupportsBackendSearch, model.SupportsReasoningEffort
+		route.ReasoningEfforts, route.ReasoningEffortsSource = append([]string(nil), model.ReasoningEfforts...), model.ReasoningEffortsSource
+		route.ContextWindow, route.MaxCompletionTokens = model.ContextWindow, model.MaxCompletionTokens
 	}
 	out.Hydrated = true
 	return out, nil

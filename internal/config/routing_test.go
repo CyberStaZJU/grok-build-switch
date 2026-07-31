@@ -48,8 +48,8 @@ func TestApplyRoutingComposesHydratedMultipleProviders(t *testing.T) {
 	policy := routing.RoutingPolicy{
 		Default:                "shared@One",
 		DefaultReasoningEffort: "high",
-		WebSearch:              "shared@Two",
-		Subagents:              routing.SubagentsPolicy{Explore: "shared@Two", Plan: "shared@One"},
+		WebSearch:              "shared@One",
+		Subagents:              routing.SubagentsPolicy{Explore: "shared@One", Plan: "shared@One"},
 	}
 	snapshot, err := routing.ProjectWithPolicy(profileList, policy)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestApplyRoutingComposesHydratedMultipleProviders(t *testing.T) {
 	if got := stringAt(tableAt(doc, "models"), "default"); got != "shared@One" {
 		t.Fatalf("default = %q", got)
 	}
-	if got := stringAt(tableAt(doc, "models"), "web_search"); got != "shared@Two" {
+	if got := stringAt(tableAt(doc, "models"), "web_search"); got != "shared@One" {
 		t.Fatalf("web_search = %q", got)
 	}
 	models := tableAt(doc, "model")
@@ -93,7 +93,7 @@ func TestApplyRoutingComposesHydratedMultipleProviders(t *testing.T) {
 	if stringAt(two, "model") != "upstream-two" || stringAt(two, "base_url") != "https://two.example/v1" || stringAt(two, "api_key") != "key-two" || stringAt(two, "api_backend") != "messages" {
 		t.Fatalf("provider two model = %#v", two)
 	}
-	if got := stringAt(tableAt(tableAt(doc, "subagents"), "models"), "explore"); got != "shared@Two" {
+	if got := stringAt(tableAt(tableAt(doc, "subagents"), "models"), "explore"); got != "shared@One" {
 		t.Fatalf("subagents explore = %q", got)
 	}
 	matched, err := CurrentMatchesRouting(path, snapshot)

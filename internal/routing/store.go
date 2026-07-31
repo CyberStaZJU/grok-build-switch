@@ -88,6 +88,38 @@ func (s *Store) Snapshot() (Snapshot, error) {
 func (s *Store) UpdatePolicy(policy RoutingPolicy) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	snapshot, exists, _, err := s.readLocked()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !exists {
+		return Snapshot{}, os.ErrNotExist
+	}
+	providerID := snapshot.ActiveProviderID
+	if policy.Official {
+		providerID = OfficialProviderID
+		policy.Official = false
+	}
+	if providerID == "" {
+		for _, ref := range []string{policy.Default, policy.WebSearch, policy.Subagents.Explore, policy.Subagents.Plan} {
+			if route, ok := snapshot.Route(ref); ok {
+				providerID = route.ProviderID
+				break
+			}
+		}
+	}
+	if snapshot.ProviderPolicies == nil {
+		snapshot.ProviderPolicies = map[string]RoutingPolicy{}
+	}
+	snapshot.Policy = RoutingPolicy{}
+	snapshot.ActiveProviderID = providerID
+	snapshot.ProviderPolicies[providerID] = policy
+	return s.replaceLocked(snapshot)
+}
+
+func (s *Store) UpdateActiveProvider(providerID string, policy RoutingPolicy) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	snapshot, exists, _, err := s.readLocked()
 	if err != nil {
@@ -96,7 +128,12 @@ func (s *Store) UpdatePolicy(policy RoutingPolicy) (Snapshot, error) {
 	if !exists {
 		return Snapshot{}, os.ErrNotExist
 	}
-	snapshot.Policy = policy
+	if snapshot.ProviderPolicies == nil {
+		snapshot.ProviderPolicies = map[string]RoutingPolicy{}
+	}
+	snapshot.Policy = RoutingPolicy{}
+	snapshot.ActiveProviderID = providerID
+	snapshot.ProviderPolicies[providerID] = policy
 	return s.replaceLocked(snapshot)
 }
 
@@ -111,13 +148,30 @@ func (s *Store) Replace(snapshot Snapshot) (Snapshot, error) {
 func (s *Store) replaceLocked(snapshot Snapshot) (Snapshot, error) {
 	snapshot.Version = CurrentVersion
 	snapshot.UpdatedAt = time.Now().UTC()
+	if !policyEmpty(snapshot.Policy) || snapshot.Policy.Official {
+		providerID := snapshot.ActiveProviderID
+		if snapshot.Policy.Official {
+			providerID = OfficialProviderID
+			snapshot.Policy.Official = false
+		}
+		if snapshot.ProviderPolicies == nil {
+			snapshot.ProviderPolicies = map[string]RoutingPolicy{}
+		}
+		snapshot.ActiveProviderID = providerID
+		snapshot.ProviderPolicies[providerID] = snapshot.Policy
+	}
+	snapshot.Policy = snapshot.ProviderPolicies[snapshot.ActiveProviderID]
+	snapshot.Policy.Official = snapshot.IsOfficial()
 	if err := snapshot.Validate(); err != nil {
 		return Snapshot{}, err
 	}
 	if err := s.writeLocked(snapshot); err != nil {
 		return Snapshot{}, err
 	}
-	return cloneSnapshot(sanitizedSnapshot(snapshot)), nil
+	out := cloneSnapshot(sanitizedSnapshot(snapshot))
+	out.Policy = policyWithRouteNames(out, out.ProviderPolicies[out.ActiveProviderID])
+	out.Policy.Official = out.ActiveProviderID == OfficialProviderID
+	return out, nil
 }
 
 func (s *Store) readLocked() (Snapshot, bool, bool, error) {
@@ -141,6 +195,20 @@ func (s *Store) readLocked() (Snapshot, bool, bool, error) {
 		return Snapshot{}, false, false, fmt.Errorf("%v; corrupt file moved to %s", cause, backup)
 	}
 	dirty := containsLegacyCredentials(data)
+	if snapshot.Version < CurrentVersion {
+		var legacy struct {
+			Version     int           `json:"version"`
+			Providers   []Provider    `json:"providers"`
+			ModelRoutes []ModelRoute  `json:"model_routes"`
+			Policy      RoutingPolicy `json:"policy"`
+			UpdatedAt   time.Time     `json:"updated_at"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return Snapshot{}, false, false, err
+		}
+		snapshot = migrateV1(legacy.Providers, legacy.ModelRoutes, legacy.Policy, legacy.UpdatedAt)
+		dirty = true
+	}
 	for i := range snapshot.ModelRoutes {
 		if snapshot.ModelRoutes[i].ProfileModel != "" {
 			continue
@@ -152,13 +220,15 @@ func (s *Store) readLocked() (Snapshot, bool, bool, error) {
 		}
 		dirty = true
 	}
-	if snapshot.Version == 0 {
-		snapshot.Version = CurrentVersion
+	if snapshot.ProviderPolicies == nil {
+		snapshot.ProviderPolicies = map[string]RoutingPolicy{}
 		dirty = true
 	}
 	if err := snapshot.Validate(); err != nil {
 		return Snapshot{}, false, false, fmt.Errorf("validate routing: %w", err)
 	}
+	snapshot.Policy = policyWithRouteNames(snapshot, snapshot.ProviderPolicies[snapshot.ActiveProviderID])
+	snapshot.Policy.Official = snapshot.IsOfficial()
 	return snapshot, true, dirty, nil
 }
 
@@ -246,6 +316,8 @@ func atomicWrite(path string, data []byte) error {
 
 func sanitizedSnapshot(snapshot Snapshot) Snapshot {
 	out := cloneSnapshot(snapshot)
+	out.Policy = out.ProviderPolicies[out.ActiveProviderID]
+	out.Policy.Official = out.ActiveProviderID == OfficialProviderID
 	out.Hydrated = false
 	for i := range out.Providers {
 		out.Providers[i].UpstreamFormat = ""
@@ -262,34 +334,115 @@ func sanitizedSnapshot(snapshot Snapshot) Snapshot {
 	return out
 }
 
-// applyLegacyProfileRouting copies routing-related fields from an old
-// profiles.json into the routing policy when they are not already set.
-// Returns true if any field was migrated.
+func migrateV1(providers []Provider, routes []ModelRoute, legacy RoutingPolicy, updatedAt time.Time) Snapshot {
+	snapshot := Snapshot{Version: CurrentVersion, Providers: providers, ModelRoutes: routes, ProviderPolicies: map[string]RoutingPolicy{}, UpdatedAt: updatedAt}
+	if snapshot.UpdatedAt.IsZero() {
+		snapshot.UpdatedAt = time.Now().UTC()
+	}
+	for i := range snapshot.ModelRoutes {
+		if snapshot.ModelRoutes[i].ProfileModel == "" {
+			_, snapshot.ModelRoutes[i].ProfileModel, _ = strings.Cut(snapshot.ModelRoutes[i].ID, ":")
+		}
+	}
+	active := ""
+	for _, ref := range []string{legacy.Default, legacy.WebSearch, legacy.Subagents.Explore, legacy.Subagents.Plan} {
+		if route, ok := snapshot.Route(ref); ok {
+			active = route.ProviderID
+			break
+		}
+	}
+	if legacy.Official {
+		active = OfficialProviderID
+	}
+	if active == "" && len(providers) > 0 {
+		active = providers[0].ID
+	}
+	for _, provider := range providers {
+		policy := RoutingPolicy{}
+		for _, route := range routes {
+			if route.ProviderID == provider.ID && policy.Default == "" {
+				policy.Default = route.ID
+			}
+		}
+		if provider.ID == active {
+			for label, ref := range map[string]string{"default": legacy.Default, "web_search": legacy.WebSearch, "explore": legacy.Subagents.Explore, "plan": legacy.Subagents.Plan} {
+				if route, ok := snapshot.Route(ref); ok && route.ProviderID == provider.ID {
+					switch label {
+					case "default":
+						policy.Default = route.ID
+					case "web_search":
+						policy.WebSearch = route.ID
+					case "explore":
+						policy.Subagents.Explore = route.ID
+					case "plan":
+						policy.Subagents.Plan = route.ID
+					}
+				}
+			}
+			policy.DefaultReasoningEffort = legacy.DefaultReasoningEffort
+		}
+		snapshot.ProviderPolicies[provider.ID] = policy
+	}
+	if legacy.Official {
+		legacy.Official = false
+		snapshot.ProviderPolicies[OfficialProviderID] = legacy
+	}
+	snapshot.ActiveProviderID = active
+	return snapshot
+}
+
+// applyLegacyProfileRouting copies routing-related fields from old profiles.json
+// into the active provider's remembered policy exactly once.
 func applyLegacyProfileRouting(profileStore *profiles.Store, snapshot *Snapshot) bool {
 	legacy, err := profileStore.ReadLegacyRoutingFields()
-	if err != nil || legacy == nil {
+	if err != nil || legacy == nil || snapshot.ActiveProviderID == "" || snapshot.ActiveProviderID == OfficialProviderID {
 		return false
 	}
+	policy := snapshot.ProviderPolicies[snapshot.ActiveProviderID]
 	migrated := false
-	if snapshot.Policy.WebSearch == "" && legacy.WebSearch != "" {
-		if _, ok := snapshot.Route(legacy.WebSearch); ok {
-			snapshot.Policy.WebSearch = legacy.WebSearch
+	translate := func(name string) string {
+		route, ok := snapshot.Route(name)
+		if ok && route.ProviderID == snapshot.ActiveProviderID {
+			return route.ID
+		}
+		return ""
+	}
+	if policy.WebSearch == "" {
+		if ref := translate(legacy.WebSearch); ref != "" {
+			policy.WebSearch = ref
 			migrated = true
 		}
 	}
-	if snapshot.Policy.Subagents.Explore == "" && legacy.SubagentsExplore != "" {
-		if _, ok := snapshot.Route(legacy.SubagentsExplore); ok {
-			snapshot.Policy.Subagents.Explore = legacy.SubagentsExplore
+	if policy.Subagents.Explore == "" {
+		if ref := translate(legacy.SubagentsExplore); ref != "" {
+			policy.Subagents.Explore = ref
 			migrated = true
 		}
 	}
-	if snapshot.Policy.Subagents.Plan == "" && legacy.SubagentsPlan != "" {
-		if _, ok := snapshot.Route(legacy.SubagentsPlan); ok {
-			snapshot.Policy.Subagents.Plan = legacy.SubagentsPlan
+	if policy.Subagents.Plan == "" {
+		if ref := translate(legacy.SubagentsPlan); ref != "" {
+			policy.Subagents.Plan = ref
 			migrated = true
 		}
+	}
+	if migrated {
+		snapshot.ProviderPolicies[snapshot.ActiveProviderID] = policy
 	}
 	return migrated
+}
+
+func policyWithRouteNames(snapshot Snapshot, policy RoutingPolicy) RoutingPolicy {
+	name := func(ref string) string {
+		if route, ok := snapshot.Route(ref); ok {
+			return route.Name
+		}
+		return ref
+	}
+	policy.Default = name(policy.Default)
+	policy.WebSearch = name(policy.WebSearch)
+	policy.Subagents.Explore = name(policy.Subagents.Explore)
+	policy.Subagents.Plan = name(policy.Subagents.Plan)
+	return policy
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
@@ -300,6 +453,10 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 		out.ModelRoutes[i] = route
 		out.ModelRoutes[i].ExtraHeaders = cloneMap(route.ExtraHeaders)
 		out.ModelRoutes[i].ReasoningEfforts = append([]string(nil), route.ReasoningEfforts...)
+	}
+	out.ProviderPolicies = make(map[string]RoutingPolicy, len(snapshot.ProviderPolicies))
+	for providerID, policy := range snapshot.ProviderPolicies {
+		out.ProviderPolicies[providerID] = policy
 	}
 	return out
 }

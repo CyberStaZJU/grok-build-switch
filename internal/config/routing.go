@@ -21,12 +21,18 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 	if !snapshot.Hydrated {
 		return profiles.Profile{}, fmt.Errorf("routing snapshot is not hydrated from current profiles")
 	}
+	policy := snapshot.ActivePolicy()
+	defaultRoute, _ := snapshot.Route(policy.Default)
+	policy = policyWithConfigAliases(snapshot)
 	profile := profiles.Profile{
 		Name:                   "Routing",
-		DefaultModel:           snapshot.Policy.Default,
-		DefaultReasoningEffort: snapshot.Policy.DefaultReasoningEffort,
+		DefaultModel:           defaultRoute.Name,
+		DefaultReasoningEffort: policy.DefaultReasoningEffort,
 		Models:                 make([]profiles.ModelDef, 0, len(snapshot.ModelRoutes)),
 	}
+	// Keep the complete custom model catalog for old conversations pinned to
+	// aliases from previously active custom providers. Only auth/routing pins are
+	// single-provider; model definitions remain combined until official is active.
 	for _, route := range snapshot.ModelRoutes {
 		provider, _ := snapshot.Provider(route.ProviderID)
 		profile.Models = append(profile.Models, profiles.ModelDef{
@@ -46,7 +52,7 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 	}
 	// Per-model base_url is authoritative for a multi-provider config. Keep the
 	// legacy global endpoint aligned with the default route for compatibility.
-	if route, ok := snapshot.Route(snapshot.Policy.Default); ok {
+	if route, ok := snapshot.Route(policy.Default); ok {
 		provider, _ := snapshot.Provider(route.ProviderID)
 		profile.BaseURL = firstNonEmptyRouting(route.BaseURL, provider.BaseURL)
 	}
@@ -58,12 +64,12 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 }
 
 func ApplyRoutingToFile(path string, snapshot routing.Snapshot) error {
-	if snapshot.Policy.Official {
+	if snapshot.IsOfficial() {
 		data, err := os.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		return atomicWrite(path, ApplyOfficialRoutingText(data, snapshot.Policy))
+		return atomicWrite(path, ApplyOfficialRoutingText(data, snapshot.ActivePolicy()))
 	}
 	profile, err := ProfileForRouting(snapshot)
 	if err != nil {
@@ -79,19 +85,20 @@ func ApplyRoutingToFile(path string, snapshot routing.Snapshot) error {
 	}
 	// Layer routing-policy-managed keys (web_search, subagents.models) on top of
 	// the profile-owned sections. Routing policy is the single source of truth.
-	if policyLines := rewriteRoutingPolicySections(splitLines(string(next)), snapshot.Policy); len(policyLines) > 0 {
+	policy := policyWithConfigAliases(snapshot)
+	if policyLines := rewriteRoutingPolicySections(splitLines(string(next)), policy); len(policyLines) > 0 {
 		next = []byte(strings.TrimRight(strings.Join(policyLines, "\n"), "\n") + "\n")
 	}
 	return atomicWrite(path, next)
 }
 
 func PreviewRouting(path string, snapshot routing.Snapshot) ([]byte, error) {
-	if snapshot.Policy.Official {
+	if snapshot.IsOfficial() {
 		data, err := os.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		return ApplyOfficialRoutingText(data, snapshot.Policy), nil
+		return ApplyOfficialRoutingText(data, snapshot.ActivePolicy()), nil
 	}
 	profile, err := ProfileForRouting(snapshot)
 	if err != nil {
@@ -101,7 +108,8 @@ func PreviewRouting(path string, snapshot routing.Snapshot) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if policyLines := rewriteRoutingPolicySections(splitLines(string(full)), snapshot.Policy); len(policyLines) > 0 {
+	policy := policyWithConfigAliases(snapshot)
+	if policyLines := rewriteRoutingPolicySections(splitLines(string(full)), policy); len(policyLines) > 0 {
 		full = []byte(strings.TrimRight(strings.Join(policyLines, "\n"), "\n") + "\n")
 	}
 	return full, nil
@@ -194,7 +202,7 @@ func SnippetForRouting(snapshot routing.Snapshot) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	policy := snapshot.Policy
+	policy := snapshot.ActivePolicy()
 	var b strings.Builder
 	b.WriteString(snippet)
 	if policy.WebSearch != "" || policy.Subagents.Explore != "" || policy.Subagents.Plan != "" {
@@ -217,12 +225,12 @@ func SnippetForRouting(snapshot routing.Snapshot) (string, error) {
 }
 
 func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error) {
-	if snapshot.Policy.Official {
+	if snapshot.IsOfficial() {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return false, err
 		}
-		official := ApplyOfficialRoutingText(data, snapshot.Policy)
+		official := ApplyOfficialRoutingText(data, snapshot.ActivePolicy())
 		return string(data) == string(official), nil
 	}
 	profile, err := ProfileForRouting(snapshot)
@@ -250,7 +258,7 @@ func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error)
 		return false, nil
 	}
 	// Also verify routing-policy-managed keys match the policy.
-	return routingPolicyMatches(path, snapshot.Policy)
+	return routingPolicyMatches(path, policyWithConfigAliases(snapshot))
 }
 
 // routingPolicyMatches checks whether the on-disk config.toml has the
@@ -272,6 +280,24 @@ func routingPolicyMatches(path string, policy routing.RoutingPolicy) (bool, erro
 		return false, nil
 	}
 	return true, nil
+}
+
+func policyWithConfigAliases(snapshot routing.Snapshot) routing.RoutingPolicy {
+	policy := snapshot.ActivePolicy()
+	if snapshot.IsOfficial() {
+		return policy
+	}
+	alias := func(ref string) string {
+		if route, ok := snapshot.Route(ref); ok {
+			return route.Name
+		}
+		return ref
+	}
+	policy.Default = alias(policy.Default)
+	policy.WebSearch = alias(policy.WebSearch)
+	policy.Subagents.Explore = alias(policy.Subagents.Explore)
+	policy.Subagents.Plan = alias(policy.Subagents.Plan)
+	return policy
 }
 
 func firstNonEmptyRouting(values ...string) string {

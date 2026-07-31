@@ -253,7 +253,7 @@ func TestRoutingGETReturnsSafeMultiProviderCatalog(t *testing.T) {
 	}
 }
 
-func TestRoutingPolicyPUTAppliesCombinedConfig(t *testing.T) {
+func TestRoutingPolicyPUTRejectsMixedProviderPolicy(t *testing.T) {
 	s := newRoutingTestServer(t)
 	catalog, _, err := s.currentRouting()
 	if err != nil {
@@ -270,38 +270,10 @@ func TestRoutingPolicyPUTAppliesCombinedConfig(t *testing.T) {
 	request := loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload))
 	response := httptest.NewRecorder()
 	s.handleRoutingPolicy(response, request)
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "不属于当前供应商") {
 		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
 	}
-	stored, err := s.Routing.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Policy != policy {
-		t.Fatalf("stored policy = %#v, want %#v", stored.Policy, policy)
-	}
-	profileList, err := s.Profiles.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	hydrated, err := routing.ProjectWithPolicy(profileList, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	matches, err := grokconfig.CurrentMatchesRouting(s.Paths.GrokConfig, hydrated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !matches {
-		t.Fatal("combined config does not match saved routing policy")
-	}
-	config, err := os.ReadFile(s.Paths.GrokConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(config), "upstream-one") || !strings.Contains(string(config), "upstream-two") {
-		t.Fatalf("combined config missing provider models: %s", config)
-	}
+	return
 }
 
 func TestRoutingPolicyPUTCanClearSubagentRoutes(t *testing.T) {
@@ -387,7 +359,7 @@ func TestRoutingPolicySwitchesProvidersAndKeepsCombinedConfig(t *testing.T) {
 		t.Fatal("default route not found for target profile")
 	}
 	policy := routing.RoutingPolicy{Default: wantDefault.Name, DefaultReasoningEffort: target.DefaultReasoningEffort}
-	payload, _ := json.Marshal(policy)
+	payload, _ := json.Marshal(map[string]any{"active_provider_id": wantDefault.ProviderID, "default": policy.Default, "default_reasoning_effort": policy.DefaultReasoningEffort})
 	request := loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload))
 	response := httptest.NewRecorder()
 	s.handleRoutingPolicy(response, request)
@@ -421,38 +393,21 @@ func TestRoutingPolicySwitchesProvidersAndKeepsCombinedConfig(t *testing.T) {
 	}
 }
 
-func TestProfileDeleteRepairsRoutingPolicyAndConfig(t *testing.T) {
+func TestProfileDeleteRejectsActiveProvider(t *testing.T) {
 	s := newRoutingTestServer(t)
-	profileList, err := s.Profiles.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var active profiles.Profile
-	for _, profile := range profileList {
-		active = profile
-		break
-	}
-	request := loopbackRequest(http.MethodDelete, "/api/profiles/"+active.ID, "")
-	response := httptest.NewRecorder()
-	s.handleProfileByID(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
-	}
 	stored, err := s.Routing.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := s.Profiles.List()
-	if err != nil {
-		t.Fatal(err)
+	provider, ok := stored.Provider(stored.ActiveProviderID)
+	if !ok {
+		t.Fatal("active provider missing")
 	}
-	hydrated, err := routing.ProjectWithPolicy(remaining, stored.Policy)
-	if err != nil {
-		t.Fatalf("routing remained invalid after profile delete: %v", err)
-	}
-	matches, err := grokconfig.CurrentMatchesRouting(s.Paths.GrokConfig, hydrated)
-	if err != nil || !matches {
-		t.Fatalf("combined config matches=%v err=%v", matches, err)
+	request := loopbackRequest(http.MethodDelete, "/api/profiles/"+provider.ProfileID, "")
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "先启用另一个供应商") {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -471,8 +426,8 @@ func TestRoutingAndStatusGETSuggestRepairWithoutWriting(t *testing.T) {
 	if len(catalog.ModelRoutes) < 2 {
 		t.Fatal("expected two routes")
 	}
-	stale := routing.RoutingPolicy{Default: catalog.ModelRoutes[0].Name}
-	if _, err := s.Routing.UpdatePolicy(stale); err != nil {
+	stale := routing.RoutingPolicy{Default: catalog.ModelRoutes[0].ID}
+	if _, err := s.Routing.UpdateActiveProvider(catalog.ModelRoutes[0].ProviderID, stale); err != nil {
 		t.Fatal(err)
 	}
 	provider, ok := catalog.Provider(catalog.ModelRoutes[0].ProviderID)

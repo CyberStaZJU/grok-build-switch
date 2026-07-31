@@ -270,16 +270,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	officialActive := false
 	if s.Routing != nil {
 		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
-			officialActive = stored.Policy.Official
+			officialActive = stored.IsOfficial()
 		}
 	}
 	// Build routing policy display fields for menu bar.
 	activeID := active.ID
+	if s.Routing != nil {
+		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
+			activeID = stored.ActiveProviderID
+		}
+	}
 	var defaultModel, webSearchModel, exploreModel, planModel string
 	if s.Routing != nil {
 		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
-			policy := stored.Policy
-			if policy.Official {
+			policy := stored.ActivePolicy()
+			if stored.IsOfficial() {
 				defaultModel = policy.Default
 				webSearchModel = policy.WebSearch
 				exploreModel = policy.Subagents.Explore
@@ -331,7 +336,7 @@ func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) 
 	policy := routing.RoutingPolicy{Official: true, Default: defaultOfficialRoutingModels[0].Name}
 	if s.Routing != nil {
 		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
-			candidate := stored.Policy
+			candidate := stored.ProviderPolicies[routing.OfficialProviderID]
 			candidate.Official = true
 			if validateOfficialRoutingPolicy(candidate) == nil {
 				policy = candidate
@@ -393,6 +398,7 @@ type profilePublicModelDTO struct {
 
 type profilePublicDTO struct {
 	ID                     string                  `json:"id"`
+	IsActive               bool                    `json:"is_active"`
 	Name                   string                  `json:"name"`
 	Source                 string                  `json:"source,omitempty"`
 	Template               string                  `json:"template,omitempty"`
@@ -448,15 +454,32 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
-		if !isLoopbackRequest(r) {
-			public := make([]profilePublicDTO, len(list))
-			for i, profile := range list {
-				public[i] = publicProfile(profile)
+		activeProfileID := ""
+		if s.Routing != nil {
+			if stored, snapshotErr := s.Routing.Snapshot(); snapshotErr == nil {
+				if provider, ok := stored.Provider(stored.ActiveProviderID); ok {
+					activeProfileID = provider.ProfileID
+				}
 			}
+		}
+		public := make([]profilePublicDTO, len(list))
+		for i, profile := range list {
+			public[i] = publicProfile(profile)
+			public[i].IsActive = profile.ID == activeProfileID
+		}
+		if !isLoopbackRequest(r) {
 			writeJSON(w, public)
 			return
 		}
-		writeJSON(w, list)
+		local := make([]map[string]any, len(list))
+		for i, profile := range list {
+			raw, _ := json.Marshal(profile)
+			var item map[string]any
+			_ = json.Unmarshal(raw, &item)
+			item["is_active"] = profile.ID == activeProfileID
+			local[i] = item
+		}
+		writeJSON(w, local)
 	case http.MethodPost:
 		var profile profiles.Profile
 		if err := decodeManagementJSON(w, r, &profile); err != nil {
@@ -536,6 +559,15 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, updated)
 	case http.MethodDelete:
 		s.routingMu.Lock()
+		if s.Routing != nil {
+			if stored, snapshotErr := s.Routing.Snapshot(); snapshotErr == nil {
+				if provider, ok := stored.Provider(stored.ActiveProviderID); ok && provider.ProfileID == id {
+					s.routingMu.Unlock()
+					writeError(w, fmt.Errorf("当前启用的供应商不能删除；请先启用另一个供应商"), http.StatusConflict)
+					return
+				}
+			}
+		}
 		previous, previousErr := s.Profiles.Get(id)
 		err := s.Profiles.Delete(id)
 		deleted := err == nil
