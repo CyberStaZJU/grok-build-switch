@@ -456,8 +456,13 @@ func TestProfileDeleteRepairsRoutingPolicyAndConfig(t *testing.T) {
 	}
 }
 
-func TestCurrentRoutingRepairsStalePersistedPolicy(t *testing.T) {
+func TestRoutingAndStatusGETSuggestRepairWithoutWriting(t *testing.T) {
 	s := newRoutingTestServer(t)
+	settingsStore := settings.NewStore(filepath.Join(s.Paths.DataDir, "settings.json"))
+	if _, err := settingsStore.Get(); err != nil {
+		t.Fatal(err)
+	}
+	s.Settings = settingsStore
 	profileList, err := s.Profiles.List()
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +471,8 @@ func TestCurrentRoutingRepairsStalePersistedPolicy(t *testing.T) {
 	if len(catalog.ModelRoutes) < 2 {
 		t.Fatal("expected two routes")
 	}
-	if _, err := s.Routing.UpdatePolicy(routing.RoutingPolicy{Default: catalog.ModelRoutes[0].Name}); err != nil {
+	stale := routing.RoutingPolicy{Default: catalog.ModelRoutes[0].Name}
+	if _, err := s.Routing.UpdatePolicy(stale); err != nil {
 		t.Fatal(err)
 	}
 	provider, ok := catalog.Provider(catalog.ModelRoutes[0].ProviderID)
@@ -476,12 +482,55 @@ func TestCurrentRoutingRepairsStalePersistedPolicy(t *testing.T) {
 	if err := s.Profiles.Delete(provider.ProfileID); err != nil {
 		t.Fatal(err)
 	}
-	_, hydrated, err := s.currentRouting()
+	beforeRouting, err := os.ReadFile(s.Routing.Path())
 	if err != nil {
-		t.Fatalf("currentRouting did not repair stale policy: %v", err)
+		t.Fatal(err)
 	}
-	if hydrated.Policy.Default == catalog.ModelRoutes[0].Name || hydrated.Policy.Default == "" {
-		t.Fatalf("repaired default = %q", hydrated.Policy.Default)
+	beforeConfig, err := os.ReadFile(s.Paths.GrokConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRoutingInfo, _ := os.Stat(s.Routing.Path())
+	beforeConfigInfo, _ := os.Stat(s.Paths.GrokConfig)
+
+	for _, target := range []string{"/api/routing", "/api/status", "/api/routing", "/api/status"} {
+		request := loopbackRequest(http.MethodGet, target, "")
+		response := httptest.NewRecorder()
+		if target == "/api/routing" {
+			s.handleRouting(response, request)
+		} else {
+			s.handleStatus(response, request)
+		}
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", target, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), `"repair_required":true`) {
+			t.Fatalf("%s omitted repair recommendation: %s", target, response.Body.String())
+		}
+	}
+	afterRouting, _ := os.ReadFile(s.Routing.Path())
+	afterConfig, _ := os.ReadFile(s.Paths.GrokConfig)
+	afterRoutingInfo, _ := os.Stat(s.Routing.Path())
+	afterConfigInfo, _ := os.Stat(s.Paths.GrokConfig)
+	if string(afterRouting) != string(beforeRouting) || string(afterConfig) != string(beforeConfig) {
+		t.Fatal("GET routing/status changed durable files")
+	}
+	if !afterRoutingInfo.ModTime().Equal(beforeRoutingInfo.ModTime()) || !afterConfigInfo.ModTime().Equal(beforeConfigInfo.ModTime()) {
+		t.Fatal("GET routing/status changed durable mtimes")
+	}
+
+	request := loopbackRequest(http.MethodPost, "/api/routing/reapply", `{}`)
+	response := httptest.NewRecorder()
+	s.handleRoutingReapply(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("explicit repair status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Policy.Default == stale.Default || stored.Policy.Default == "" {
+		t.Fatalf("explicit repair did not persist suggested default: %#v", stored.Policy)
 	}
 }
 

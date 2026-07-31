@@ -68,6 +68,9 @@ func (s *Store) Create(profile Profile) (Profile, error) {
 		profile.CreatedAt = now
 	}
 	profile = Normalize(profile)
+	if err := ValidateEndpoints(profile); err != nil {
+		return Profile{}, err
+	}
 	if err := ValidateDefaultReasoningEffort(profile); err != nil {
 		return Profile{}, err
 	}
@@ -92,6 +95,9 @@ func (s *Store) Update(id string, next Profile) (Profile, error) {
 			next.CreatedAt = profiles[i].CreatedAt
 			next.UpdatedAt = time.Now()
 			next = Normalize(next)
+			if err := ValidateEndpoints(next); err != nil {
+				return Profile{}, err
+			}
 			if err := ValidateDefaultReasoningEffort(next); err != nil {
 				return Profile{}, err
 			}
@@ -103,6 +109,28 @@ func (s *Store) Update(id string, next Profile) (Profile, error) {
 		}
 	}
 	return Profile{}, os.ErrNotExist
+}
+
+// Restore writes an exact previously returned profile back under its original
+// identity and timestamps. It is intended only for transaction rollback.
+func (s *Store) Restore(previous Profile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if previous.ID == "" {
+		return fmt.Errorf("cannot restore profile without ID")
+	}
+	items, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		if items[i].ID == previous.ID {
+			items[i] = previous
+			return s.writeLocked(items)
+		}
+	}
+	items = append(items, previous)
+	return s.writeLocked(items)
 }
 
 func (s *Store) Delete(id string) error {
@@ -229,6 +257,9 @@ func (s *Store) readLocked() ([]Profile, error) {
 	}
 	for i := range profiles {
 		profiles[i] = Normalize(profiles[i])
+		if err := ValidateEndpoints(profiles[i]); err != nil {
+			return nil, s.quarantineLocked(data, fmt.Errorf("profile %q has unsupported endpoint: %w", profiles[i].Name, err))
+		}
 	}
 	return profiles, nil
 }

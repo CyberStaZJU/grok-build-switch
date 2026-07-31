@@ -143,6 +143,56 @@ func TestStoreRejectsUnsupportedDefaultReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsOfficialAnthropicEndpointsWithoutChangingBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	store := NewStore(path)
+	created, err := store.Create(Profile{Name: "safe", BaseURL: "https://messages.example/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := readBytes(t, path)
+
+	for _, test := range []struct {
+		name    string
+		profile Profile
+	}{
+		{"profile base", Profile{Name: "official", BaseURL: "https://api.anthropic.com/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m"}}}},
+		{"model override", Profile{Name: "official override", BaseURL: "https://messages.example/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m", BaseURL: "https://regional.api.anthropic.com/v1"}}}},
+		{"ideographic dot", Profile{Name: "unicode dot", BaseURL: "https://api。anthropic.com/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m"}}}},
+		{"fullwidth dot override", Profile{Name: "unicode override", BaseURL: "https://messages.example/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m", BaseURL: "https://api．anthropic.com/v1"}}}},
+		{"halfwidth dot", Profile{Name: "halfwidth dot", BaseURL: "https://api｡anthropic.com/v1", DefaultModel: "m", Models: []ModelDef{{Name: "m", Model: "m"}}}},
+	} {
+		t.Run(test.name+" create", func(t *testing.T) {
+			if _, err := store.Create(test.profile); err == nil || !strings.Contains(err.Error(), "不支持 Anthropic 官方 API 直连") {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if after := readBytes(t, path); !bytes.Equal(after, before) {
+				t.Fatalf("rejected Create changed profiles.json\nbefore=%s\nafter=%s", before, after)
+			}
+		})
+		t.Run(test.name+" update", func(t *testing.T) {
+			if _, err := store.Update(created.ID, test.profile); err == nil || !strings.Contains(err.Error(), "不支持 Anthropic 官方 API 直连") {
+				t.Fatalf("Update() error = %v", err)
+			}
+			if after := readBytes(t, path); !bytes.Equal(after, before) {
+				t.Fatalf("rejected Update changed profiles.json\nbefore=%s\nafter=%s", before, after)
+			}
+		})
+	}
+}
+
+func TestStoreQuarantinesPersistedOfficialAnthropicEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+	original := []byte(`[{"id":"official","name":"unsupported","base_url":"https://api.anthropic.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}]` + "\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := NewStore(path).List()
+	assertIdentityQuarantine(t, path, original, items, err, "不支持 Anthropic 官方 API 直连")
+}
+
 func TestNormalizePreservesReasoningCapabilityMetadata(t *testing.T) {
 	profile := Normalize(Profile{
 		DefaultModel: "plain-model",

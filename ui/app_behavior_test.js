@@ -41,9 +41,9 @@ function loadApp(fetchImpl) {
   return context.appTest;
 }
 
-test("Anthropic template uses /v1 and unknown reasoning defaults to none", () => {
+test("official Anthropic template is absent and unknown reasoning defaults to none", () => {
   const app = loadApp(async () => response(500));
-  assert.equal(app.TEMPLATES.anthropic.base_url, "https://api.anthropic.com/v1");
+  assert.equal(app.TEMPLATES.anthropic, undefined);
   assert.equal(app.normalizeReasoningEffort("unknown"), "none");
   assert.equal(app.newProfileDraft().default_reasoning_effort, "none");
 });

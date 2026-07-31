@@ -204,7 +204,6 @@ func TestFrontendHardeningContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		`base_url: "https://api.anthropic.com/v1"`,
 		`if (!token) throw new Error("服务器返回了空安全令牌")`,
 		`if (csrfTokenPromise === pending) csrfTokenPromise = null`,
 		`throw err`,
@@ -222,6 +221,7 @@ func TestFrontendHardeningContracts(t *testing.T) {
 		}
 	}
 	for _, stale := range []string{
+		`anthropic: {`,
 		`base_url: "https://api.anthropic.com"`,
 		`const options = allowed.length ? allowed : ["low", "medium", "high"]`,
 		`const supported = efforts.length ? efforts : ["low", "medium", "high"]`,

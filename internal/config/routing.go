@@ -50,7 +50,11 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 		provider, _ := snapshot.Provider(route.ProviderID)
 		profile.BaseURL = firstNonEmptyRouting(route.BaseURL, provider.BaseURL)
 	}
-	return profiles.Normalize(profile), nil
+	profile = profiles.Normalize(profile)
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return profiles.Profile{}, err
+	}
+	return profile, nil
 }
 
 func ApplyRoutingToFile(path string, snapshot routing.Snapshot) error {

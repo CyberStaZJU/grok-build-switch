@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +28,101 @@ func TestListenRejectsInvalidPreferredPort(t *testing.T) {
 	server := &Server{}
 	if _, _, err := server.Listen(70000); err == nil {
 		t.Fatal("Listen() accepted an invalid preferred port")
+	}
+}
+
+func TestOfficialAnthropicProfileMutationsLeaveRoutingAndConfigUnchanged(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeProfiles, err := os.ReadFile(s.Profiles.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := os.ReadFile(s.Routing.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.Profiles.List()
+	if err != nil || len(items) == 0 {
+		t.Fatalf("profiles=%#v err=%v", items, err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		method string
+		target string
+		body   string
+		invoke http.HandlerFunc
+	}{
+		{"create profile base", http.MethodPost, "/api/profiles", `{"name":"official","base_url":"https://api.anthropic.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`, s.handleProfiles},
+		{"create model override", http.MethodPost, "/api/profiles", `{"name":"official override","base_url":"https://messages.example/v1","default_model":"m","models":[{"name":"m","model":"m","base_url":"https://api.anthropic.com/v1"}]}`, s.handleProfiles},
+		{"create unicode dot", http.MethodPost, "/api/profiles", `{"name":"official unicode","base_url":"https://api。anthropic.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`, s.handleProfiles},
+		{"create unicode override", http.MethodPost, "/api/profiles", `{"name":"official unicode override","base_url":"https://messages.example/v1","default_model":"m","models":[{"name":"m","model":"m","base_url":"https://api｡anthropic.com/v1"}]}`, s.handleProfiles},
+		{"update profile base", http.MethodPut, "/api/profiles/" + items[0].ID, `{"name":"official","base_url":"https://api．anthropic.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`, s.handleProfileByID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.invoke(response, loopbackRequest(test.method, test.target, test.body))
+			if response.Code < 400 || !strings.Contains(response.Body.String(), "不支持 Anthropic 官方 API 直连") {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			assertFileBytesEqual(t, s.Profiles.Path(), beforeProfiles)
+			assertFileBytesEqual(t, s.Routing.Path(), beforeRouting)
+			assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+		})
+	}
+}
+
+func TestConfigPreviewRejectsOfficialAnthropicEndpoint(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleConfigPreview(response, loopbackRequest(http.MethodPost, "/api/config/preview", `{"name":"official","base_url":"https://api.anthropic.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`))
+	if response.Code < 400 || !strings.Contains(response.Body.String(), "不支持 Anthropic 官方 API 直连") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+}
+
+func TestConfigEditorRejectsOfficialAnthropicEndpoint(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{
+		"[endpoints]\nmodels_base_url = \"https://api.anthropic.com/v1\"\n[models]\ndefault = \"m\"\n[model.m]\nmodel = \"m\"\n",
+		"[endpoints]\nmodels_base_url = \"https://messages.example/v1\"\n[models]\ndefault = \"m\"\n[model.m]\nmodel = \"m\"\nbase_url = \"https://api.anthropic.com/v1\"\n",
+		"[endpoints]\nmodels_base_url = \"https://api。anthropic.com/v1\"\n[models]\ndefault = \"m\"\n[model.m]\nmodel = \"m\"\n",
+		"[endpoints]\nmodels_base_url = \"https://messages.example/v1\"\n[models]\ndefault = \"m\"\n[model.m]\nmodel = \"m\"\nbase_url = \"https://api｡anthropic.com/v1\"\n",
+	} {
+		payload, err := json.Marshal(map[string]string{"content": content})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		s.handleConfig(response, loopbackRequest(http.MethodPut, "/api/config", string(payload)))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "不支持 Anthropic 官方 API 直连") {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+	}
+}
+
+func assertFileBytesEqual(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s changed\nwant=%s\ngot=%s", path, want, got)
 	}
 }
 
@@ -148,7 +246,7 @@ func TestRemoteSessionAndOriginProtection(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	valid := httptest.NewRequest(http.MethodPost, "http://192.168.1.10:17878/api/profiles", strings.NewReader("{}"))
+	valid := httptest.NewRequest(http.MethodPost, "http://192.168.1.10:17878/api/lan-access", strings.NewReader("{}"))
 	valid.RemoteAddr = "192.168.1.10:40000"
 	valid.Host = "192.168.1.10:17878"
 	valid.Header.Set("Origin", "http://192.168.1.10:17878")

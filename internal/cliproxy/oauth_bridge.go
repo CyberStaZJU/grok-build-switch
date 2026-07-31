@@ -44,14 +44,22 @@ func startOAuthCallbackBridge() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/callback", handleOAuthBrowserCallback)
 	mux.HandleFunc("/", handleOAuthBrowserCallback)
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newOAuthCallbackHTTPServer(mux)
 	go func() {
 		_ = srv.Serve(ln)
 	}()
 	return nil
+}
+
+func newOAuthCallbackHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 }
 
 func isAddrInUse(err error) bool {

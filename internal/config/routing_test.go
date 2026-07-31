@@ -211,6 +211,23 @@ func TestProfileForRoutingRejectsUnhydratedCatalog(t *testing.T) {
 	}
 }
 
+func TestRoutingGenerationRejectsOfficialAnthropicEndpoints(t *testing.T) {
+	for _, profile := range []profiles.Profile{
+		{ID: "p", Name: "Official", BaseURL: "https://api.anthropic.com/v1", DefaultModel: "m", Models: []profiles.ModelDef{{Name: "m", Model: "m"}}},
+		{ID: "p", Name: "Override", BaseURL: "https://messages.example/v1", DefaultModel: "m", Models: []profiles.ModelDef{{Name: "m", Model: "m", BaseURL: "https://api.anthropic.com/v1"}}},
+		{ID: "p", Name: "Unicode Dot", BaseURL: "https://api。anthropic.com/v1", DefaultModel: "m", Models: []profiles.ModelDef{{Name: "m", Model: "m"}}},
+		{ID: "p", Name: "Unicode Override", BaseURL: "https://messages.example/v1", DefaultModel: "m", Models: []profiles.ModelDef{{Name: "m", Model: "m", BaseURL: "https://api｡anthropic.com/v1"}}},
+	} {
+		snapshot, err := routing.ProjectWithPolicy([]profiles.Profile{profile}, routing.Project([]profiles.Profile{profile}).Policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ProfileForRouting(snapshot); err == nil || !strings.Contains(err.Error(), "不支持 Anthropic 官方 API 直连") {
+			t.Fatalf("ProfileForRouting() error = %v", err)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)

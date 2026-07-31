@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"grok_switch/internal/remoteaccess"
+	"grok_switch/internal/settings"
+	"grok_switch/internal/ssh"
 )
 
 func TestRoutingPolicyStrictJSON(t *testing.T) {
@@ -66,6 +70,129 @@ func TestCSRFEndpointDoesNotEnableCORS(t *testing.T) {
 	}
 	if origin := res.Header().Get("Access-Control-Allow-Origin"); origin != "" {
 		t.Fatalf("unexpected CORS header %q", origin)
+	}
+}
+
+func TestLANAccessMatrixRedactsProfilesAndBlocksSensitiveRoutes(t *testing.T) {
+	s := newRoutingTestServer(t)
+	settingsStore := settings.NewStore(filepath.Join(s.Paths.DataDir, "settings.json"))
+	current := settings.Default()
+	current.LANAccessEnabled = true
+	if _, err := settingsStore.Update(current); err != nil {
+		t.Fatal(err)
+	}
+	remoteStore := remoteaccess.NewStore(filepath.Join(s.Paths.DataDir, "remote-access.json"))
+	snapshot, err := remoteStore.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Settings = settingsStore
+	s.RemoteAccess = remoteStore
+	s.SSH = ssh.NewHandler(filepath.Join(s.Paths.DataDir, "ssh"))
+	mux := http.NewServeMux()
+	s.routes(mux)
+	handler := s.withAccess(mux)
+
+	request := func(remoteAddr, method, target, body string, paired bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "http://192.168.1.10:17878"+target, strings.NewReader(body))
+		req.RemoteAddr = remoteAddr
+		req.Host = "192.168.1.10:17878"
+		if method != http.MethodGet && method != http.MethodHead {
+			req.Header.Set("Origin", "http://192.168.1.10:17878")
+		}
+		if paired {
+			req.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
+		}
+		if strings.HasPrefix(remoteAddr, "127.") && method != http.MethodGet && method != http.MethodHead {
+			token, tokenErr := s.csrfToken()
+			if tokenErr != nil {
+				t.Fatal(tokenErr)
+			}
+			req.Header.Set(csrfHeader, token)
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		return res
+	}
+
+	unpaired := request("192.168.1.20:40000", http.MethodGet, "/api/profiles", "", false)
+	if unpaired.Code != http.StatusUnauthorized {
+		t.Fatalf("unpaired profiles status=%d body=%s", unpaired.Code, unpaired.Body.String())
+	}
+
+	paired := request("192.168.1.20:40001", http.MethodGet, "/api/profiles", "", true)
+	if paired.Code != http.StatusOK {
+		t.Fatalf("paired profiles status=%d body=%s", paired.Code, paired.Body.String())
+	}
+	pairedBody := paired.Body.String()
+	for _, secret := range []string{"provider-secret-one", "provider-secret-two", "model-secret-two", "header-secret", "X-Secret", "private-one.example", "private-two.example"} {
+		if strings.Contains(pairedBody, secret) {
+			t.Fatalf("paired profile response leaked %q: %s", secret, pairedBody)
+		}
+	}
+	if !strings.Contains(pairedBody, `"has_api_key":true`) {
+		t.Fatalf("paired profile response omitted has_api_key: %s", pairedBody)
+	}
+
+	loopback := request("127.0.0.1:40002", http.MethodGet, "/api/profiles", "", false)
+	if loopback.Code != http.StatusOK || !strings.Contains(loopback.Body.String(), "provider-secret-one") || !strings.Contains(loopback.Body.String(), "header-secret") {
+		t.Fatalf("loopback profile management data unavailable: status=%d body=%s", loopback.Code, loopback.Body.String())
+	}
+
+	for _, target := range []string{"/api/config", "/api/ssh/connections"} {
+		res := request("192.168.1.20:40003", http.MethodGet, target, "", true)
+		if res.Code != http.StatusForbidden {
+			t.Fatalf("paired %s status=%d want 403 body=%s", target, res.Code, res.Body.String())
+		}
+	}
+	config := request("127.0.0.1:40004", http.MethodGet, "/api/config", "", false)
+	if config.Code != http.StatusOK || !strings.Contains(config.Body.String(), `"content"`) {
+		t.Fatalf("loopback config status=%d body=%s", config.Code, config.Body.String())
+	}
+	sshList := request("127.0.0.1:40005", http.MethodGet, "/api/ssh/connections", "", false)
+	if sshList.Code != http.StatusOK {
+		t.Fatalf("loopback ssh status=%d body=%s", sshList.Code, sshList.Body.String())
+	}
+}
+
+func TestPairedLANMutationsAndCredentialProbesAreLoopbackOnly(t *testing.T) {
+	settingsStore := settings.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	current := settings.Default()
+	current.LANAccessEnabled = true
+	if _, err := settingsStore.Update(current); err != nil {
+		t.Fatal(err)
+	}
+	remoteStore := remoteaccess.NewStore(filepath.Join(t.TempDir(), "remote.json"))
+	snapshot, err := remoteStore.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Settings: settingsStore, RemoteAccess: remoteStore}
+	next := s.withAccess(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	for _, tc := range []struct{ method, target string }{
+		{http.MethodPost, "/api/profiles"},
+		{http.MethodPut, "/api/profiles/id"},
+		{http.MethodDelete, "/api/profiles/id"},
+		{http.MethodPut, "/api/settings"},
+		{http.MethodPost, "/api/official/activate"},
+		{http.MethodPost, "/api/import"},
+		{http.MethodPost, "/api/models/fetch"},
+		{http.MethodPost, "/api/models/reasoning-efforts"},
+		{http.MethodPost, "/api/connection/test"},
+		{http.MethodGet, "/api/cache-stats"},
+	} {
+		req := httptest.NewRequest(tc.method, "http://192.168.1.10:17878"+tc.target, strings.NewReader(`{}`))
+		req.RemoteAddr = "192.168.1.20:41000"
+		req.Host = "192.168.1.10:17878"
+		if tc.method != http.MethodGet {
+			req.Header.Set("Origin", "http://192.168.1.10:17878")
+		}
+		req.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
+		res := httptest.NewRecorder()
+		next.ServeHTTP(res, req)
+		if res.Code != http.StatusForbidden {
+			t.Fatalf("%s %s status=%d want 403", tc.method, tc.target, res.Code)
+		}
 	}
 }
 
