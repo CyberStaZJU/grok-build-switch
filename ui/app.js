@@ -150,6 +150,26 @@ async function reapplyRouting() {
   await api("/api/routing/reapply", { method: "POST" });
 }
 
+async function deleteSSHFiles(connID, paths) {
+  await api(`/api/ssh/files?conn_id=${encodeURIComponent(connID)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ paths }),
+  });
+}
+
+function modelSupportsBackendSearch(model = {}) {
+  return model.supports_backend_search ?? false;
+}
+
+// Simple glob matching for SSH filename filters.
+function minimatch(name, pattern) {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\/]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`, "i").test(name);
+}
+
 async function loadCacheStats() {
   const hours = Number($("cacheStatsHours")?.value || 24);
   const data = await api(`/api/cache-stats?hours=${encodeURIComponent(hours)}`);
@@ -199,18 +219,39 @@ function customPrompt(message, defaultValue) {
   return new Promise((resolve) => {
     const dialog = $("promptDialog");
     const input = $("promptInput");
+    const ok = $("promptOk");
+    const cancel = $("promptCancel");
     $("promptLabel").textContent = message;
     input.value = defaultValue || "";
+    let settled = false;
+    const cleanup = () => {
+      if (dialog.open) dialog.close();
+      input.onkeydown = null;
+      ok.onclick = null;
+      cancel.onclick = null;
+      dialog.oncancel = null;
+    };
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(input.value);
+      }
+    };
+    ok.onclick = (event) => { event.preventDefault(); finish(input.value); };
+    cancel.onclick = (event) => { event.preventDefault(); finish(null); };
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      finish(null);
+    };
     dialog.showModal();
     input.focus();
     input.select();
-    const cleanup = () => {
-      dialog.close();
-      input.onkeydown = null;
-    };
-    input.onkeydown = (e) => { if (e.key === "Enter") { cleanup(); resolve(input.value); } };
-    $("promptOk").onclick = () => { cleanup(); resolve(input.value); };
-    $("promptCancel").onclick = () => { cleanup(); resolve(null); };
   });
 }
 
@@ -1111,7 +1152,7 @@ function addModelCard(model = {}) {
     base_url: model.base_url || $("baseUrl")?.value.trim() || "",
     api_backend: model.api_backend || apiBackendFor($("upstreamFormat").value),
     extra_headers: model.extra_headers || {},
-    supports_backend_search: model.supports_backend_search ?? true,
+    supports_backend_search: modelSupportsBackendSearch(model),
     context_window: Number(model.context_window || 0),
     max_completion_tokens: Number(model.max_completion_tokens || 0),
   };
@@ -1133,10 +1174,18 @@ function addModelCard(model = {}) {
       <label class="field">Model
         <input data-field="model" class="mono" value="${escapeAttr(model.model || "")}" placeholder="上游模型 ID">
       </label>
+      <details class="modelAdvanced full">
+        <summary>模型高级设置</summary>
+        <label class="check">
+          <input type="checkbox" data-field="supports_backend_search" ${card.modelDraft.supports_backend_search ? "checked" : ""}>
+          支持原生后端搜索（仅在上游明确支持时启用）
+        </label>
+      </details>
     </div>
   `;
   const nameInput = card.querySelector('[data-field="name"]');
   const modelInput = card.querySelector('[data-field="model"]');
+  const backendSearchInput = card.querySelector('[data-field="supports_backend_search"]');
   const onFieldChange = () => {
     card.querySelector("strong").textContent = nameInput.value.trim() || modelInput.value.trim() || "新模型";
     renderModelSelect();
@@ -1144,6 +1193,10 @@ function addModelCard(model = {}) {
   };
   nameInput.addEventListener("input", onFieldChange);
   modelInput.addEventListener("input", onFieldChange);
+  backendSearchInput.addEventListener("change", () => {
+    card.modelDraft = { ...(card.modelDraft || {}), supports_backend_search: backendSearchInput.checked };
+    scheduleProviderPreview();
+  });
   card.querySelector('[data-action="remove-model"]').onclick = () => {
     card.remove();
     renderModelSelect();
@@ -1765,7 +1818,7 @@ async function deleteSSFFiles(paths) {
   const msg = paths.length === 1 ? `确定删除 "${paths[0].split("/").pop()}"？` : `确定删除选中的 ${paths.length} 个文件？`;
   if (!confirm(msg)) return;
   try {
-    await api("/api/ssh/files", { method: "DELETE", body: JSON.stringify({ paths }) });
+    await deleteSSHFiles(ssh.activeConn, paths);
     ssh.selected.clear();
     await loadSSHFiles(ssh.currentPath);
     toast("已删除", "success");
@@ -1783,12 +1836,6 @@ function formatSize(bytes) {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
   if (bytes < 1024 * 1024 * 1024) return (bytes / 1048576).toFixed(1) + " MB";
   return (bytes / 1073741824).toFixed(1) + " GB";
-}
-
-// Simple glob matching for filters
-function minimatch(name, pattern) {
-  const re = new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
-  return re.test(name);
 }
 
 // ——— SSH Dialog Handlers ———

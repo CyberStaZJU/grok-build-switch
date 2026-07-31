@@ -6,7 +6,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -148,12 +147,6 @@ func main() {
 	if err := appServer.ApplyCurrentRouting(); err != nil {
 		_ = httpServer.Shutdown(context.Background())
 		fatal(fmt.Errorf("最终应用组合路由失败: %w", err))
-	}
-	// Route net/http's internal panic/error reports into the crash log too.
-	if crashFile := resolved.LogFile; crashFile != "" {
-		if f, ferr := os.OpenFile(crashFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); ferr == nil {
-			httpServer.ErrorLog = log.New(f, "http: ", log.LstdFlags)
-		}
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 
