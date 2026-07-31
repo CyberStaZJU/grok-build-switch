@@ -198,6 +198,41 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 	}
 }
 
+func TestFrontendHardeningContracts(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`base_url: "https://api.anthropic.com/v1"`,
+		`if (!token) throw new Error("服务器返回了空安全令牌")`,
+		`if (csrfTokenPromise === pending) csrfTokenPromise = null`,
+		`throw err`,
+		`if (res.status !== 403) return false`,
+		`for (let attempt = 0; attempt < 2; attempt++)`,
+		`attempt > 0 || !csrfRejected(res, data)`,
+		`const confirmed = await customConfirm`,
+		`if (!confirmed) return false`,
+		`user_confirmed_probe: true`,
+		`const options = allowed.length ? allowed : ["none"]`,
+		`const supported = efforts.length ? efforts : ["none"]`,
+	} {
+		if !bytes.Contains(appData, []byte(expected)) {
+			t.Fatalf("frontend hardening contract missing: %s", expected)
+		}
+	}
+	for _, stale := range []string{
+		`base_url: "https://api.anthropic.com"`,
+		`const options = allowed.length ? allowed : ["low", "medium", "high"]`,
+		`const supported = efforts.length ? efforts : ["low", "medium", "high"]`,
+		`setReasoningEffortOptions(recommended.length ? recommended : ["low", "medium", "high"]`,
+	} {
+		if bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("stale frontend behavior remains: %s", stale)
+		}
+	}
+}
+
 func TestDefaultReasoningEffortControl(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
@@ -295,8 +330,8 @@ func TestSubscriptionProxyPageContract(t *testing.T) {
 		`api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) })`,
 		`for (const action of ["start", "stop", "restart"])`,
 		`const headers = { "Content-Type": "application/json", ...(options.headers || {}) }`,
-		`headers["X-Grok-Switch-CSRF"] = await csrfToken()`,
-		`async function csrfToken()`,
+		`headers["X-Grok-Switch-CSRF"] = await csrfToken({ refresh: attempt === 1 })`,
+		`async function csrfToken({ refresh = false } = {})`,
 	} {
 		if !bytes.Contains(appData, []byte(requestPart)) {
 			t.Fatalf("subscription service JSON request contract not found: %s", requestPart)
