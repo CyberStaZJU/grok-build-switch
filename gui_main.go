@@ -93,6 +93,10 @@ func main() {
 	if err != nil {
 		guiFatal(err)
 	}
+	// Schema v1 allowed non-Responses web_search routes. Repair that legacy
+	// optional field during startup migration so an upgrade cannot prevent the
+	// local service from launching; interactive updates remain strictly rejected.
+	hydratedRouting, _ = routing.RepairUnsupportedWebSearch(hydratedRouting)
 	if err := sw.ApplyRouting(hydratedRouting); err != nil {
 		guiFatal(fmt.Errorf("应用启动路由配置失败: %w", err))
 	}

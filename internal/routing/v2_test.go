@@ -65,6 +65,76 @@ func TestSchemaV1MigrationUsesDefaultOwnerEvenWhenOptionalRouteComesFirst(t *tes
 	}
 }
 
+func TestProjectWithSnapshotClearsUnsupportedLegacyWebSearch(t *testing.T) {
+	items := []profiles.Profile{{
+		ID: "one", Name: "One", DefaultModel: "chat",
+		Models: []profiles.ModelDef{
+			{Name: "chat", Model: "chat", APIBackend: "chat_completions", SupportsBackendSearch: true},
+			{Name: "search", Model: "search", APIBackend: "responses", SupportsBackendSearch: true},
+		},
+	}}
+	previous := Project(items)
+	previous.ProviderPolicies["one"] = RoutingPolicy{
+		Default: "one:chat", WebSearch: "one:chat",
+		Subagents: SubagentsPolicy{Explore: "one:chat", Plan: "one:chat"},
+	}
+
+	projected, err := ProjectWithSnapshot(items, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, changed := RepairUnsupportedWebSearch(projected)
+	if !changed {
+		t.Fatal("expected unsupported legacy web_search repair")
+	}
+	policy := projected.ProviderPolicies["one"]
+	if policy.WebSearch != "" {
+		t.Fatalf("unsupported legacy web_search was retained: %#v", policy)
+	}
+	if policy.Default != "one:chat" || policy.Subagents.Explore != "one:chat" || policy.Subagents.Plan != "one:chat" {
+		t.Fatalf("repair changed unrelated routes: %#v", policy)
+	}
+
+	previous.ProviderPolicies["one"] = RoutingPolicy{Default: "one:chat", WebSearch: "one:search"}
+	projected, err = ProjectWithSnapshot(items, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, changed = RepairUnsupportedWebSearch(projected)
+	if changed {
+		t.Fatal("capable web_search was unexpectedly repaired")
+	}
+	if got := projected.ProviderPolicies["one"].WebSearch; got != "one:search" {
+		t.Fatalf("capable web_search = %q, want one:search", got)
+	}
+}
+
+func TestProjectWithSnapshotRepairsInactiveProviderUnsupportedWebSearch(t *testing.T) {
+	items := []profiles.Profile{
+		{ID: "one", Name: "One", DefaultModel: "a", Models: []profiles.ModelDef{{Name: "a", Model: "a", APIBackend: "responses", SupportsBackendSearch: true}}},
+		{ID: "two", Name: "Two", DefaultModel: "b", Models: []profiles.ModelDef{{Name: "b", Model: "b", APIBackend: "chat_completions", SupportsBackendSearch: true}}},
+	}
+	previous := Project(items)
+	previous.ActiveProviderID = "one"
+	previous.ProviderPolicies["one"] = RoutingPolicy{Default: "one:a", WebSearch: "one:a"}
+	previous.ProviderPolicies["two"] = RoutingPolicy{Default: "two:b", WebSearch: "two:b"}
+
+	projected, err := ProjectWithSnapshot(items, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, changed := RepairUnsupportedWebSearch(projected)
+	if !changed {
+		t.Fatal("expected inactive provider repair")
+	}
+	if got := projected.ProviderPolicies["two"].WebSearch; got != "" {
+		t.Fatalf("inactive provider unsupported web_search = %q, want empty", got)
+	}
+	if PersistedEqual(projected, previous) {
+		t.Fatal("inactive provider repair must be persisted")
+	}
+}
+
 func TestPersistedEqualDetectsInactiveProviderPolicyRepairs(t *testing.T) {
 	left := Snapshot{
 		Version:          CurrentVersion,

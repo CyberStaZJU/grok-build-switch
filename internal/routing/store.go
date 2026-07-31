@@ -458,7 +458,8 @@ func policyWithRouteNames(snapshot Snapshot, policy RoutingPolicy) RoutingPolicy
 }
 
 // PersistedEqual reports whether two snapshots have the same durable routing
-// state. Runtime hydration, compatibility mirrors, and timestamps are ignored.
+// state. Runtime hydration, compatibility mirrors, timestamps, and derived
+// capability flags such as WebSearchCapable are ignored.
 func PersistedEqual(left, right Snapshot) bool {
 	left = sanitizedSnapshot(left)
 	right = sanitizedSnapshot(right)
@@ -466,6 +467,16 @@ func PersistedEqual(left, right Snapshot) bool {
 	right.UpdatedAt = time.Time{}
 	left.Policy = RoutingPolicy{}
 	right.Policy = RoutingPolicy{}
+	// WebSearchCapable is recomputed from the selected route; it must not make a
+	// healthy catalog look like it needs repair or force a rewrite on startup.
+	for providerID, policy := range left.ProviderPolicies {
+		policy.WebSearchCapable = false
+		left.ProviderPolicies[providerID] = policy
+	}
+	for providerID, policy := range right.ProviderPolicies {
+		policy.WebSearchCapable = false
+		right.ProviderPolicies[providerID] = policy
+	}
 	return reflect.DeepEqual(left, right)
 }
 

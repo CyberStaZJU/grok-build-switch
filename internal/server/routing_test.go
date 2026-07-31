@@ -524,6 +524,45 @@ func TestProfileDeleteRejectsActiveProvider(t *testing.T) {
 	}
 }
 
+func TestRoutingGETDoesNotFlagStableIDsAsRepair(t *testing.T) {
+	s := newRoutingTestServer(t)
+	request := loopbackRequest(http.MethodGet, "/api/routing", "")
+	response := httptest.NewRecorder()
+	s.handleRouting(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var dto routingSnapshotDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.RepairRequired {
+		t.Fatalf("healthy stable-ID routing was flagged for repair: %s", response.Body.String())
+	}
+}
+
+func TestRoutingNeedsRepairIgnoresCapabilityFlags(t *testing.T) {
+	stored := routing.Snapshot{
+		ActiveProviderID: "one",
+		ProviderPolicies: map[string]routing.RoutingPolicy{
+			"one": {Default: "one:a", WebSearchCapable: false, Subagents: routing.SubagentsPolicy{Explore: "one:a"}},
+		},
+	}
+	hydrated := routing.Snapshot{
+		ActiveProviderID: "one",
+		ProviderPolicies: map[string]routing.RoutingPolicy{
+			"one": {Default: "one:a", WebSearchCapable: true, Subagents: routing.SubagentsPolicy{Explore: "one:a"}},
+		},
+	}
+	if routingNeedsRepair(stored, hydrated) {
+		t.Fatal("derived web_search_capable should not require repair")
+	}
+	hydrated.ProviderPolicies["one"] = routing.RoutingPolicy{Default: "one:b", WebSearchCapable: true}
+	if !routingNeedsRepair(stored, hydrated) {
+		t.Fatal("changed default must require repair")
+	}
+}
+
 func TestRoutingAndStatusGETSuggestRepairWithoutWriting(t *testing.T) {
 	s := newRoutingTestServer(t)
 	settingsStore := settings.NewStore(filepath.Join(s.Paths.DataDir, "settings.json"))
