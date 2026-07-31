@@ -121,8 +121,8 @@ func (s Snapshot) SubagentWebSearchCapable(subagent string) bool {
 }
 
 // repairWebSearch 保留仍存在的 web_search 路由；路由失效时清空。
-// 不兼容 x_search 的模型不会被替换：系统通过 WebSearchCapable=false
-// 通知 Agent 改用 browser-use，而不是擅自切换用户选择的模型。
+// 不兼容 x_search 的模型不会被替换，WebSearchCapable=false 会明确暴露
+// 能力缺口，而不是擅自切换用户选择的模型。
 func repairWebSearch(name string, catalog Snapshot) string {
 	if name == "" {
 		return ""
@@ -243,9 +243,10 @@ func Project(source []profiles.Profile) Snapshot {
 	// With routing as the single source of truth, there is no "active profile".
 	// Default to the first available route so the routing policy is never empty.
 	if len(snapshot.ModelRoutes) > 0 {
-		snapshot.Policy = RoutingPolicy{
-			Default:                snapshot.ModelRoutes[0].Name,
-			DefaultReasoningEffort: "high",
+		first := snapshot.ModelRoutes[0]
+		snapshot.Policy.Default = first.Name
+		if first.SupportsReasoningEffort && containsReasoningEffort(first.ReasoningEfforts, "high") {
+			snapshot.Policy.DefaultReasoningEffort = "high"
 		}
 	}
 	return snapshot
@@ -363,6 +364,15 @@ func profileModel(profile profiles.Profile, name string) (profiles.ModelDef, boo
 
 func policyEmpty(policy RoutingPolicy) bool {
 	return !policy.Official && policy.Default == "" && policy.DefaultReasoningEffort == "" && policy.WebSearch == "" && policy.Subagents.Explore == "" && policy.Subagents.Plan == ""
+}
+
+func containsReasoningEffort(efforts []string, target string) bool {
+	for _, effort := range efforts {
+		if effort == target {
+			return true
+		}
+	}
+	return false
 }
 
 func modelName(model profiles.ModelDef) string {

@@ -99,7 +99,9 @@ func TestEnsureDoesNotMigrateIntoOverride(t *testing.T) {
 		t.Fatalf("override unexpectedly received legacy data: %v", err)
 	}
 	assertMode(t, override, 0o700)
-	assertMode(t, paths.BackupsDir, 0o700)
+	if _, err := os.Stat(filepath.Join(override, "backups")); !os.IsNotExist(err) {
+		t.Fatalf("Ensure() unexpectedly created backups directory: %v", err)
+	}
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {

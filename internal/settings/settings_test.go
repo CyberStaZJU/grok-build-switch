@@ -1,8 +1,10 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +34,35 @@ func TestGetRecoversCorruptJSON(t *testing.T) {
 		t.Fatalf("recovered settings = %#v", got)
 	}
 	assertOneCorruptBackup(t, path)
+}
+
+func TestSettingsNoLongerPersistOAuthClientID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"port":17878,"actual_port":17878,"oauth_client_id":"legacy-client"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	current, err := store.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(current); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "oauth_client_id") {
+		t.Fatalf("legacy OAuth client ID remained in settings: %s", raw)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["oauth_client_id"]; ok {
+		t.Fatalf("oauth_client_id persisted: %#v", decoded)
+	}
 }
 
 func TestGetRepairsInvalidPersistedPort(t *testing.T) {

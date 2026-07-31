@@ -118,7 +118,7 @@ func ValidateDefaultReasoningEffort(p Profile) error {
 		if model.Name != p.DefaultModel && model.Model != p.DefaultModel {
 			continue
 		}
-		if containsString(model.ReasoningEfforts, effort) {
+		if containsString(model.ReasoningEfforts, effort) || (model.SupportsReasoningEffort && len(model.ReasoningEfforts) == 0) {
 			return nil
 		}
 		return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", p.DefaultModel, effort, strings.Join(model.ReasoningEfforts, "、"))
@@ -127,9 +127,6 @@ func ValidateDefaultReasoningEffort(p Profile) error {
 }
 
 func Normalize(p Profile) Profile {
-	if p.DefaultReasoningEffort == "" {
-		p.DefaultReasoningEffort = "high"
-	}
 	if p.UpstreamFormat == "" {
 		p.UpstreamFormat = "openai_chat"
 	}
@@ -174,14 +171,12 @@ func Normalize(p Profile) Profile {
 		if p.Models[i].ExtraHeaders == nil {
 			p.Models[i].ExtraHeaders = map[string]string{}
 		}
-		p.Models[i].SupportsReasoningEffort = true
-		if len(p.Models[i].ReasoningEfforts) == 0 {
-			p.Models[i].ReasoningEfforts = []string{"low", "medium", "high"}
-		} else {
-			p.Models[i].ReasoningEfforts = uniqueStrings(p.Models[i].ReasoningEfforts)
-		}
-		if p.Models[i].ReasoningEffortsSource == "" {
-			p.Models[i].ReasoningEffortsSource = "default"
+		p.Models[i].ReasoningEfforts = uniqueStrings(p.Models[i].ReasoningEfforts)
+		if len(p.Models[i].ReasoningEfforts) > 0 {
+			p.Models[i].SupportsReasoningEffort = true
+			if p.Models[i].ReasoningEffortsSource == "" {
+				p.Models[i].ReasoningEffortsSource = "declared"
+			}
 		}
 	}
 	p.AvailableModels = uniqueStrings(p.AvailableModels)

@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>grok_switch</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/vendor/highlight-github.min.css?v=11.11.1">
-  <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.18.0">
   <link rel="stylesheet" href="/style.css?v=42">
 </head>
 <body>
@@ -23,12 +21,10 @@
         </div>
       </div>
       <div class="headerRight">
-        <button type="button" id="chatBtn" class="btn" data-home-only>聊天</button>
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
         <button type="button" id="navRoutingBtn" class="btn">模型路由</button>
         <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
-        <button type="button" id="navSessionGraphBtn" class="btn">会话图谱</button>
         <button type="button" id="navSSHBtn" class="btn">SSH</button>
       </div>
     </header>
@@ -156,12 +152,9 @@
             <p id="modelPoolStatus" class="muted tiny">尚未拉取模型。点 chip 启用后，会出现在上方下拉框中。</p>
             <div class="rowBetween">
               <span class="muted tiny">已启用模型</span>
-              <div class="inlineActions">
-                <button type="button" id="toggleAdvancedBtn" class="btn sm ghost">高级字段</button>
-                <button type="button" id="addModelBtn" class="btn sm">手动添加</button>
-              </div>
+              <button type="button" id="addModelBtn" class="btn sm">手动添加</button>
             </div>
-            <div id="modelsBody" class="modelCards" data-advanced="0"></div>
+            <div id="modelsBody" class="modelCards"></div>
           </div>
         </details>
 
@@ -196,192 +189,6 @@
         </div>
       </form>
     </main>
-
-    <!-- CHAT -->
-    <main id="viewChat" class="view chatView" hidden>
-      <section class="nativeChatShell" aria-label="Grok Build AI 工作台">
-        <aside id="sessionSidebar" class="sessionSidebar" aria-label="历史会话">
-          <div class="nativePaneHead">
-            <div>
-              <span class="nativeEyebrow">GROK VAULT</span>
-              <strong>对话库</strong>
-            </div>
-            <div class="nativePaneActions">
-              <button type="button" id="refreshAgentSessionsBtn" class="nativeIconBtn" aria-label="刷新对话库" title="重新扫描本地对话">↻</button>
-              <button type="button" id="closeSessionSidebarBtn" class="nativeIconBtn" aria-label="隐藏会话列表">×</button>
-            </div>
-          </div>
-          <button type="button" id="agentNewSessionBtn" class="newChatBtn">新对话</button>
-          <button type="button" id="agentOrganizeSessionsBtn" class="organizeSessionsBtn">对话整理</button>
-          <label class="sessionSearchWrap">
-            <span aria-hidden="true">⌕</span>
-            <input id="agentSessionSearch" type="search" placeholder="搜索对话、目录、模型" autocomplete="off">
-          </label>
-          <div class="sessionSectionLabel"><span>最近</span><span id="agentSessionCount">0</span></div>
-          <div id="agentSessionList" class="agentSessionList">
-            <p class="sessionListEmpty">正在读取会话…</p>
-          </div>
-        </aside>
-
-        <div id="sessionSidebarResizer" class="panelResizer sessionResizer" role="separator"
-          aria-label="调整会话列表宽度" aria-orientation="vertical" aria-valuemin="200"
-          aria-valuemax="480" aria-valuenow="264" tabindex="0" title="拖动调整宽度，双击恢复默认"></div>
-
-        <section class="conversationPane">
-          <header class="conversationTopbar">
-            <button type="button" id="openSessionSidebarBtn" class="nativeIconBtn" aria-label="切换会话列表">☰</button>
-            <div class="conversationIdentity">
-              <strong id="activeChatTitle">新对话</strong>
-              <span id="activeChatPath">尚未选择工作目录</span>
-            </div>
-            <div class="conversationSignals">
-              <span id="agentModelBadge" class="modelBadge">MODEL —</span>
-              <span id="agentStatusBadge" class="agentStatusBadge" data-state="idle">
-                <span class="statusDot" aria-hidden="true"></span>
-                <span id="agentStatusText">未启动</span>
-              </span>
-              <button type="button" id="openChatThemeBtn" class="nativeIconBtn themeToggle"
-                aria-label="设置聊天背景" aria-haspopup="dialog" title="聊天背景">◐</button>
-              <button type="button" id="openContextRailBtn" class="nativeIconBtn railToggle" aria-label="打开会话信息">···</button>
-            </div>
-          </header>
-
-          <div id="chatNodeRail" class="chatNodeRail" role="navigation" aria-label="对话节点" hidden>
-            <div id="chatNodeScroller" class="chatNodeScroller"></div>
-          </div>
-
-          <div id="chatFindBar" class="chatFindBar" hidden role="search" aria-label="在当前会话中查找">
-            <input id="chatFindInput" type="search" placeholder="在当前会话中查找…" autocomplete="off" spellcheck="false">
-            <span id="chatFindCount" class="chatFindCount" aria-live="polite">0 / 0</span>
-            <button type="button" id="chatFindPrev" class="chatFindBtn" aria-label="上一个匹配" title="上一个 (Shift+Enter)">↑</button>
-            <button type="button" id="chatFindNext" class="chatFindBtn" aria-label="下一个匹配" title="下一个 (Enter)">↓</button>
-            <button type="button" id="chatFindClose" class="chatFindBtn" aria-label="关闭查找" title="关闭 (Esc)">×</button>
-          </div>
-
-          <button type="button" id="chatJumpBottomBtn" class="chatJumpBottomBtn" hidden title="回到最新 · Esc 之外" aria-label="回到最新">↓ 最新</button>
-
-          <div id="chatMessages" class="chatMessages" role="log" aria-live="polite">
-            <div id="chatEmpty" class="chatEmpty">
-              <img src="/icon.svg" alt="" class="chatEmptyMark chatEmptyIcon">
-            </div>
-          </div>
-
-          <div id="agentEngineBanner" class="agentEngineBanner" data-state="loading" role="status" hidden>
-            <span id="agentEngineBannerText">正在恢复引擎上下文…</span>
-            <button type="button" id="agentReadonlyNewBtn" class="btn sm" hidden>开启新对话</button>
-          </div>
-
-          <div id="permissionBar" class="permissionBar" hidden>
-            <div class="permissionCopy">
-              <span class="permissionLabel">工具权限</span>
-              <strong id="permissionSummary">等待确认</strong>
-              <code id="permissionDetail"></code>
-              <label class="permissionRememberCheck">
-                <input type="checkbox" id="permissionRemember"> 本会话记住（后续工具自动允许）
-              </label>
-            </div>
-            <div class="permissionActions">
-              <button type="button" id="permissionRejectBtn" class="btn danger">拒绝</button>
-              <button type="button" id="permissionAllowBtn" class="btn primary">允许一次</button>
-            </div>
-          </div>
-
-          <form id="chatComposer" class="chatComposer">
-            <div id="chatAttachments" class="chatAttachments" hidden></div>
-            <div class="composerInputWrap">
-              <textarea id="chatInput" rows="2" placeholder="询问代码、规划任务或继续这段对话…" aria-label="消息" disabled></textarea>
-              <span class="composerHint" id="composerHint">Enter 发送 · Shift + Enter 换行</span>
-            </div>
-            <div class="composerActions">
-              <input type="file" id="chatAttachFile" accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.markdown,.json,.csv,.tsv,.js,.mjs,.cjs,.ts,.tsx,.jsx,.go,.py,.rb,.java,.c,.cc,.cpp,.h,.hpp,.rs,.php,.sh,.bash,.zsh,.ps1,.yaml,.yml,.toml,.ini,.cfg,.conf,.xml,.html,.htm,.css,.scss,.less,.sql,.log,.env" multiple hidden>
-              <button type="button" id="chatAttachBtn" class="chatAttachBtn" aria-label="添加附件 / 截图" title="添加图片或文本附件 · 也可直接粘贴图片">＋</button>
-              <button type="button" id="chatStopBtn" class="stopChatBtn" aria-label="停止生成" hidden title="停止生成">■</button>
-              <button type="submit" id="chatSendBtn" class="sendChatBtn" aria-label="发送" disabled>↑</button>
-            </div>
-          </form>
-        </section>
-
-        <div id="contextRailResizer" class="panelResizer contextResizer" role="separator"
-          aria-label="调整会话信息宽度" aria-orientation="vertical" aria-valuemin="220"
-          aria-valuemax="460" aria-valuenow="252" tabindex="0" title="拖动调整宽度，双击恢复默认"></div>
-
-        <aside id="contextRail" class="contextRail" aria-label="会话信息">
-          <div class="nativePaneHead">
-            <div>
-              <span class="nativeEyebrow">CONTEXT</span>
-              <strong>会话信息</strong>
-            </div>
-            <button type="button" id="closeContextRailBtn" class="nativeIconBtn railClose" aria-label="关闭会话信息">×</button>
-          </div>
-
-          <div class="contextSection">
-            <span class="contextLabel">当前模型</span>
-            <strong id="contextModel">—</strong>
-          </div>
-          <div class="contextSection">
-            <span class="contextLabel">工作目录</span>
-            <label class="field chatCwdField">
-              <input id="agentCwd" class="mono" autocomplete="off" placeholder="E:\\projects\\my-app">
-            </label>
-          </div>
-          <div class="contextSection">
-            <span class="contextLabel">会话 ID</span>
-            <code id="contextSessionId">—</code>
-          </div>
-          <div class="contextSection contextUsageSection">
-            <div class="contextSectionHead"><span class="contextLabel">上下文用量</span><span id="contextUsageNote" class="muted tiny">估算</span></div>
-            <div id="contextUsageBar" class="contextUsageBar"><span id="contextUsageFill" class="contextUsageFill"></span></div>
-            <span id="contextUsageText" class="muted tiny">尚未发送消息</span>
-          </div>
-          <div class="contextSection" id="contextCacheSection">
-            <div class="contextSectionHead"><span class="contextLabel">缓存命中</span><span id="contextCacheNote" class="muted tiny">24h</span></div>
-            <strong id="contextCacheHitRate">—</strong>
-            <span id="contextCacheDetail" class="muted tiny">启动 Agent 后按会话统计</span>
-          </div>
-          <label class="check autoApproveCheck" title="自动允许 Grok Build 执行工具">
-            <input type="checkbox" id="agentAlwaysApprove"> 自动批准工具
-          </label>
-          <div class="contextActions">
-            <button type="button" id="agentStartBtn" class="btn primary">启动 Agent</button>
-            <button type="button" id="agentStopBtn" class="btn danger" disabled>停止</button>
-          </div>
-
-          <div class="contextSection activitySection">
-            <div class="contextSectionHead"><span class="contextLabel">本轮活动</span><span id="toolActivityCount">0</span></div>
-            <div id="toolActivityList" class="toolActivityList"><span>暂无工具活动</span></div>
-          </div>
-        </aside>
-        <div id="nativeChatScrim" class="nativeChatScrim" hidden></div>
-      </section>
-    </main>
-
-    <!-- 对话整理面板 -->
-    <div id="organizePanel" class="organizePanel" hidden>
-      <div class="organizePanelCard">
-        <div class="organizePanelHead">
-          <div><h3>对话整理</h3><span class="muted" id="organizeSubTitle">分析会话主题并建议标题</span></div>
-          <button type="button" id="organizePanelCloseBtn" class="organizePanelClose" aria-label="关闭">×</button>
-        </div>
-        <div class="organizePanelBody" id="organizePanelBody">
-          <div class="organizeProgress" id="organizeProgress">
-            <div class="organizeProgressBar"><div class="organizeProgressBarFill" id="organizeProgressBarFill" style="width:0%"></div></div>
-            <span class="muted tiny" id="organizeProgressText">点击“开始整理”后才会分析对话。</span>
-            <button type="button" id="organizeStartBtn" class="btn sm primary">开始整理</button>
-          </div>
-          <div id="organizeResults" hidden></div>
-        </div>
-        <div class="organizePanelFoot" id="organizePanelFoot" hidden>
-          <div class="inlineActions">
-            <button type="button" id="organizeSelectDeleteBtn" class="btn sm ghost organizeSelectDeleteBtn">勾选建议删除</button>
-            <span class="muted tiny" id="organizeSelectedCount">已选 0 项</span>
-          </div>
-          <div class="inlineActions">
-            <button type="button" id="organizeCancelBtn" class="btn sm">取消</button>
-            <button type="button" id="organizeApplyBtn" class="btn sm primary">应用更改</button>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <!-- MODEL ROUTING -->
     <main id="viewRouting" class="view routingView" hidden>
@@ -421,22 +228,6 @@
         <div id="routingCatalog" class="routingCatalog"><p class="muted tiny">加载中…</p></div>
       </section>
 
-      <section class="formCard codeBuddyCard">
-        <div class="rowBetween">
-          <div><h2 class="sectionTitle">CodeBuddy</h2><p class="muted tiny">只读发现本机安装与公开模型参数，不读取认证、会话或配置文件。</p></div>
-          <span id="codeBuddyBadge" class="badge" data-state="stopped">检测中</span>
-        </div>
-        <div id="codeBuddyStatus" class="codeBuddyStatus"><p class="muted tiny">加载中…</p></div>
-        <div id="codeBuddyModels" class="codeBuddyModels"></div>
-      </section>
-
-      <section class="formCard browserUseCard">
-        <div class="rowBetween">
-          <div><h2 class="sectionTitle">Browser-use 注入</h2><p class="muted tiny">为非 Grok 模型自动注入 web_search / web_fetch 工具</p></div>
-          <span id="browserUseBadge" class="badge">检测中</span>
-        </div>
-        <div id="browserUseStatus" class="browserUseStatus"><p class="muted tiny">加载中…</p></div>
-      </section>
     </main>
 
     <!-- SUBSCRIPTION PROXY -->
@@ -470,10 +261,6 @@
           <input id="port" type="number" min="1024" max="65535">
         </label>
         <p id="portHint" class="muted tiny" hidden></p>
-        <label class="field">OAuth Client ID
-          <input id="oauthClientID" type="text" autocomplete="off" placeholder="留空则使用 CPA 铸造和号池导入功能不可用">
-        </label>
-        <p class="muted tiny">用于 xAI OAuth Device Code 流。可自定义自己的 OAuth 应用客户端 ID。</p>
         <button type="submit" id="saveSettingsBtn" class="btn primary">保存设置</button>
       </form>
 
@@ -561,267 +348,6 @@
         </div>
       </section>
 
-      <section class="formCard" id="grokAuthCard">
-        <div class="rowBetween">
-          <div>
-            <h2 class="sectionTitle">Grok Auth JSON</h2>
-            <p class="muted tiny">统一 xAI OAuth 账号入口：支持导入、轮换与按需手动检查，不再依赖 CPA。</p>
-          </div>
-          <span id="grokAuthBadge" class="badge">未配置</span>
-        </div>
-
-        <p id="grokAuthStatus" class="muted tiny">加载中…</p>
-
-        <div id="grokAuthConnection" hidden>
-          <label class="field">本地 Base URL
-            <div class="keyRow">
-              <input id="grokAuthBaseUrl" class="mono" readonly>
-              <button type="button" id="copyGrokAuthUrlBtn" class="btn sm">复制</button>
-            </div>
-          </label>
-          <label class="field">本地 API Key
-            <div class="keyRow authKeyRow">
-              <input id="grokAuthApiKey" class="mono" type="password" readonly autocomplete="off">
-              <button type="button" id="toggleGrokAuthKeyBtn" class="btn sm">显示</button>
-              <button type="button" id="copyGrokAuthKeyBtn" class="btn sm">复制</button>
-            </div>
-          </label>
-        </div>
-
-        <div class="inlineActions">
-          <button type="button" id="importGrokAuthBtn" class="btn primary">导入 auth JSON</button>
-          <button type="button" id="importGrokAuthDirBtn" class="btn">选择目录导入号池</button>
-          <button type="button" id="activateGrokAuthBtn" class="btn" hidden>启用本地 Grok</button>
-          <button type="button" id="refreshGrokAuthBtn" class="btn" hidden>刷新 token</button>
-          <button type="button" id="deleteGrokAuthBtn" class="btn danger" hidden>删除</button>
-        </div>
-        <input type="file" id="grokAuthFile" accept="application/json,.json" hidden>
-        <input type="file" id="grokAuthDirectory" accept="application/json,.json" webkitdirectory directory multiple hidden>
-        <p class="muted tiny">支持 CPA 的 <span class="mono">xai-*.json</span> 和 Grok CLI 的 <span class="mono">~/.grok/auth.json</span>。单文件和目录导入都进入同一个本地账号池；页面不会把 xAI access token 当作 API Key 暴露。</p>
-      </section>
-
-      <section class="formCard" id="registrarCard">
-        <div class="rowBetween">
-          <div>
-            <h2 class="sectionTitle">Grok 注册机</h2>
-            <p class="muted tiny">默认使用 Cloudflare 临时邮箱。一般只需填写「网络代理」和「API Base」，成功后账号会自动铸造并进入号池。</p>
-          </div>
-          <span id="registrarBadge" class="badge">空闲</span>
-        </div>
-
-        <ol class="registrarSteps" id="registrarSteps">
-          <li><strong>准备环境</strong>：本机安装 Chrome 或 Edge；开启可访问外网的代理（如 Clash / 系统代理）。</li>
-          <li><strong>填写两项</strong>：下方填写<strong>网络代理</strong>与<strong>临时邮箱 API Base</strong>（自备 cloudflare_temp_email 一类服务地址）。</li>
-          <li><strong>开始注册</strong>：点「开始注册」；弹出浏览器若出现人机验证请手动勾选。完成后自动进入号池。</li>
-        </ol>
-
-        <form id="registrarForm" class="registrarForm">
-          <div class="registrarEssentials registrarWide">
-            <label class="field registrarProviderWide">网络代理
-              <input id="registrarProxyUrl" class="mono" placeholder="例如 http://127.0.0.1:7897" autocomplete="off">
-            </label>
-            <div id="registrarCloudflareEssentials" class="registrarEssentialsGrid">
-              <label class="field registrarProviderWide">临时邮箱 API Base
-                <input id="registrarCloudflareApiBase" class="mono" placeholder="https://你的-临时邮箱-API 地址" autocomplete="off">
-              </label>
-              <p class="muted tiny registrarHint">认证默认「无」；若你的服务需要 Key，请在下方高级选项中填写。</p>
-            </div>
-            <p id="registrarAltProviderHint" class="muted tiny registrarHint" hidden>当前不是 Cloudflare 模式，请在「高级选项」中配置对应邮箱服务。</p>
-            <label class="field">注册数量
-              <input id="registrarCount" type="number" min="1" max="100" value="1">
-            </label>
-          </div>
-
-          <details class="registrarAdvanced registrarWide" id="registrarAdvanced">
-            <summary>高级选项（浏览器、邮箱类型、认证与接口路径等）</summary>
-            <div class="registrarAdvancedBody">
-              <label class="field">浏览器模式
-                <select id="registrarBrowserMode">
-                  <option value="visible">可见浏览器（推荐）</option>
-                  <option value="auto">自动（可见优先）</option>
-                  <option value="headless">仅无窗口（易被 403）</option>
-                </select>
-              </label>
-              <label class="field registrarProviderWide">浏览器路径（可选）
-                <input id="registrarBrowserPath" class="mono" placeholder="留空自动查找 Chrome / Edge">
-              </label>
-              <label class="field">邮箱服务
-                <select id="registrarEmailProvider">
-                  <option value="cloudflare">Cloudflare 临时邮箱（推荐）</option>
-                  <option value="hotmail">Hotmail / Outlook</option>
-                  <option value="cloudmail">CloudMail</option>
-                </select>
-              </label>
-
-              <div id="registrarHotmailFields" class="registrarProviderFields registrarProviderWide" hidden>
-                <label class="field registrarProviderWide">Hotmail 凭证
-                  <textarea id="registrarHotmailAccounts" class="mono" rows="4" spellcheck="false" placeholder="邮箱----密码----ClientID----refresh_token"></textarea>
-                </label>
-                <label class="field">单邮箱最大地址数
-                  <input id="registrarHotmailAliases" type="number" min="1" max="100" value="5">
-                </label>
-              </div>
-
-              <div id="registrarCloudmailFields" class="registrarProviderFields registrarProviderWide" hidden>
-                <label class="field registrarProviderWide">CloudMail URL
-                  <input id="registrarCloudmailUrl" class="mono" placeholder="https://mail.example.com">
-                </label>
-                <label class="field">管理员邮箱
-                  <input id="registrarCloudmailAdminEmail" type="email">
-                </label>
-                <label class="field">管理员密码
-                  <input id="registrarCloudmailPassword" type="password" autocomplete="off">
-                </label>
-                <label class="field registrarProviderWide">Catch-all 域名
-                  <input id="registrarDefaultDomains" class="mono" placeholder="example.com, example.net">
-                </label>
-              </div>
-
-              <div id="registrarCloudflareFields" class="registrarProviderFields registrarProviderWide">
-                <label class="field">API Key（可选）
-                  <input id="registrarCloudflareApiKey" type="password" autocomplete="off">
-                </label>
-                <label class="field">认证方式
-                  <select id="registrarCloudflareAuthMode">
-                    <option value="none">无认证</option>
-                    <option value="bearer">Bearer</option>
-                    <option value="x-api-key">X-API-Key</option>
-                    <option value="query-key">URL key 参数</option>
-                  </select>
-                </label>
-                <label class="field registrarProviderWide">指定域名（可选，逗号分隔）
-                  <input id="registrarCloudflareDomains" class="mono" placeholder="example.com, example.net">
-                </label>
-                <label class="field">域名接口
-                  <input id="registrarCloudflareDomainsPath" class="mono" value="/api/domains">
-                </label>
-                <label class="field">创建邮箱接口
-                  <input id="registrarCloudflareAccountsPath" class="mono" value="/api/new_address">
-                </label>
-                <label class="field">Token 接口
-                  <input id="registrarCloudflareTokenPath" class="mono" value="/api/token">
-                </label>
-                <label class="field">邮件列表接口
-                  <input id="registrarCloudflareMessagesPath" class="mono" value="/api/mails">
-                </label>
-              </div>
-
-              <label class="field">并发数
-                <input id="registrarWorkers" type="number" min="1" max="3" value="1">
-              </label>
-              <label class="field">邮件超时（秒）
-                <input id="registrarMailTimeout" type="number" min="30" max="900" value="180">
-              </label>
-              <label class="check"><input type="checkbox" id="registrarPreferProtocol" checked> SSO 协议铸造优先</label>
-              <label class="check"><input type="checkbox" id="registrarProtocolOnly"> 协议失败不回退授权页</label>
-            </div>
-          </details>
-
-          <div class="registrarActions registrarWide">
-            <button type="submit" id="saveRegistrarBtn" class="btn">保存</button>
-            <button type="button" id="probeRegistrarBtn" class="btn">检测环境</button>
-            <button type="button" id="startRegistrarBtn" class="btn primary">开始注册</button>
-            <button type="button" id="stopRegistrarBtn" class="btn danger" hidden>停止</button>
-          </div>
-        </form>
-
-        <p id="registrarPaths" class="muted tiny"></p>
-        <div id="registrarProgress" class="registrarProgress" hidden>
-          <div><strong id="registrarProgressCount">0 / 0</strong><span id="registrarProgressDetail" class="muted tiny">等待任务</span></div>
-          <progress id="registrarProgressBar" max="1" value="0"></progress>
-        </div>
-        <pre id="registrarLog" class="registrarLog mono">尚未运行注册任务。</pre>
-      </section>
-
-      <section class="formCard" id="grokPoolCard">
-        <div class="rowBetween">
-          <div>
-            <h2 class="sectionTitle">Grok 账号池</h2>
-            <p class="muted tiny">管理本地 xAI OAuth 账号、代理与认证目录；需要排查账号状态时可手动检查。</p>
-          </div>
-          <span id="grokPoolBadge" class="badge">0 个账号</span>
-        </div>
-
-        <div id="grokPoolSummary" class="poolSummary"></div>
-        <p id="grokPoolProgress" class="muted tiny">尚未导入号池账号。</p>
-
-        <form id="grokPoolSettingsForm" class="poolSettings">
-          <label class="field">手动检查并发数
-            <input id="grokPoolWorkers" type="number" min="1" max="16" value="4">
-          </label>
-          <label class="field poolProxyField">网络代理（手动检查、token 刷新、铸造和账号池转发共用）
-            <input id="grokPoolProxyUrl" class="mono" placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
-          </label>
-          <label class="field poolAuthDirField">CPA 认证目录（号池导入 / 铸造输出 / 热加载）
-            <input id="grokPoolAuthDir" class="mono" placeholder="默认 %USERPROFILE%\.grok_switch\cpa_auths">
-          </label>
-          <label class="check"><input type="checkbox" id="grokPoolWatchEnabled"> 目录热加载（监视 CPA 目录新文件）</label>
-          <label class="check"><input type="checkbox" id="grokPoolWatchRecursive" checked> 递归子目录</label>
-          <button type="submit" id="saveGrokPoolSettingsBtn" class="btn">保存号池设置</button>
-        </form>
-        <p id="grokPoolAuthDirStatus" class="muted tiny">认证目录加载中…</p>
-
-        <div class="inlineActions" style="margin-bottom:12px">
-          <button type="button" id="importGrokPoolAuthDirBtn" class="btn primary">从认证目录导入</button>
-          <button type="button" id="openGrokPoolAuthDirBtn" class="btn">打开认证目录</button>
-          <button type="button" id="importGrokPoolPathBtn" class="btn">从路径导入…</button>
-        </div>
-
-        <div id="cpaMintBox" class="cpaMintBox">
-          <div class="rowBetween">
-            <div>
-              <h3 class="sectionTitle" style="font-size:15px;margin:0">CPA 设备授权</h3>
-              <p class="muted tiny" style="margin:4px 0 0">Go 服务负责 device-auth、token 轮询和 CPA 文件写入；系统浏览器只用于登录、Turnstile 与「允许」。此流程不会创建新的 xAI 账号。</p>
-            </div>
-          </div>
-          <div class="poolSettings" style="margin-top:10px">
-            <label class="field">备注邮箱（可选，写入文件名）
-              <input id="cpaMintEmail" type="email" placeholder="例如 user@example.com">
-            </label>
-          </div>
-          <div class="inlineActions">
-            <button type="button" id="startCpaMintBtn" class="btn primary">开始铸造</button>
-            <button type="button" id="cancelCpaMintBtn" class="btn" hidden>取消</button>
-            <button type="button" id="openCpaMintUrlBtn" class="btn" hidden>打开验证页</button>
-          </div>
-          <p id="cpaMintStatus" class="muted tiny" style="margin-top:10px">尚未开始铸造。</p>
-          <div id="cpaMintCodes" class="cpaMintCodes" hidden>
-            <div><span class="muted tiny">用户码</span><code id="cpaMintUserCode" class="mono"></code></div>
-            <div><span class="muted tiny">验证链接</span><a id="cpaMintVerifyLink" class="mono" href="#" target="_blank" rel="noopener"></a></div>
-          </div>
-        </div>
-
-        <div id="grokPoolConnection" hidden>
-          <label class="field">号池 Base URL
-            <div class="keyRow">
-              <input id="grokPoolBaseUrl" class="mono" readonly>
-              <button type="button" id="copyGrokPoolUrlBtn" class="btn sm">复制</button>
-            </div>
-          </label>
-          <label class="field">号池 API Key
-            <div class="keyRow authKeyRow">
-              <input id="grokPoolApiKey" class="mono" type="password" readonly autocomplete="off">
-              <button type="button" id="toggleGrokPoolKeyBtn" class="btn sm">显示</button>
-              <button type="button" id="copyGrokPoolKeyBtn" class="btn sm">复制</button>
-            </div>
-          </label>
-        </div>
-
-        <div class="inlineActions">
-          <button type="button" id="importGrokPoolBtn" class="btn primary">批量导入 JSON</button>
-          <button type="button" id="importGrokPoolDirBtn" class="btn">选择目录导入</button>
-          <button type="button" id="inspectGrokPoolBtn" class="btn">检查账号状态</button>
-          <button type="button" id="stopGrokPoolBtn" class="btn" hidden>停止检查</button>
-          <button type="button" id="activateGrokPoolBtn" class="btn" hidden>启用号池</button>
-          <button type="button" id="batchDisableGrokPoolBtn" class="btn danger">批量禁用异常</button>
-          <button type="button" id="batchDeleteGrokPoolBtn" class="btn danger">批量删除异常</button>
-        </div>
-        <input type="file" id="grokPoolFiles" accept="application/json,.json" multiple hidden>
-        <input type="file" id="grokPoolDirectory" accept="application/json,.json" webkitdirectory directory multiple hidden>
-        <p class="muted tiny">「从认证目录导入」使用上方配置的本机路径；「选择目录导入」通过浏览器选取（不写回路径）。铸造产出与热加载共用 CPA 认证目录。原文件不会被移动。</p>
-        <div id="grokPoolAccounts" class="poolAccounts"></div>
-      </section>
-
       <section class="formCard configEditor">
         <div class="rowBetween">
           <div>
@@ -837,19 +363,6 @@
         <textarea id="configEditor" class="configTextarea mono" spellcheck="false" rows="18" placeholder="config.toml 内容"></textarea>
         <p id="configEditorStatus" class="muted tiny"></p>
       </section>
-
-      <details class="fold advancedFold" id="backupFold">
-        <summary>高级 · 备份与恢复</summary>
-        <div class="foldBody">
-          <p class="muted tiny">切换供应商或保存 config 时会自动备份。备份含 API Key，请勿外传。</p>
-          <p id="statusDetail" class="mono tiny pathBox"></p>
-          <div class="rowBetween">
-            <span class="muted tiny" id="backupCountLabel">—</span>
-            <button type="button" id="refreshBackupsBtn" class="btn sm ghost">刷新</button>
-          </div>
-          <div id="backups" class="backupList"></div>
-        </div>
-      </details>
 
       <button type="button" id="backFromSettingsBtn" class="btn">返回供应商列表</button>
     </main>
@@ -892,23 +405,6 @@
       </div>
     </main>
 
-    <!-- SESSION GRAPH -->
-    <main id="viewSessionGraph" class="view sessionGraphView" hidden>
-      <div class="pageHead">
-        <div><h1 class="pageTitle">会话图谱</h1><p class="pageDesc">跨供应商切换、安全合并或永久删除对话分支</p></div>
-        <div class="inlineActions">
-          <button type="button" id="refreshSessionGraphBtn" class="btn">刷新</button>
-          <button type="button" id="backFromSessionGraphBtn" class="btn">返回</button>
-        </div>
-      </div>
-      <section class="formCard">
-        <div class="rowBetween">
-          <div><h2 class="sectionTitle">逻辑会话</h2><p class="muted tiny">先切换到目标分支，再把其他分支安全合并到当前分支；当前正在运行的分支不能删除。</p></div>
-          <span id="sessionGraphCount" class="muted tiny">0 个</span>
-        </div>
-        <div id="sessionGraphContent" class="sessionGraphContent"><p class="muted tiny">加载中…</p></div>
-      </section>
-    </main>
   </div>
 
   <!-- SSH Connection Dialog -->
@@ -939,71 +435,6 @@
   <!-- Floating Windows Container -->
   <div id="sshWindows" class="sshWindows"></div>
 
-  <dialog id="chatThemeDialog" class="chatThemeDialog" aria-labelledby="chatThemeTitle">
-    <div class="chatThemeHead">
-      <div>
-        <span class="nativeEyebrow">WORKSPACE SKIN</span>
-        <h2 id="chatThemeTitle">聊天背景</h2>
-        <p>背景只保存在当前设备，不会进入会话或同步账号。</p>
-      </div>
-      <button type="button" id="closeChatThemeBtn" class="nativeIconBtn" aria-label="关闭聊天背景设置">×</button>
-    </div>
-
-    <div class="chatThemePresets" role="group" aria-label="背景主题">
-      <button type="button" class="chatThemePreset" data-chat-theme-choice="none" aria-pressed="false">
-        <span class="chatThemeSwatch themeSwatchNone" aria-hidden="true"></span>
-        <span><strong>纯净</strong><small>原始工作台</small></span>
-      </button>
-      <button type="button" class="chatThemePreset" data-chat-theme-choice="frost" aria-pressed="false">
-        <span class="chatThemeSwatch themeSwatchFrost" aria-hidden="true"></span>
-        <span><strong>霜蓝</strong><small>清醒、低干扰</small></span>
-      </button>
-      <button type="button" class="chatThemePreset" data-chat-theme-choice="night" aria-pressed="false">
-        <span class="chatThemeSwatch themeSwatchNight" aria-hidden="true"></span>
-        <span><strong>深空</strong><small>夜间专注</small></span>
-      </button>
-      <button type="button" class="chatThemePreset" data-chat-theme-choice="warm" aria-pressed="false">
-        <span class="chatThemeSwatch themeSwatchWarm" aria-hidden="true"></span>
-        <span><strong>余晖</strong><small>柔暖、长阅读</small></span>
-      </button>
-      <button type="button" class="chatThemePreset" data-chat-theme-choice="custom" aria-pressed="false">
-        <span class="chatThemeSwatch themeSwatchCustom" aria-hidden="true"></span>
-        <span><strong>自定义</strong><small id="chatThemeImageName">选择本地图片</small></span>
-      </button>
-    </div>
-
-    <div class="chatThemeControls">
-      <label class="chatThemeRange">
-        <span>遮罩强度 <output id="chatThemeShadeValue">24%</output></span>
-        <input id="chatThemeShade" type="range" min="0" max="70" step="1" value="24">
-      </label>
-      <label class="chatThemeRange">
-        <span>背景模糊 <output id="chatThemeBlurValue">0px</output></span>
-        <input id="chatThemeBlur" type="range" min="0" max="20" step="1" value="0">
-      </label>
-      <div class="chatThemeFocusGrid">
-        <label class="chatThemeRange">
-          <span>水平焦点 <output id="chatThemeFocusXValue">50%</output></span>
-          <input id="chatThemeFocusX" type="range" min="0" max="100" step="1" value="50">
-        </label>
-        <label class="chatThemeRange">
-          <span>垂直焦点 <output id="chatThemeFocusYValue">50%</output></span>
-          <input id="chatThemeFocusY" type="range" min="0" max="100" step="1" value="50">
-        </label>
-      </div>
-    </div>
-
-    <div class="chatThemeActions">
-      <div>
-        <button type="button" id="chooseChatThemeImageBtn" class="btn">选择图片</button>
-        <button type="button" id="clearChatThemeImageBtn" class="btn ghost">移除自定义图</button>
-      </div>
-      <button type="button" id="doneChatThemeBtn" class="btn primary">完成</button>
-    </div>
-    <input id="chatThemeImageFile" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
-    <p class="chatThemeHint">支持 PNG、JPEG、WebP，最大 16 MB。图片会在本机压缩后保存；建议使用不含文字和界面元素的 16:9 背景。</p>
-  </dialog>
-
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <dialog id="promptDialog" class="promptDialog">
     <form method="dialog" id="promptForm">
@@ -1024,12 +455,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/vendor/marked.umd.js?v=18.0.6"></script>
-  <script src="/vendor/purify.min.js?v=3.4.12"></script>
-  <script src="/vendor/highlight.min.js?v=11.11.1"></script>
-  <script src="/vendor/katex/katex.min.js?v=0.18.0"></script>
-  <script src="/vendor/katex/contrib/auto-render.min.js?v=0.18.0"></script>
-  <script src="/vendor/mermaid.min.js?v=11.16.0"></script>
   <script src="/app.js?v=48"></script>
 </body>
 </html>

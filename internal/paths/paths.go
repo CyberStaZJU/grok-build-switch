@@ -18,9 +18,6 @@ type Paths struct {
 	RoutingFile      string
 	SettingsFile     string
 	RemoteAccessFile string
-	GrokAuthFile     string
-	GrokPoolDir      string
-	BackupsDir       string
 	LogFile          string
 	legacyDataDir    string
 	migrateLegacy    bool
@@ -57,9 +54,6 @@ func Resolve() (Paths, error) {
 		RoutingFile:      filepath.Join(dataDir, "routing.json"),
 		SettingsFile:     filepath.Join(dataDir, "settings.json"),
 		RemoteAccessFile: filepath.Join(dataDir, "remote_access.json"),
-		GrokAuthFile:     filepath.Join(dataDir, "grok_auth.json"),
-		GrokPoolDir:      filepath.Join(dataDir, "grok_pool"),
-		BackupsDir:       filepath.Join(dataDir, "backups"),
 		LogFile:          filepath.Join(dataDir, "grok_switch.log"),
 		legacyDataDir:    legacyDataDir,
 		migrateLegacy:    migrateLegacy,
@@ -72,15 +66,10 @@ func (p Paths) Ensure() error {
 			return err
 		}
 	}
-	for _, dir := range []string{p.DataDir, p.BackupsDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return err
-		}
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		return err
 	}
-	return nil
+	return os.Chmod(p.DataDir, 0o700)
 }
 
 func (p Paths) migrate() error {

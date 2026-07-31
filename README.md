@@ -1,45 +1,44 @@
 # Grok Build Switch
 
-macOS 托盘工具：用供应商（Profile）管理 Grok CLI 的 `~/.grok/config.toml`。
-
-一键切换上游 `base_url`、默认模型、联网搜索模型、subagents 配置。
+Grok Build Switch 是面向 macOS 的本地菜单栏/桌面工具，用于管理 Grok CLI 的 `~/.grok/config.toml`、供应商 Profile 与统一模型路由。
 
 > 本仓库基于 [1parado/grok-build-switch](https://github.com/1parado/grok-build-switch) 开发，并集成 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 提供订阅账号代理能力。感谢原项目及相关开源项目的工作。
 
-## 核心功能
+## 当前产品能力
 
-- **多供应商管理**：增删改查供应商，支持名称、Base URL、API Key、上游格式、默认/联网/子代理模型
-- **模型路由引擎**：将多个 Profile 投影为统一路由表，支持 `default`、`web_search`、`subagents.explore`、`subagents.plan` 四个路由维度
-- **会话图谱**：跨供应商的逻辑会话与分支管理，可视化对话历史
-- **对话整理**：AI 分析会话主题、建议标题、标记可删除的一次性对话
-- **Browser-use 注入**：为非 Grok 模型自动注入 web_search / web_fetch 工具
-- **订阅代理集成**：内嵌 CLIProxyAPI 管理第三方订阅账号
-- **CodeBuddy 集成**：将本地 CodeBuddy CLI 暴露为 OpenAI 兼容推理端点
-- **AI 对话工作台**：流式回复、工具权限、历史会话续接
+- **官方 Grok CLI**：使用 Grok CLI 官方登录流程，并在登录后应用官方模型路由
+- **普通 Profile**：管理供应商名称、Base URL、API Key、上游格式和模型
+- **统一模型路由**：配置 `default`、`web_search`、`subagents.explore` 与 `subagents.plan`
+- **订阅代理**：通过内嵌 CLIProxyAPI 接入和管理受支持的第三方订阅
+- **配置编辑**：查看、校验并编辑 `~/.grok/config.toml`
+- **远程访问**：支持 LAN 配对访问和 SSH 连接管理
+- **桌面入口**：提供 macOS 菜单栏与 Wails 桌面窗口
+
+## 产品边界
+
+上述清单是当前产品的完整功能范围；不在其中的旧扩展已从当前产品移除，不再作为可用功能、接口或数据目录出现在现行说明中。
+
+用户已授权应用清理这些已移除能力遗留在自身 DataDir 中的旧记录。该授权不包含 Grok CLI 官方认证数据，也不包含订阅代理保存的账号或凭据；应用不得将两者作为旧记录删除。
 
 ## 系统要求
 
 | 项目 | 说明 |
 |------|------|
-| 系统 | **macOS 14+** (Apple Silicon / Intel) |
+| 系统 | **macOS 15+**（仅 Apple Silicon / arm64） |
 | 运行 | 双击 `Grok Build Switch.app` 即可 |
 | 可选 | 本机已安装 [Grok CLI](https://x.ai)，配置目录默认为 `~/.grok` |
 
 ## 安装与使用
 
-### 方式一：从 Release 下载（推荐）
+### 当前方式：从源码构建
 
-1. 打开 [Releases](../../releases) 页面
-2. 下载 `Grok-Build-Switch-*.dmg`
-3. 拖入 Applications 文件夹运行
-
-### 方式二：从源码构建
+当前仓库尚无可下载的 Release 资产，现阶段请从源码构建。后续发布后，可从 [Releases](../../releases) 页面下载 `Grok-Build-Switch-*.dmg`，拖入 Applications 文件夹运行。
 
 ```bash
 ./build-macos.sh
 ```
 
-默认生成 `dist/macos/Grok Build Switch.app`、arm64 DMG 和对应的 `.sha256`。
+构建脚本仅支持在 Apple Silicon Mac 上生成 `dist/macos/Grok Build Switch.app`、arm64 DMG 和对应的 `.sha256`；应用与内嵌 CLIProxyAPI 最低支持 macOS 15。当前不提供 Intel 构建。
 
 Developer ID 签名：
 
@@ -50,24 +49,20 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 
 ## 文档
 
-详细产品文档见 [**docs/product.md**](docs/product.md)，包含：
-- 产品架构与模块职责
-- 数据持久化路径
-- HTTP API 路由总览
-- 模型切换机制详解
-- 构建与运行方式
-- 常见问题定位指引
+- [产品说明](docs/product.md)
+- [使用教程](docs/usage.md)
+- [当前状态](docs/status.md)
+- [维护者说明](docs/agent.md)
 
 在线文档站：[https://1parado.github.io/grok-build-switch/](https://1parado.github.io/grok-build-switch/)
 
 ## 数据与安全
 
-| 路径 | 内容 |
-|------|------|
-| `~/.grok/config.toml` | Grok CLI 当前生效配置 |
-| `~/Library/Application Support/Grok Build Switch/profiles.json` | 供应商档案（含 API Key 明文） |
-| `~/Library/Application Support/Grok Build Switch/backups/` | config 自动备份 |
-| `~/Library/Application Support/Grok Build Switch/settings.json` | 本工具设置 |
+- `~/.grok/config.toml` 是 Grok CLI 当前生效配置。
+- 应用 DataDir 保存普通 Profile、统一路由、应用设置、LAN/SSH 配置和订阅代理运行数据。
+- Profile 中的 API Key 以及订阅代理账号凭据属于敏感数据，不应提交到 Git。
+- Grok CLI 官方认证由官方登录流程管理；清理应用旧记录时不得删除或改写该认证。
+- 订阅代理凭据属于保留功能的数据；清理应用旧记录时不得删除。
 
 ## License
 

@@ -34,6 +34,10 @@ type lanAddress struct {
 func (s *Server) withAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isLoopbackRequest(r) {
+			if !s.csrfAllowed(r) {
+				http.Error(w, "CSRF 校验失败", http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

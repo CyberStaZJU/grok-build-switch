@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"grok_switch/internal/agentbridge"
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
@@ -40,7 +39,7 @@ func TestRoutingGETIncludesOfficialModelsWhenLoggedIn(t *testing.T) {
 	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"secret":"never-return-this"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"type":"xai","access_token":"never-return-this"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	request := loopbackRequest(http.MethodGet, "/api/routing", "")
@@ -61,12 +60,104 @@ func TestRoutingGETIncludesOfficialModelsWhenLoggedIn(t *testing.T) {
 	}
 }
 
+func TestOfficialActivateWithoutLoginLeavesStateUnchanged(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStart := startGrokLogin
+	started := false
+	startGrokLogin = func() error { started = true; return nil }
+	defer func() { startGrokLogin = oldStart }()
+
+	response := httptest.NewRecorder()
+	s.handleOfficialActivate(response, loopbackRequest(http.MethodPost, "/api/official/activate", ""))
+	if response.Code != http.StatusOK || !started {
+		t.Fatalf("status=%d started=%v body=%s", response.Code, started, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["login_required"] != true || body["switched"] != false {
+		t.Fatalf("response = %#v", body)
+	}
+	afterConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRouting, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterConfig) != string(beforeConfig) || afterRouting.Policy != beforeRouting.Policy || afterRouting.Version != beforeRouting.Version {
+		t.Fatalf("state changed while login pending: before=%#v after=%#v", beforeRouting, afterRouting)
+	}
+}
+
+func TestOfficialRoutingTransactionRejectsEmptyDefault(t *testing.T) {
+	s := newRoutingTestServer(t)
+	before, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.applyRoutingPolicyTransaction(mustProfiles(t, s), routing.RoutingPolicy{Official: true}); err == nil {
+		t.Fatal("expected empty official default to be rejected")
+	}
+	after, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("invalid official policy changed config:\n%s", after)
+	}
+}
+
+func TestResolveRoutingModelIncludesExecutableNativeOfficialRoute(t *testing.T) {
+	s := newRoutingTestServer(t)
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"type":"xai","access_token":"native-access"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := routing.Snapshot{Policy: routing.RoutingPolicy{Official: true, Default: "grok-4.5"}}
+	route, ok := s.resolveRoutingModel(snapshot, snapshot.Policy.Default)
+	if !ok || route.Model != "grok-4.5" || route.APIBackend != "responses" || route.BaseURL != "https://cli-chat-proxy.grok.com/v1" || route.APIKey != "native-access" || !route.SupportsReasoningEffort {
+		t.Fatalf("official route = %#v, %v", route, ok)
+	}
+	for key, want := range map[string]string{"X-XAI-Token-Auth": "xai-grok-cli", "x-grok-client-version": "0.2.93", "User-Agent": "xai-grok-workspace/0.2.93"} {
+		if route.ExtraHeaders[key] != want {
+			t.Fatalf("official header %s = %q, want %q", key, route.ExtraHeaders[key], want)
+		}
+	}
+}
+
+func TestResolveRoutingModelRejectsExpiredNativeOfficialCredential(t *testing.T) {
+	s := newRoutingTestServer(t)
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"access_token":"expired","expires_at":"2000-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := routing.Snapshot{Policy: routing.RoutingPolicy{Official: true, Default: "grok-4.5"}}
+	if route, ok := s.resolveRoutingModel(snapshot, snapshot.Policy.Default); ok {
+		t.Fatalf("unexpected expired official route: %#v", route)
+	}
+}
+
 func TestRoutingPolicyPUTSelectsOfficialGrokModel(t *testing.T) {
 	s := newRoutingTestServer(t)
 	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"logged_in":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"type":"xai","access_token":"official-access"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	payload := `{"official":true,"default":"grok-4.5","default_reasoning_effort":"high","web_search":"grok-4.5","subagents":{"explore":"grok-4.5","plan":"grok-4.5"}}`
@@ -104,7 +195,7 @@ func TestStatusReportsOfficialModelPins(t *testing.T) {
 	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"logged_in":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Paths.GrokHome, "auth.json"), []byte(`{"type":"xai","access_token":"official-access"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profileList, err := s.Profiles.List()
@@ -249,95 +340,13 @@ func mustProfiles(t *testing.T, s *Server) []profiles.Profile {
 	return items
 }
 
-func TestActiveProviderIdentityUsesRoutingDefaultProvider(t *testing.T) {
-	s := newRoutingTestServer(t)
-	profileList, err := s.Profiles.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stored, err := s.Routing.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog := routing.Project(profileList)
-	var target routing.ModelRoute
-	for _, route := range catalog.ModelRoutes {
-		provider, _ := catalog.Provider(route.ProviderID)
-		if provider.ProfileID != profileList[0].ID {
-			target = route
-			break
-		}
-	}
-	if target.Name == "" {
-		t.Fatal("target route not found")
-	}
-	policy := stored.Policy
-	policy.Default = target.Name
-	if _, err := s.applyRoutingPolicyTransaction(profileList, policy); err != nil {
-		t.Fatal(err)
-	}
-	identity := s.activeProviderIdentity()
-	if identity.ID != target.ProviderID || identity.Model != target.Name {
-		t.Fatalf("identity = %#v, want provider=%q model=%q", identity, target.ProviderID, target.Name)
-	}
-}
-
-func TestProfileActivationHandoffUsesHydratedModelIdentity(t *testing.T) {
-	s := newRoutingTestServer(t)
-	profileList, err := s.Profiles.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Use the second profile as target to trigger a provider handoff.
-	if len(profileList) < 2 {
-		t.Fatal("need at least 2 profiles for handoff test")
-	}
-	target := profileList[1]
-	target.Models[0].BaseURL = "https://model-specific.example/v1"
-	if _, err := s.Profiles.Update(target.ID, target); err != nil {
-		t.Fatal(err)
-	}
-	agent := &sessionSwitchAgentFake{
-		status:   agentbridge.Status{Running: true, State: "ready", SessionID: "session-a", Cwd: t.TempDir(), Model: "shared"},
-		history:  agentbridge.SessionHistory{Session: agentbridge.SessionSummary{ID: "session-a", LogicalSessionID: "logical-a"}},
-		transfer: "safe text",
-	}
-	s.Agent = agent
-	catalog := routing.Project(profileList)
-	defaultRoute, ok := routeForProfile(catalog, target.ID, target.DefaultModel)
-	if !ok {
-		t.Fatal("default route not found for target profile")
-	}
-	policy := routing.RoutingPolicy{Default: defaultRoute.Name, DefaultReasoningEffort: target.DefaultReasoningEffort}
-	payload, _ := json.Marshal(policy)
-	request := loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload))
-	response := httptest.NewRecorder()
-	s.handleRoutingPolicy(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
-	}
-	s.providerMu.Lock()
-	handoff := s.providerHandoff
-	s.providerMu.Unlock()
-	if handoff == nil {
-		t.Fatal("expected pending handoff")
-	}
-	active := s.activeProviderIdentity()
-	if !sameProvider(handoff.Target, active) {
-		t.Fatalf("handoff target=%#v active=%#v", handoff.Target, active)
-	}
-	if handoff.Target.Model != active.Model || normalizedProviderURL(handoff.Target.BaseURL) != normalizedProviderURL("https://model-specific.example/v1") {
-		t.Fatalf("handoff target did not use hydrated route: %#v", handoff.Target)
-	}
-}
-
 func TestRoutingPolicyCanLeaveOfficialModeConsistently(t *testing.T) {
 	s := newRoutingTestServer(t)
 	profilesList, err := s.Profiles.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.applyRoutingPolicyTransaction(profilesList, routing.RoutingPolicy{Official: true}); err != nil {
+	if _, err := s.applyRoutingPolicyTransaction(profilesList, routing.RoutingPolicy{Official: true, Default: defaultOfficialRoutingModels[0].Name}); err != nil {
 		t.Fatal(err)
 	}
 	catalog := routing.Project(profilesList)
@@ -349,11 +358,6 @@ func TestRoutingPolicyCanLeaveOfficialModeConsistently(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
 	}
-	identity := s.activeProviderIdentity()
-	provider, _ := catalog.Provider(catalog.ModelRoutes[0].ProviderID)
-	if identity.Official || identity.ID != provider.ID {
-		t.Fatalf("identity = %#v, want provider %q", identity, provider.ID)
-	}
 	// Verify the routing policy was updated correctly (no active profile concept).
 	stored, err := s.Routing.Snapshot()
 	if err != nil {
@@ -364,33 +368,7 @@ func TestRoutingPolicyCanLeaveOfficialModeConsistently(t *testing.T) {
 	}
 }
 
-func TestRoutingPolicyRejectsCrossProviderSwitchWhileAgentBusy(t *testing.T) {
-	s := newRoutingTestServer(t)
-	agent := &sessionSwitchAgentFake{status: agentbridge.Status{Running: true, Busy: true, SessionID: "session-a"}}
-	s.Agent = agent
-	catalog, _, err := s.currentRouting()
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := catalog.Policy
-	policy.Default = catalog.ModelRoutes[1].Name
-	payload, _ := json.Marshal(policy)
-	request := loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload))
-	response := httptest.NewRecorder()
-	s.handleRoutingPolicy(response, request)
-	if response.Code != http.StatusConflict {
-		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
-	}
-	stored, err := s.Routing.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Policy.Default == policy.Default {
-		t.Fatal("busy switch changed routing policy")
-	}
-}
-
-func TestProfileActivateKeepsCombinedRoutingConfig(t *testing.T) {
+func TestRoutingPolicySwitchesProvidersAndKeepsCombinedConfig(t *testing.T) {
 	s := newRoutingTestServer(t)
 	profileList, err := s.Profiles.List()
 	if err != nil {
@@ -507,6 +485,23 @@ func TestCurrentRoutingRepairsStalePersistedPolicy(t *testing.T) {
 	}
 }
 
+func TestValidateRoutingReasoningEffortAllowsNoneForCustomAndOfficial(t *testing.T) {
+	custom := routing.Snapshot{
+		Providers:   []routing.Provider{{ID: "p"}},
+		ModelRoutes: []routing.ModelRoute{{Name: "plain", ProviderID: "p"}},
+		Policy:      routing.RoutingPolicy{Default: "plain", DefaultReasoningEffort: "none"},
+	}
+	if err := validateRoutingReasoningEffort(custom); err != nil {
+		t.Fatalf("custom none rejected: %v", err)
+	}
+	official := routing.Snapshot{Policy: routing.RoutingPolicy{
+		Official: true, Default: defaultOfficialRoutingModels[0].Name, DefaultReasoningEffort: "none",
+	}}
+	if err := validateRoutingReasoningEffort(official); err != nil {
+		t.Fatalf("official none rejected: %v", err)
+	}
+}
+
 func TestRoutingPolicyPUTRejectsUnsupportedReasoningEffort(t *testing.T) {
 	s := newRoutingTestServer(t)
 	catalog, _, err := s.currentRouting()
@@ -602,7 +597,7 @@ func newRoutingTestServer(t *testing.T) *Server {
 	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sw := &switcher.Switcher{ConfigPath: configPath, BackupsDir: filepath.Join(dir, "backups"), Profiles: profileStore}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
 	profileList, _ := profileStore.List()
 	hydrated, err := routing.ProjectWithPolicy(profileList, stored.Policy)
 	if err != nil {

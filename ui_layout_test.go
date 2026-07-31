@@ -8,21 +8,55 @@ import (
 	"golang.org/x/net/html"
 )
 
-func TestNativeChatScrimSharesShellStackingContext(t *testing.T) {
-	data, err := assets.ReadFile("ui/index.html")
+func TestChatAndSessionGraphFeaturesAreAbsent(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := html.Parse(bytes.NewReader(data))
+	appData, err := assets.ReadFile("ui/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	scrim := htmlElementByID(document, "nativeChatScrim")
-	if scrim == nil {
-		t.Fatal("nativeChatScrim not found")
+	styleData, err := assets.ReadFile("ui/style.css")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if scrim.Parent == nil || !htmlElementHasClass(scrim.Parent, "nativeChatShell") {
-		t.Fatal("nativeChatScrim must be a direct child of nativeChatShell so it stays below the mobile side panels")
+	combined := append(append(append([]byte{}, htmlData...), appData...), styleData...)
+	for _, removed := range []string{
+		`id="chatBtn"`, `id="viewChat"`, `id="navSessionGraphBtn"`, `id="viewSessionGraph"`,
+		`/api/agent/`, `/api/session-graph`, `nativeChatShell`, `organizePanel`,
+		`browserUseStatus`, `Browser-use 注入`,
+	} {
+		if bytes.Contains(combined, []byte(removed)) {
+			t.Fatalf("removed chat/session feature remains in embedded UI: %s", removed)
+		}
+	}
+}
+
+func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleData, err := assets.ReadFile("ui/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := append(append(append([]byte{}, htmlData...), appData...), styleData...)
+	for _, removed := range []string{
+		"Grok Auth JSON", "Grok 注册机", "Grok 账号池", "CPA 设备授权", "CodeBuddy", "备份与恢复", "OAuth Client ID",
+		`id="grokAuthCard"`, `id="registrarCard"`, `id="grokPoolCard"`, `id="backupFold"`, `id="oauthClientID"`,
+		`id="toggleAdvancedBtn"`, "advancedOnly", `data-field="base_url"`, `data-field="api_backend"`,
+		`data-field="context_window"`, `data-field="max_completion_tokens"`, `data-field="supports_backend_search"`, `data-field="extra_headers"`,
+		"/api/backups", "/api/grok-auth", "/api/grok-pool", "/api/registrar", "/api/cpa-mint", "/api/codebuddy",
+	} {
+		if bytes.Contains(combined, []byte(removed)) {
+			t.Fatalf("removed UI feature remains in embedded UI: %s", removed)
+		}
 	}
 }
 
@@ -64,6 +98,25 @@ func TestStaticDollarIDReferencesExistInHTML(t *testing.T) {
 	}
 }
 
+func TestOfficialActivationMessageRespectsSwitchedResult(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`if (result.switched)`,
+		`toast("已切换到官方账号。新开 grok 会话生效。", "success")`,
+		`toast("请完成官方账号登录，登录完成后再次点击切换", "success")`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("official activation result handling is missing %q", fragment)
+		}
+	}
+	if bytes.Contains(appData, []byte(`success: "已切换到官方账号。新开 grok 会话生效。"`)) {
+		t.Fatal("official activation must not use an unconditional success message")
+	}
+}
+
 func TestSSHConnectionManagementControlsExist(t *testing.T) {
 	appData, err := assets.ReadFile("ui/app.js")
 	if err != nil {
@@ -76,73 +129,6 @@ func TestSSHConnectionManagementControlsExist(t *testing.T) {
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("SSH connection management UI is missing %q", fragment)
-		}
-	}
-}
-
-func TestSessionGraphBranchManagementControlsExist(t *testing.T) {
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{
-		`data-action="merge"`, `data-action="delete"`,
-		`/api/session-graph/merge`, `/api/session-graph/branch`,
-		"只会导入用户与助手的纯文本", "当前正在运行的分支不允许删除",
-	} {
-		if !bytes.Contains(appData, []byte(fragment)) {
-			t.Fatalf("session graph branch-management UI is missing %q", fragment)
-		}
-	}
-}
-
-func TestOrganizePanelRespectsHiddenAttribute(t *testing.T) {
-	styleData, err := assets.ReadFile("ui/style.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(styleData, []byte(".organizePanel[hidden]")) || !bytes.Contains(styleData, []byte("display: none !important;")) {
-		t.Fatal("organize panel must remain hidden until the user opens it explicitly")
-	}
-}
-
-func TestOrganizeSessionsCancelsBackgroundWork(t *testing.T) {
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{
-		`method: "DELETE"`,
-		`/api/agent/sessions/analyze?task_id=`,
-		`["completed", "failed", "cancelled"]`,
-	} {
-		if !bytes.Contains(appData, []byte(fragment)) {
-			t.Fatalf("organize cancellation behavior is missing %q", fragment)
-		}
-	}
-}
-
-func TestSessionLibraryRefreshesFromDisk(t *testing.T) {
-	htmlData, err := assets.ReadFile("ui/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(htmlData, []byte(`id="refreshAgentSessionsBtn"`)) {
-		t.Fatal("session library must expose a manual refresh control")
-	}
-	for _, fragment := range []string{
-		"AGENT_SESSION_REFRESH_INTERVAL_MS",
-		"syncAgentSessionAutoRefresh",
-		`document.addEventListener("visibilitychange"`,
-		`window.addEventListener("focus"`,
-		`$("refreshAgentSessionsBtn").onclick`,
-	} {
-		if !bytes.Contains(appData, []byte(fragment)) {
-			t.Fatalf("session library refresh behavior is missing %q", fragment)
 		}
 	}
 }
@@ -200,57 +186,14 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 			t.Fatalf("official Grok routing UI behavior missing: %s", expected)
 		}
 	}
-	for _, stale := range []string{`$("webSearchModel")`, `$("subagentsExploreModel")`, `$("subagentsPlanModel")`} {
+	for _, stale := range []string{`$("webSearchModel")`, `$("subagentsExploreModel")`, `$("subagentsPlanModel")`, `supported.length ? supported : ["low", "medium", "high"]`} {
 		if bytes.Contains(appData, []byte(stale)) {
-			t.Fatalf("profile editor still reads removed routing control %s", stale)
+			t.Fatalf("profile editor still reads removed or synthetic routing control %s", stale)
 		}
 	}
-}
-
-func TestMacOSLocalNetworkCopyAndManualOnlyPool(t *testing.T) {
-	htmlData, err := assets.ReadFile("ui/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stale := range []string{"Windows 防火墙", "专用网络", "公共网络", "自动巡检", `id="grokPoolAutoEnabled"`, `id="grokPoolInterval"`} {
-		if bytes.Contains(htmlData, []byte(stale)) || bytes.Contains(appData, []byte(stale)) {
-			t.Fatalf("stale Windows/automatic-inspection UI remains: %s", stale)
-		}
-	}
-	for _, expected := range []string{"允许本地网络访问", "检查账号状态", "Grok 账号池"} {
-		if !bytes.Contains(htmlData, []byte(expected)) {
-			t.Fatalf("macOS/manual-only copy missing: %s", expected)
-		}
-	}
-	if !bytes.Contains(appData, []byte(`enabled: false`)) {
-		t.Fatal("pool settings client must persist manual-only mode")
-	}
-}
-
-func TestCpaMintControlsHaveClientHandlers(t *testing.T) {
-	htmlData, err := assets.ReadFile("ui/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"startCpaMintBtn", "cancelCpaMintBtn", "openCpaMintUrlBtn", "grokPoolAuthDir"} {
-		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
-			t.Fatalf("%s control not found", id)
-		}
-		if !bytes.Contains(appData, []byte(`$("`+id+`")`)) {
-			t.Fatalf("%s client handler not found", id)
-		}
-	}
-	for _, endpoint := range []string{"/api/cpa-mint", "/api/grok-pool/import-dir", "/api/grok-pool/open-auth-dir"} {
-		if !bytes.Contains(appData, []byte(endpoint)) {
-			t.Fatalf("client endpoint %s not found", endpoint)
+	for _, expected := range []string{`route?.supports_reasoning_effort === true`, `const options = supported.length ? supported : ["none"]`, `effortSel.disabled = supported.length === 0`, `default_reasoning_effort: $("routingReasoningEffort")?.value || "none"`} {
+		if !bytes.Contains(appData, []byte(expected)) {
+			t.Fatalf("reasoning capability contract missing: %s", expected)
 		}
 	}
 }
@@ -317,52 +260,13 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	if !bytes.Contains(appData, []byte("/api/models/reasoning-efforts")) {
 		t.Fatal("reasoning effort discovery endpoint not found")
 	}
-	for _, fragment := range []string{"fallbackReasoningEffort", "updateRoutingReasoningEfforts", "route?.reasoning_efforts", "已按模型能力更新可选档位"} {
+	for _, fragment := range []string{"fallbackReasoningEffort", "updateRoutingReasoningEfforts", "route.reasoning_efforts", "已按模型能力更新可选档位"} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("model-aware reasoning effort behavior missing: %s", fragment)
 		}
 	}
 	if !bytes.Contains(appData, []byte("上游接受请求，可能静默忽略")) {
 		t.Fatal("accepted reasoning effort disclaimer not found")
-	}
-}
-
-func TestRegistrarControlsHaveClientHandlers(t *testing.T) {
-	htmlData, err := assets.ReadFile("ui/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appData, err := assets.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{
-		"registrarForm", "registrarSteps", "registrarAdvanced", "registrarCloudflareEssentials",
-		"registrarProxyUrl", "registrarCloudflareApiBase",
-		"probeRegistrarBtn", "startRegistrarBtn", "stopRegistrarBtn", "registrarLog",
-	} {
-		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
-			t.Fatalf("%s control not found", id)
-		}
-	}
-	for _, id := range []string{"registrarForm", "probeRegistrarBtn", "startRegistrarBtn", "stopRegistrarBtn", "registrarLog"} {
-		if !bytes.Contains(appData, []byte(`$("`+id+`")`)) {
-			t.Fatalf("%s client handler not found", id)
-		}
-	}
-	if !bytes.Contains(appData, []byte(`config.email_provider || "cloudflare"`)) {
-		t.Fatal("registrar UI default email provider is not cloudflare")
-	}
-	if !bytes.Contains(htmlData, []byte("填写两项")) {
-		t.Fatal("registrar 3-step guide not found")
-	}
-	for _, endpoint := range []string{"/api/registrar", "/api/registrar/probe", "/api/registrar/start", "/api/registrar/stop", "/api/registrar/job"} {
-		if !bytes.Contains(appData, []byte(endpoint)) {
-			t.Fatalf("client endpoint %s not found", endpoint)
-		}
-	}
-	if !bytes.Contains(appData, []byte("registrarFormDirty")) {
-		t.Fatal("registrar form dirty-state guard not found")
 	}
 }
 
@@ -390,7 +294,9 @@ func TestSubscriptionProxyPageContract(t *testing.T) {
 	for _, requestPart := range []string{
 		`api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) })`,
 		`for (const action of ["start", "stop", "restart"])`,
-		`headers: { "Content-Type": "application/json" }`,
+		`const headers = { "Content-Type": "application/json", ...(options.headers || {}) }`,
+		`headers["X-Grok-Switch-CSRF"] = await csrfToken()`,
+		`async function csrfToken()`,
 	} {
 		if !bytes.Contains(appData, []byte(requestPart)) {
 			t.Fatalf("subscription service JSON request contract not found: %s", requestPart)
@@ -444,23 +350,6 @@ func htmlElementContains(root, target *html.Node) bool {
 	for child := root.FirstChild; child != nil; child = child.NextSibling {
 		if htmlElementContains(child, target) {
 			return true
-		}
-	}
-	return false
-}
-
-func htmlElementHasClass(node *html.Node, className string) bool {
-	if node == nil || node.Type != html.ElementNode {
-		return false
-	}
-	for _, attribute := range node.Attr {
-		if attribute.Key != "class" {
-			continue
-		}
-		for _, current := range bytes.Fields([]byte(attribute.Val)) {
-			if string(current) == className {
-				return true
-			}
 		}
 	}
 	return false

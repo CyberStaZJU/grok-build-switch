@@ -496,7 +496,7 @@ plan = "x"
 	}
 }
 
-func TestApplyProfileWritesReasoningEffortDefaults(t *testing.T) {
+func TestApplyProfileDoesNotFabricateReasoningEffortDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(path, []byte("[models]\n"), 0o644); err != nil {
@@ -515,25 +515,18 @@ func TestApplyProfileWritesReasoningEffortDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := stringAt(tableAt(doc, "models"), "default_reasoning_effort"); got != "high" {
+	if got := stringAt(tableAt(doc, "models"), "default_reasoning_effort"); got != "" {
 		t.Fatalf("default_reasoning_effort = %q", got)
 	}
 	model, _ := tableAt(doc, "model")["grok-4.5"].(map[string]any)
-	if !boolAt(model, "supports_reasoning_effort") {
-		t.Fatal("supports_reasoning_effort was not written")
+	if boolAt(model, "supports_reasoning_effort") {
+		t.Fatal("supports_reasoning_effort was fabricated")
 	}
-	want := []string{"low", "medium", "high"}
-	got := stringSliceAt(model, "reasoning_efforts")
-	if len(got) != len(want) {
+	if got := stringSliceAt(model, "reasoning_efforts"); len(got) != 0 {
 		t.Fatalf("reasoning_efforts = %#v", got)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("reasoning_efforts = %#v, want %#v", got, want)
-		}
-	}
-	if got := stringAt(model, "reasoning_efforts_source"); got != "default" {
-		t.Fatalf("reasoning_efforts_source = %q, want default", got)
+	if got := stringAt(model, "reasoning_efforts_source"); got != "" {
+		t.Fatalf("reasoning_efforts_source = %q", got)
 	}
 }
 
