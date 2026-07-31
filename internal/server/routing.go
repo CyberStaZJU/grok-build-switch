@@ -1,10 +1,7 @@
 package server
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +10,7 @@ import (
 
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/grokauth"
+	"grok_switch/internal/httpjson"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/routing"
 )
@@ -55,14 +53,16 @@ type routingModelDTO struct {
 }
 
 type routingSnapshotDTO struct {
-	Version          int                   `json:"version"`
-	Providers        []routingProviderDTO  `json:"providers"`
-	ModelRoutes      []routingModelDTO     `json:"model_routes"`
-	OfficialModels   []routingModelDTO     `json:"official_models,omitempty"`
-	OfficialLoggedIn bool                  `json:"official_logged_in"`
-	Policy           routing.RoutingPolicy `json:"policy"`
-	WebSearchCapable bool                  `json:"web_search_capable"`
-	UpdatedAt        time.Time             `json:"updated_at"`
+	Version          int                    `json:"version"`
+	Providers        []routingProviderDTO   `json:"providers"`
+	ModelRoutes      []routingModelDTO      `json:"model_routes"`
+	OfficialModels   []routingModelDTO      `json:"official_models,omitempty"`
+	OfficialLoggedIn bool                   `json:"official_logged_in"`
+	Policy           routing.RoutingPolicy  `json:"policy"`
+	RepairRequired   bool                   `json:"repair_required"`
+	SuggestedPolicy  *routing.RoutingPolicy `json:"suggested_policy,omitempty"`
+	WebSearchCapable bool                   `json:"web_search_capable"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
@@ -241,8 +241,7 @@ func (s *Server) applyCurrentRoutingLocked() error {
 	if err != nil {
 		return err
 	}
-	catalog := routing.Project(profileList)
-	policy := repairRoutingPolicy(stored.Policy, catalog, profileList)
+	policy := routing.RepairPolicy(profileList, stored.Policy)
 	_, err = s.applyRoutingPolicyTransaction(profileList, policy)
 	return err
 }
@@ -305,43 +304,6 @@ func routeForProfile(snapshot routing.Snapshot, profileID, model string) (routin
 	return routing.ModelRoute{}, false
 }
 
-func retainValidRoutingPolicy(policy routing.RoutingPolicy, catalog routing.Snapshot) routing.RoutingPolicy {
-	if policy.Official {
-		return policy
-	}
-	valid := func(name string) string {
-		if name == "" {
-			return ""
-		}
-		if _, ok := catalog.Route(name); ok {
-			return name
-		}
-		return ""
-	}
-	policy.Default = valid(policy.Default)
-	policy.WebSearch = valid(policy.WebSearch)
-	policy.Subagents.Explore = valid(policy.Subagents.Explore)
-	policy.Subagents.Plan = valid(policy.Subagents.Plan)
-	return policy
-}
-
-func repairRoutingPolicy(policy routing.RoutingPolicy, catalog routing.Snapshot, profileList []profiles.Profile) routing.RoutingPolicy {
-	if policy.Official {
-		return policy
-	}
-	policy = retainValidRoutingPolicy(policy, catalog)
-	if policy.Default != "" {
-		return policy
-	}
-	if len(catalog.ModelRoutes) > 0 {
-		policy.Default = catalog.ModelRoutes[0].Name
-	}
-	if len(catalog.ModelRoutes) > 0 {
-		policy.Default = catalog.ModelRoutes[0].Name
-	}
-	return policy
-}
-
 func (s *Server) currentRouting() (routingSnapshotDTO, routing.Snapshot, error) {
 	if s.Routing == nil || s.Profiles == nil {
 		return routingSnapshotDTO{}, routing.Snapshot{}, fmt.Errorf("路由服务未初始化")
@@ -357,24 +319,20 @@ func (s *Server) currentRouting() (routingSnapshotDTO, routing.Snapshot, error) 
 	if err != nil {
 		return routingSnapshotDTO{}, routing.Snapshot{}, err
 	}
-	catalog := routing.Project(profilesList)
-	policy := repairRoutingPolicy(stored.Policy, catalog, profilesList)
-	if policy != stored.Policy {
-		if _, err := s.applyRoutingPolicyTransaction(profilesList, policy); err != nil {
-			return routingSnapshotDTO{}, routing.Snapshot{}, err
-		}
-		stored, err = s.Routing.Snapshot()
-		if err != nil {
-			return routingSnapshotDTO{}, routing.Snapshot{}, err
-		}
-	}
-	hydrated, err := routing.ProjectWithPolicy(profilesList, stored.Policy)
+	policy := routing.RepairPolicy(profilesList, stored.Policy)
+	hydrated, err := routing.ProjectWithPolicy(profilesList, policy)
 	if err != nil {
 		return routingSnapshotDTO{}, routing.Snapshot{}, err
 	}
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
-	return s.routingDTO(hydrated), hydrated, nil
+	dto := s.routingDTO(hydrated)
+	if policy != stored.Policy {
+		dto.RepairRequired = true
+		suggested := policy
+		dto.SuggestedPolicy = &suggested
+	}
+	return dto, hydrated, nil
 }
 
 func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
@@ -537,14 +495,8 @@ func (s *Server) officialRoutingModels() ([]routingModelDTO, bool) {
 }
 
 func decodeRoutingJSON(w http.ResponseWriter, r *http.Request, out any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(out); err != nil {
+	if err := httpjson.Decode(w, r, out, httpjson.Options{MaxBytes: 32 << 10}); err != nil {
 		return fmt.Errorf("请求格式无效: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("请求格式无效")
 	}
 	return nil
 }

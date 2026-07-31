@@ -2,16 +2,15 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 
+	"grok_switch/internal/httpjson"
 	"grok_switch/internal/profiles"
 )
 
@@ -93,9 +92,11 @@ type subscriptionProxySelection struct {
 }
 
 func (s *Server) subscriptionState() *subscriptionProxySelection {
-	if s.subscriptionProxyState == nil {
-		s.subscriptionProxyState = &subscriptionProxySelection{selected: map[string]bool{}, sessions: map[string]string{}}
-	}
+	s.subscriptionProxyStateOnce.Do(func() {
+		if s.subscriptionProxyState == nil {
+			s.subscriptionProxyState = &subscriptionProxySelection{selected: map[string]bool{}, sessions: map[string]string{}}
+		}
+	})
 	return s.subscriptionProxyState
 }
 
@@ -244,7 +245,9 @@ func (s *Server) handleSubscriptionProxyLogin(w http.ResponseWriter, r *http.Req
 			var req struct {
 				ID string `json:"id"`
 			}
-			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req)
+			if !decodeSubscriptionJSON(w, r, &req) {
+				return
+			}
 			id = strings.TrimSpace(req.ID)
 		}
 		if id == "" {
@@ -560,14 +563,7 @@ func subscriptionLoopback(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeSubscriptionJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(out); err != nil {
-		subscriptionProxyError(w, fmt.Errorf("请求格式无效"), http.StatusBadRequest)
-		return false
-	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if err := httpjson.Decode(w, r, out, httpjson.Options{MaxBytes: 32 << 10}); err != nil {
 		subscriptionProxyError(w, fmt.Errorf("请求格式无效"), http.StatusBadRequest)
 		return false
 	}

@@ -20,6 +20,21 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 	if err != nil {
 		return profiles.Profile{}, err
 	}
+	return profileFromDoc(doc, name)
+}
+
+// ValidateProfileEndpointsText checks the provider/model endpoints embedded in
+// raw config.toml content before the config editor can persist it.
+func ValidateProfileEndpointsText(data []byte) error {
+	doc, err := parseDoc(data, "config content")
+	if err != nil {
+		return err
+	}
+	_, err = profileFromDoc(doc, "Config")
+	return err
+}
+
+func profileFromDoc(doc map[string]any, name string) (profiles.Profile, error) {
 	profile := profiles.Profile{
 		Name:                   name,
 		UpstreamFormat:         "openai",
@@ -31,10 +46,17 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 	if profile.Name == "" {
 		profile.Name = "Default"
 	}
-	return profiles.Normalize(profile), nil
+	profile = profiles.Normalize(profile)
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return profiles.Profile{}, err
+	}
+	return profile, nil
 }
 
 func ApplyProfileToFile(path string, profile profiles.Profile) error {
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -155,6 +177,9 @@ func ApplyPrivacyProtectionText(data []byte) []byte {
 // PreviewApply returns the full config.toml text that would result from
 // applying profile onto the existing file (or an empty template if missing).
 func PreviewApply(path string, profile profiles.Profile) ([]byte, error) {
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -168,13 +193,18 @@ func PreviewApply(path string, profile profiles.Profile) ([]byte, error) {
 // SnippetForProfile returns only the provider-owned sections as a readable TOML fragment.
 func SnippetForProfile(profile profiles.Profile) (string, error) {
 	profile = profiles.Normalize(profile)
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	b.WriteString("# 此供应商启用时会写入/覆盖的片段（其它段落保留）\n\n")
 	b.WriteString("[endpoints]\n")
 	b.WriteString("models_base_url = " + quote(profile.BaseURL) + "\n\n")
 	b.WriteString("[models]\n")
 	b.WriteString("default = " + quote(profile.DefaultModel) + "\n")
-	b.WriteString("default_reasoning_effort = " + quote(profile.DefaultReasoningEffort) + "\n")
+	if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" && effort != "none" {
+		b.WriteString("default_reasoning_effort = " + quote(effort) + "\n")
+	}
 	modelData, err := marshalModelSection(profile)
 	if err != nil {
 		return "", err
@@ -193,7 +223,11 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 
 	models := ensureTable(doc, "models")
 	models["default"] = profile.DefaultModel
-	models["default_reasoning_effort"] = profile.DefaultReasoningEffort
+	if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" && effort != "none" {
+		models["default_reasoning_effort"] = effort
+	} else {
+		delete(models, "default_reasoning_effort")
+	}
 
 	modelTable := make(map[string]any, len(profile.Models))
 	effectiveKey := profile.EffectiveAPIKey()
@@ -240,6 +274,9 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 	data = trimUTF8BOM(data)
 	profile = profiles.Normalize(profile)
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		return nil, err
+	}
 	newModelData, err := marshalModelSection(profile)
 	if err != nil {
 		return nil, err
@@ -323,13 +360,17 @@ func readDoc(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseDoc(data, path)
+}
+
+func parseDoc(data []byte, source string) (map[string]any, error) {
 	data = trimUTF8BOM(data)
 	doc := map[string]any{}
 	if strings.TrimSpace(string(data)) == "" {
 		return doc, nil
 	}
 	if err := toml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", source, err)
 	}
 	return doc, nil
 }

@@ -67,11 +67,20 @@ func (s *Store) Get() (Settings, error) {
 	return s.readLocked()
 }
 
+func Prepare(next Settings) (Settings, error) {
+	next = normalize(next)
+	if err := Validate(next); err != nil {
+		return Settings{}, err
+	}
+	return next, nil
+}
+
 func (s *Store) Update(next Settings) (Settings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next = normalize(next)
-	if err := Validate(next); err != nil {
+	var err error
+	next, err = Prepare(next)
+	if err != nil {
 		return Settings{}, err
 	}
 	if err := s.writeLocked(next); err != nil {

@@ -98,6 +98,19 @@ func (s *Store) Authorized(token string) (bool, error) {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(snapshot.SessionToken)) == 1, nil
 }
 
+func (s *Store) Restore(snapshot Snapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snapshot.SessionToken == "" {
+		return fmt.Errorf("局域网会话快照缺少 session token")
+	}
+	return s.saveLocked(persistedState{
+		SessionToken:  snapshot.SessionToken,
+		PairingCode:   snapshot.PairingCode,
+		PairingExpiry: snapshot.PairingExpiry,
+	})
+}
+
 func (s *Store) ResetSessions() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

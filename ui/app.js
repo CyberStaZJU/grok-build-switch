@@ -35,14 +35,6 @@ const TEMPLATES = {
     models: [],
     available_models: [],
   },
-  anthropic: {
-    name: "Anthropic",
-    upstream_format: "anthropic",
-    base_url: "https://api.anthropic.com/v1",
-    default_model: "",
-    models: [],
-    available_models: [],
-  },
 };
 
 const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
@@ -424,7 +416,7 @@ function applyLayoutUI() {
 
 function formatUpstream(value) {
   if (value === "openai_responses") return "Responses";
-  if (value === "anthropic") return "Anthropic";
+  if (value === "anthropic") return "Messages 兼容网关";
   return "OpenAI";
 }
 
@@ -699,7 +691,7 @@ function templateValue(profile) {
   // closest template from the protocol while defaulting new profiles to Responses.
   if (!profile.id && !profile.name && !profile.base_url) return "responses";
   if (profile.upstream_format === "openai_responses" || profile.upstream_format === "responses") return "responses";
-  if (profile.upstream_format === "anthropic" || profile.upstream_format === "messages") return "anthropic";
+  if (profile.upstream_format === "anthropic" || profile.upstream_format === "messages") return "custom";
   return "openai";
 }
 
@@ -900,7 +892,7 @@ function updateReasoningEffortMetadata() {
     status.textContent = `当前模型可用档位：${supported.join("、")}。`;
     status.classList.add("ok");
   } else {
-    status.textContent = "模型未声明推理能力，默认禁用；如需探测，请点击检测并确认会向上游发送 7 个最小请求。";
+    status.textContent = "模型未声明推理能力，默认禁用；如需探测，请点击检测并确认会向上游发送最多 6 个最小请求。";
   }
 }
 
@@ -911,15 +903,15 @@ async function detectReasoningEfforts() {
   const model = card?.querySelector('[data-field="model"]')?.value.trim() || current.default_model;
   const baseURL = card?.modelDraft?.base_url || current.base_url;
   const apiBackend = card?.modelDraft?.api_backend || apiBackendFor(current.upstream_format);
-  const confirmed = await customConfirm(`将向 ${baseURL || "上游服务"} 为模型 ${model} 发送 7 个最小请求，逐项探测 reasoning_effort。是否继续？`, {
-    okLabel: "发送 7 个探测请求",
+  const confirmed = await customConfirm(`将向 ${baseURL || "上游服务"} 为模型 ${model} 发送最多 6 个最小请求，逐项探测 reasoning_effort。是否继续？`, {
+    okLabel: "发送最多 6 个探测请求",
   });
   if (!confirmed) return false;
   const requestContext = `${current.id}\n${current.default_model}\n${model}\n${baseURL}\n${apiBackend}`;
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "正在发送 7 个最小请求检测支持档位…";
+    status.textContent = "正在发送最多 6 个最小请求检测支持档位…";
   }
   try {
     const data = await api("/api/models/reasoning-efforts", {

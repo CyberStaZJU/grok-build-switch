@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -111,7 +112,7 @@ func (p Profile) EffectiveAPIKey() string {
 func ValidateDefaultReasoningEffort(p Profile) error {
 	p = Normalize(p)
 	effort := strings.TrimSpace(p.DefaultReasoningEffort)
-	if effort == "" || strings.TrimSpace(p.DefaultModel) == "" {
+	if effort == "" || effort == "none" || strings.TrimSpace(p.DefaultModel) == "" {
 		return nil
 	}
 	for _, model := range p.Models {
@@ -124,6 +125,40 @@ func ValidateDefaultReasoningEffort(p Profile) error {
 		return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", p.DefaultModel, effort, strings.Join(model.ReasoningEfforts, "、"))
 	}
 	return fmt.Errorf("默认模型 %q 不在已启用模型列表中", p.DefaultModel)
+}
+
+// ValidateEndpoints rejects Profiles that would route Grok directly to an
+// official Anthropic host. The Messages backend remains available for explicit
+// third-party compatible gateways.
+func ValidateEndpoints(p Profile) error {
+	p = Normalize(p)
+	if err := validateEndpoint("profile base_url", p.BaseURL); err != nil {
+		return err
+	}
+	for _, model := range p.Models {
+		if err := validateEndpoint(fmt.Sprintf("model %q base_url", modelKey(model)), model.BaseURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateEndpoint(label, rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%s 无效: %w", label, err)
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	host = strings.NewReplacer("。", ".", "．", ".", "｡", ".").Replace(host)
+	host = strings.TrimSuffix(host, ".")
+	if host == "anthropic.com" || strings.HasSuffix(host, ".anthropic.com") {
+		return fmt.Errorf("%s 不支持 Anthropic 官方 API 直连；如需 messages 协议，请使用明确提供该兼容协议的第三方网关", label)
+	}
+	return nil
 }
 
 func Normalize(p Profile) Profile {

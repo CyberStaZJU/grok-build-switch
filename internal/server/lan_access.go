@@ -35,7 +35,7 @@ func (s *Server) withAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isLoopbackRequest(r) {
 			if !s.csrfAllowed(r) {
-				http.Error(w, "CSRF 校验失败", http.StatusForbidden)
+				writeJSONStatus(w, map[string]string{"error": "CSRF 校验失败", "code": "csrf_token_invalid"}, http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -66,8 +66,34 @@ func (s *Server) withAccess(next http.Handler) http.Handler {
 			s.writeUnauthorized(w, r)
 			return
 		}
+		if loopbackOnlyRequest(r) {
+			writeError(w, fmt.Errorf("该接口仅允许本机访问"), http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func loopbackOnlyRequest(r *http.Request) bool {
+	requestPath := r.URL.Path
+	if requestPath == "/api/config" || strings.HasPrefix(requestPath, "/api/config/") {
+		return true
+	}
+	if requestPath == "/api/ssh" || strings.HasPrefix(requestPath, "/api/ssh/") {
+		return true
+	}
+	if requestPath == "/api/official/activate" || requestPath == "/api/import" ||
+		requestPath == "/api/models/fetch" || requestPath == "/api/models/reasoning-efforts" ||
+		requestPath == "/api/connection/test" || requestPath == "/api/cache-stats" {
+		return true
+	}
+	if (requestPath == "/api/profiles" || strings.HasPrefix(requestPath, "/api/profiles/")) && r.Method != http.MethodGet {
+		return true
+	}
+	if requestPath == "/api/settings" && r.Method != http.MethodGet {
+		return true
+	}
+	return false
 }
 
 func (s *Server) lanAccessEnabled() bool {

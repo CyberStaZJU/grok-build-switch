@@ -24,6 +24,7 @@ import (
 
 	"grok_switch/internal/autostart"
 	grokconfig "grok_switch/internal/config"
+	"grok_switch/internal/httpjson"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/remoteaccess"
@@ -34,29 +35,36 @@ import (
 )
 
 type Server struct {
-	Paths                  paths.Paths
-	Profiles               *profiles.Store
-	Routing                *routing.Store
-	Settings               *settings.Store
-	RemoteAccess           *remoteaccess.Store
-	Switcher               *switcher.Switcher
-	SubscriptionProxy      SubscriptionProxy
-	SSH                    *ssh.Handler
-	BrowserOpener          BrowserOpener
-	Assets                 embed.FS
-	ExePath                string
-	ActualPort             int
-	onChanged              func()
-	listenerMu             sync.Mutex
-	listener               net.Listener
-	bindHost               string
-	httpServer             *http.Server
-	loginMu                sync.Mutex
-	loginFails             map[string]loginFailure
-	subscriptionProxyState *subscriptionProxySelection
-	routingMu              sync.Mutex
-	csrfMu                 sync.Mutex
-	csrfSecret             string
+	Paths                      paths.Paths
+	Profiles                   *profiles.Store
+	Routing                    *routing.Store
+	Settings                   *settings.Store
+	RemoteAccess               *remoteaccess.Store
+	Switcher                   *switcher.Switcher
+	SubscriptionProxy          SubscriptionProxy
+	SSH                        *ssh.Handler
+	BrowserOpener              BrowserOpener
+	Assets                     embed.FS
+	ExePath                    string
+	ActualPort                 int
+	onChanged                  func()
+	listenerMu                 sync.Mutex
+	settingsMu                 sync.Mutex
+	listener                   net.Listener
+	bindHost                   string
+	httpServer                 *http.Server
+	loginMu                    sync.Mutex
+	loginFails                 map[string]loginFailure
+	subscriptionProxyState     *subscriptionProxySelection
+	subscriptionProxyStateOnce sync.Once
+	routingMu                  sync.Mutex
+	csrfMu                     sync.Mutex
+	csrfSecret                 string
+	reconfigureLAN             func(bool) error
+	autostartSync              func(bool, string, bool) error
+	resetRemoteSessions        func() error
+	restoreRemoteSessions      func(remoteaccess.Snapshot) error
+	updateSettings             func(settings.Settings) (settings.Settings, error)
 }
 
 func (s *Server) SetOnChanged(fn func()) {
@@ -105,10 +113,7 @@ func (s *Server) Listen(preferred int) (*http.Server, int, error) {
 			return nil, 0, err
 		}
 	}
-	srv := &http.Server{
-		Handler:           s.withAccess(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newApplicationHTTPServer(s.withAccess(mux))
 	s.listenerMu.Lock()
 	s.listener = listener
 	s.bindHost = bindHost
@@ -120,6 +125,18 @@ func (s *Server) Listen(preferred int) (*http.Server, int, error) {
 		}
 	}()
 	return srv, port, nil
+}
+
+func newApplicationHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    256 << 10,
+		// WriteTimeout remains zero because subscription inference can stream for
+		// longer than ordinary management requests.
+	}
 }
 
 func (s *Server) reconfigureLANAccess(enabled bool) error {
@@ -241,6 +258,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		activeSafe.Models[i].APIKey = ""
 		activeSafe.Models[i].ExtraHeaders = nil
 	}
+	var activeProfileResponse any = activeSafe
+	configPath := s.Paths.GrokConfig
+	dataDir := s.Paths.DataDir
+	if !isLoopbackRequest(r) {
+		activeProfileResponse = publicProfile(activeSafe)
+		configPath = ""
+		dataDir = ""
+	}
 	officialActive := false
 	if s.Routing != nil {
 		if stored, storedErr := s.Routing.Snapshot(); storedErr == nil {
@@ -275,12 +300,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"active_profile":         activeSafe,
+		"active_profile":         activeProfileResponse,
 		"active_routing":         activeRouting,
 		"official_active":        officialActive,
 		"official_logged_in":     officialLoggedIn,
-		"config_path":            s.Paths.GrokConfig,
-		"data_dir":               s.Paths.DataDir,
+		"config_path":            configPath,
+		"data_dir":               dataDir,
 		"port":                   s.ActualPort,
 		"settings":               currentSettings,
 		"config_matches_active":  matches,
@@ -352,6 +377,68 @@ func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+type profilePublicModelDTO struct {
+	Name                    string   `json:"name"`
+	Model                   string   `json:"model"`
+	APIBackend              string   `json:"api_backend"`
+	HasAPIKey               bool     `json:"has_api_key"`
+	SupportsBackendSearch   bool     `json:"supports_backend_search"`
+	SupportsReasoningEffort bool     `json:"supports_reasoning_effort"`
+	ReasoningEfforts        []string `json:"reasoning_efforts"`
+	ReasoningEffortsSource  string   `json:"reasoning_efforts_source,omitempty"`
+	ContextWindow           int64    `json:"context_window"`
+	MaxCompletionTokens     int64    `json:"max_completion_tokens"`
+}
+
+type profilePublicDTO struct {
+	ID                     string                  `json:"id"`
+	Name                   string                  `json:"name"`
+	Source                 string                  `json:"source,omitempty"`
+	Template               string                  `json:"template,omitempty"`
+	UpstreamFormat         string                  `json:"upstream_format"`
+	HasAPIKey              bool                    `json:"has_api_key"`
+	AvailableModels        []string                `json:"available_models"`
+	DefaultModel           string                  `json:"default_model"`
+	DefaultReasoningEffort string                  `json:"default_reasoning_effort"`
+	Models                 []profilePublicModelDTO `json:"models"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+}
+
+func publicProfile(profile profiles.Profile) profilePublicDTO {
+	out := profilePublicDTO{
+		ID: profile.ID, Name: profile.Name, Source: profile.Source, Template: profile.Template,
+		UpstreamFormat: profile.UpstreamFormat,
+		HasAPIKey:      profile.EffectiveAPIKey() != "", AvailableModels: append([]string(nil), profile.AvailableModels...),
+		DefaultModel: profile.DefaultModel, DefaultReasoningEffort: profile.DefaultReasoningEffort,
+		CreatedAt: profile.CreatedAt, UpdatedAt: profile.UpdatedAt,
+		Models: make([]profilePublicModelDTO, len(profile.Models)),
+	}
+	for i, model := range profile.Models {
+		out.Models[i] = profilePublicModelDTO{
+			Name: model.Name, Model: model.Model, APIBackend: model.APIBackend,
+			HasAPIKey: model.APIKey != "", SupportsBackendSearch: model.SupportsBackendSearch,
+			SupportsReasoningEffort: model.SupportsReasoningEffort,
+			ReasoningEfforts:        append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
+			ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+		}
+	}
+	return out
+}
+
+const (
+	managementJSONLimit = int64(32 << 10)
+	configJSONLimit     = int64(2 << 20)
+)
+
+func decodeManagementJSON(w http.ResponseWriter, r *http.Request, out any) error {
+	return httpjson.Decode(w, r, out, httpjson.Options{MaxBytes: managementJSONLimit})
+}
+
+func decodeConfigJSON(w http.ResponseWriter, r *http.Request, out any) error {
+	return httpjson.Decode(w, r, out, httpjson.Options{MaxBytes: configJSONLimit})
+}
+
 func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -360,10 +447,22 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
+		if !isLoopbackRequest(r) {
+			public := make([]profilePublicDTO, len(list))
+			for i, profile := range list {
+				public[i] = publicProfile(profile)
+			}
+			writeJSON(w, public)
+			return
+		}
 		writeJSON(w, list)
 	case http.MethodPost:
 		var profile profiles.Profile
-		if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+		if err := decodeManagementJSON(w, r, &profile); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
@@ -375,7 +474,9 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		s.routingMu.Unlock()
 		if err != nil {
 			if created.ID != "" {
-				_ = s.Profiles.Delete(created.ID)
+				if rollbackErr := s.Profiles.Delete(created.ID); rollbackErr != nil {
+					err = fmt.Errorf("创建 Profile 后重建路由失败: %v；删除新 Profile 失败: %w", err, rollbackErr)
+				}
 			}
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -402,7 +503,11 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
 		var profile profiles.Profile
-		if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+		if err := decodeManagementJSON(w, r, &profile); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
@@ -413,7 +518,9 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			err = s.applyCurrentRoutingLocked()
 		}
 		if err != nil && previousErr == nil {
-			_, _ = s.Profiles.Update(id, previous)
+			if rollbackErr := s.Profiles.Restore(previous); rollbackErr != nil {
+				err = fmt.Errorf("更新 Profile 后重建路由失败: %v；恢复原 Profile 失败: %w", err, rollbackErr)
+			}
 		}
 		s.routingMu.Unlock()
 		if err != nil {
@@ -435,7 +542,9 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			err = s.applyCurrentRoutingLocked()
 		}
 		if err != nil && deleted && previousErr == nil {
-			_, _ = s.Profiles.Create(previous)
+			if rollbackErr := s.Profiles.Restore(previous); rollbackErr != nil {
+				err = fmt.Errorf("删除 Profile 后重建路由失败: %v；恢复原 Profile 失败: %w", err, rollbackErr)
+			}
 		}
 		s.routingMu.Unlock()
 		if err != nil {
@@ -462,7 +571,10 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		Name   string `json:"name"`
 		Active bool   `json:"active"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeManagementJSON(w, r, &req); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
 	if req.Name == "" {
 		req.Name = "Imported"
 	}
@@ -485,42 +597,78 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, current)
 	case http.MethodPut:
-		current, currentErr := s.Settings.Get()
-		if currentErr != nil {
-			writeError(w, currentErr, http.StatusInternalServerError)
+		s.settingsMu.Lock()
+		defer s.settingsMu.Unlock()
+		current, err := s.Settings.Get()
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
 		var next settings.Settings
-		if err := json.NewDecoder(r.Body).Decode(&next); err != nil {
+		if err := decodeManagementJSON(w, r, &next); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
-		if !isLoopbackRequest(r) {
-			next.LANAccessEnabled = current.LANAccessEnabled
+		next, err = settings.Prepare(next)
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
 		}
-		if current.LANAccessEnabled && !next.LANAccessEnabled && s.RemoteAccess != nil {
-			if err := s.RemoteAccess.ResetSessions(); err != nil {
-				writeError(w, fmt.Errorf("撤销局域网会话失败: %w", err), http.StatusInternalServerError)
+		var remoteSnapshot remoteaccess.Snapshot
+		if s.RemoteAccess != nil {
+			remoteSnapshot, err = s.RemoteAccess.Get()
+			if err != nil {
+				writeError(w, err, http.StatusInternalServerError)
 				return
 			}
 		}
-		updated, err := s.Settings.Update(next)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if settings.IsValidationError(err) {
-				status = http.StatusBadRequest
+		rollback := func(primary error, listenerChanged, autostartChanged, sessionsChanged bool) error {
+			failures := make([]string, 0, 4)
+			if sessionsChanged && s.RemoteAccess != nil {
+				if restoreErr := s.restoreSessions(remoteSnapshot); restoreErr != nil {
+					failures = append(failures, "恢复局域网会话失败: "+restoreErr.Error())
+				}
 			}
-			writeError(w, err, status)
-			return
+			if autostartChanged {
+				if restoreErr := s.syncAutostart(current.Autostart, current.SilentAutostart); restoreErr != nil {
+					failures = append(failures, "恢复自动启动失败: "+restoreErr.Error())
+				}
+			}
+			if listenerChanged {
+				if restoreErr := s.reconfigureLANAccessForSettings(current.LANAccessEnabled); restoreErr != nil {
+					failures = append(failures, "恢复监听失败: "+restoreErr.Error())
+				}
+			}
+			if len(failures) > 0 {
+				return fmt.Errorf("%v；回滚失败: %s", primary, strings.Join(failures, "；"))
+			}
+			return primary
 		}
-		if err := s.reconfigureLANAccess(updated.LANAccessEnabled); err != nil {
-			current.LANAccessEnabled = !updated.LANAccessEnabled
-			_, _ = s.Settings.Update(current)
-			writeError(w, fmt.Errorf("切换局域网监听失败: %w", err), http.StatusInternalServerError)
-			return
+
+		listenerChanged := current.LANAccessEnabled != next.LANAccessEnabled
+		if listenerChanged {
+			if err := s.reconfigureLANAccessForSettings(next.LANAccessEnabled); err != nil {
+				writeError(w, fmt.Errorf("切换局域网监听失败: %w", err), http.StatusInternalServerError)
+				return
+			}
 		}
-		if err := autostart.Sync(updated.Autostart, s.ExePath, updated.SilentAutostart); err != nil {
-			writeError(w, err, http.StatusInternalServerError)
+		autostartChanged := current.Autostart != next.Autostart || current.SilentAutostart != next.SilentAutostart
+		if autostartChanged {
+			if err := s.syncAutostart(next.Autostart, next.SilentAutostart); err != nil {
+				writeError(w, rollback(err, listenerChanged, false, false), http.StatusInternalServerError)
+				return
+			}
+		}
+		sessionsChanged := current.LANAccessEnabled && !next.LANAccessEnabled && s.RemoteAccess != nil
+		if sessionsChanged {
+			if err := s.resetSessions(); err != nil {
+				writeError(w, rollback(fmt.Errorf("撤销局域网会话失败: %w", err), listenerChanged, autostartChanged, false), http.StatusInternalServerError)
+				return
+			}
+		}
+		updated, err := s.persistSettings(next)
+		if err != nil {
+			writeError(w, rollback(err, listenerChanged, autostartChanged, sessionsChanged), http.StatusInternalServerError)
 			return
 		}
 		s.changed()
@@ -528,6 +676,41 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (s *Server) reconfigureLANAccessForSettings(enabled bool) error {
+	if s.reconfigureLAN != nil {
+		return s.reconfigureLAN(enabled)
+	}
+	return s.reconfigureLANAccess(enabled)
+}
+
+func (s *Server) syncAutostart(enabled, silent bool) error {
+	if s.autostartSync != nil {
+		return s.autostartSync(enabled, s.ExePath, silent)
+	}
+	return autostart.Sync(enabled, s.ExePath, silent)
+}
+
+func (s *Server) resetSessions() error {
+	if s.resetRemoteSessions != nil {
+		return s.resetRemoteSessions()
+	}
+	return s.RemoteAccess.ResetSessions()
+}
+
+func (s *Server) restoreSessions(snapshot remoteaccess.Snapshot) error {
+	if s.restoreRemoteSessions != nil {
+		return s.restoreRemoteSessions(snapshot)
+	}
+	return s.RemoteAccess.Restore(snapshot)
+}
+
+func (s *Server) persistSettings(next settings.Settings) (settings.Settings, error) {
+	if s.updateSettings != nil {
+		return s.updateSettings(next)
+	}
+	return s.Settings.Update(next)
 }
 
 func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
@@ -541,22 +724,28 @@ func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		APIKey         string `json:"api_key"`
 		UpstreamFormat string `json:"upstream_format"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeManagementJSON(w, r, &req); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
 	if req.ProfileID != "" {
 		profile, err := s.Profiles.Get(req.ProfileID)
-		if err == nil {
-			if req.BaseURL == "" {
-				req.BaseURL = profile.BaseURL
+		if err != nil {
+			status := http.StatusInternalServerError
+			if os.IsNotExist(err) {
+				status = http.StatusNotFound
 			}
-			if req.APIKey == "" {
-				req.APIKey = profile.EffectiveAPIKey()
-			}
-			if req.UpstreamFormat == "" {
-				req.UpstreamFormat = profile.UpstreamFormat
-			}
+			writeError(w, err, status)
+			return
+		}
+		if req.BaseURL == "" {
+			req.BaseURL = profile.BaseURL
+		}
+		if req.APIKey == "" {
+			req.APIKey = profile.EffectiveAPIKey()
+		}
+		if req.UpstreamFormat == "" {
+			req.UpstreamFormat = profile.UpstreamFormat
 		}
 	}
 	models, err := fetchModelList(r.Context(), req.BaseURL, req.APIKey, req.UpstreamFormat)
@@ -565,13 +754,17 @@ func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ProfileID != "" {
-		if profile, err := s.Profiles.Get(req.ProfileID); err == nil {
-			profile.AvailableModels = models
-			profile.APIKey = req.APIKey
-			profile.UpstreamFormat = req.UpstreamFormat
-			_, _ = s.Profiles.Update(req.ProfileID, profile)
-			s.changed()
+		profile, err := s.Profiles.Get(req.ProfileID)
+		if err != nil {
+			writeError(w, fmt.Errorf("模型已获取，但读取 Profile 失败: %w", err), http.StatusInternalServerError)
+			return
 		}
+		profile.AvailableModels = models
+		if _, err := s.Profiles.Update(req.ProfileID, profile); err != nil {
+			writeError(w, fmt.Errorf("模型已获取，但保存到 Profile 失败: %w", err), http.StatusInternalServerError)
+			return
+		}
+		s.changed()
 	}
 	writeJSON(w, map[string]any{"models": models})
 }
@@ -589,7 +782,7 @@ type reasoningEffortsResponse struct {
 	Results []reasoningEffortProbeResult `json:"results,omitempty"`
 }
 
-var reasoningEffortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+var reasoningEffortOrder = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 
 func (s *Server) handleReasoningEfforts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -597,14 +790,15 @@ func (s *Server) handleReasoningEfforts(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		ProfileID      string `json:"profile_id"`
-		BaseURL        string `json:"base_url"`
-		APIKey         string `json:"api_key"`
-		UpstreamFormat string `json:"upstream_format"`
-		Model          string `json:"model"`
-		APIBackend     string `json:"api_backend"`
+		ProfileID          string `json:"profile_id"`
+		BaseURL            string `json:"base_url"`
+		APIKey             string `json:"api_key"`
+		UpstreamFormat     string `json:"upstream_format"`
+		Model              string `json:"model"`
+		APIBackend         string `json:"api_backend"`
+		UserConfirmedProbe bool   `json:"user_confirmed_probe"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeManagementJSON(w, r, &req); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
@@ -661,7 +855,15 @@ func (s *Server) handleReasoningEfforts(w http.ResponseWriter, r *http.Request) 
 		writeError(w, fmt.Errorf("base_url is required"), http.StatusBadRequest)
 		return
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	if err := rejectOfficialAnthropic(req.BaseURL); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	if !req.UserConfirmedProbe {
+		writeError(w, fmt.Errorf("需要明确确认后才能发送推理强度探测请求"), http.StatusBadRequest)
+		return
+	}
+	client := &http.Client{Timeout: 12 * time.Second}
 	results := make([]reasoningEffortProbeResult, 0, len(reasoningEffortOrder))
 	accepted := make([]string, 0, len(reasoningEffortOrder))
 	for _, effort := range reasoningEffortOrder {
@@ -763,7 +965,7 @@ func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
 		Model          string `json:"model"`
 		APIBackend     string `json:"api_backend"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeManagementJSON(w, r, &req); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
@@ -846,7 +1048,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Content string `json:"content"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeConfigJSON(w, r, &req); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
@@ -856,6 +1058,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				writeError(w, fmt.Errorf("TOML 无效: %w", err), http.StatusBadRequest)
 				return
 			}
+		}
+		if err := grokconfig.ValidateProfileEndpointsText([]byte(req.Content)); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
 		}
 		if err := s.Switcher.WriteConfig([]byte(req.Content)); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
@@ -874,11 +1080,15 @@ func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile profiles.Profile
-	if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+	if err := decodeManagementJSON(w, r, &profile); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
 	profile = profiles.Normalize(profile)
+	if err := profiles.ValidateEndpoints(profile); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
 	snippet, err := grokconfig.SnippetForProfile(profile)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -916,6 +1126,9 @@ func (s *Server) handleConfigPrivacy(w http.ResponseWriter, r *http.Request) {
 
 func fetchModelList(ctx context.Context, baseURL, apiKey, upstreamFormat string) ([]string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if err := rejectOfficialAnthropic(baseURL); err != nil {
+		return nil, err
+	}
 	if baseURL == "" {
 		return nil, fmt.Errorf("base_url is required")
 	}
@@ -937,6 +1150,9 @@ func fetchModelList(ctx context.Context, baseURL, apiKey, upstreamFormat string)
 
 func probeModel(ctx context.Context, baseURL, apiKey, upstreamFormat, apiBackend, model string) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if err := rejectOfficialAnthropic(baseURL); err != nil {
+		return err
+	}
 	model = strings.TrimSpace(model)
 	if baseURL == "" {
 		return fmt.Errorf("base_url is required")
@@ -1021,11 +1237,15 @@ func probeModel(ctx context.Context, baseURL, apiKey, upstreamFormat, apiBackend
 	return fmt.Errorf("%s: %s", resp.Status, msg)
 }
 
+func rejectOfficialAnthropic(baseURL string) error {
+	return profiles.ValidateEndpoints(profiles.Profile{BaseURL: baseURL})
+}
+
 func modelEndpoints(baseURL string) []string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	candidates := []string{baseURL + "/models"}
-	withoutV1 := strings.TrimSuffix(baseURL, "/v1")
-	if withoutV1 != baseURL {
-		candidates = append(candidates, withoutV1+"/v1/models")
+	if !strings.HasSuffix(baseURL, "/v1") {
+		candidates = append(candidates, baseURL+"/v1/models")
 	}
 	return uniqueStrings(candidates)
 }
@@ -1066,13 +1286,18 @@ func extractModels(payload any) []string {
 	walk = func(v any) {
 		switch x := v.(type) {
 		case map[string]any:
-			if id, ok := x["id"].(string); ok && id != "" && !seen[id] {
+			id, _ := x["id"].(string)
+			id = strings.TrimSpace(id)
+			if id != "" && !seen[id] {
 				seen[id] = true
 				out = append(out, id)
-			}
-			if name, ok := x["name"].(string); ok && name != "" && !seen[name] {
-				seen[name] = true
-				out = append(out, name)
+			} else if id == "" {
+				name, _ := x["name"].(string)
+				name = strings.TrimSpace(name)
+				if name != "" && !seen[name] {
+					seen[name] = true
+					out = append(out, name)
+				}
 			}
 			for key, child := range x {
 				if key == "data" || key == "models" {

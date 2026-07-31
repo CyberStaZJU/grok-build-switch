@@ -25,8 +25,8 @@ func TestReasoningEffortsDeclaredDoesNotProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{Profiles: store}
-	response := invokeReasoningEfforts(t, s, `{"profile_id":"`+profile.ID+`","model":"model-1"}`)
-	if calls.Load() != 0 || response.Source != "declared" || strings.Join(response.Efforts, ",") != "none,minimal,high,xhigh,max" {
+	response := invokeReasoningEfforts(t, s, `{"profile_id":"`+profile.ID+`","model":"model-1","user_confirmed_probe":true}`)
+	if calls.Load() != 0 || response.Source != "declared" || strings.Join(response.Efforts, ",") != "minimal,high,xhigh,max" {
 		t.Fatalf("response=%+v calls=%d", response, calls.Load())
 	}
 	assertNoKeyLeak(t, response, "secret-key")
@@ -44,8 +44,8 @@ func TestReasoningEffortsDefaultMetadataStillProbes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := invokeReasoningEfforts(t, &Server{Profiles: store}, `{"profile_id":"`+profile.ID+`","model":"m"}`)
-	if response.Source != "probe" || calls.Load() != 7 {
+	response := invokeReasoningEfforts(t, &Server{Profiles: store}, `{"profile_id":"`+profile.ID+`","model":"m","user_confirmed_probe":true}`)
+	if response.Source != "probe" || calls.Load() != 6 {
 		t.Fatalf("response=%+v calls=%d", response, calls.Load())
 	}
 }
@@ -74,14 +74,14 @@ func TestReasoningEffortsProbeClassificationAndChatPayload(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","api_key":"secret-key","model":"m","api_backend":"chat_completions"}`)
-	want := []string{"accepted", "unsupported", "unknown", "unknown", "unknown", "unknown", "unknown"}
+	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","api_key":"secret-key","model":"m","api_backend":"chat_completions","user_confirmed_probe":true}`)
+	want := []string{"accepted", "unsupported", "unknown", "unknown", "unknown", "unknown"}
 	for i, status := range want {
 		if response.Results[i].Status != status {
 			t.Fatalf("result[%d]=%+v want %s", i, response.Results[i], status)
 		}
 	}
-	if response.Source != "probe" || strings.Join(response.Efforts, ",") != "none" {
+	if response.Source != "probe" || strings.Join(response.Efforts, ",") != "minimal" {
 		t.Fatalf("response=%+v", response)
 	}
 	assertNoKeyLeak(t, response, "secret-key")
@@ -97,9 +97,53 @@ func TestReasoningEffortsResponsesPayload(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
-	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","model":"m","api_backend":"responses"}`)
-	if len(response.Efforts) != 7 {
+	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","model":"m","api_backend":"responses","user_confirmed_probe":true}`)
+	if len(response.Efforts) != 6 {
 		t.Fatalf("response=%+v", response)
+	}
+}
+
+func TestReasoningEffortsRequiresExplicitConfirmation(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/reasoning-efforts", strings.NewReader(`{"base_url":"`+upstream.URL+`","model":"m","api_backend":"chat_completions"}`))
+	res := httptest.NewRecorder()
+	(&Server{}).handleReasoningEfforts(res, req)
+	if res.Code != http.StatusBadRequest || calls.Load() != 0 || !strings.Contains(res.Body.String(), "明确确认") {
+		t.Fatalf("status=%d calls=%d body=%s", res.Code, calls.Load(), res.Body.String())
+	}
+}
+
+func TestOfficialAnthropicDirectRequestsAreRejectedBeforeNetwork(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		call func() error
+	}{
+		{"models", func() error {
+			_, err := fetchModelList(t.Context(), "https://api.anthropic.com/v1", "secret", "anthropic")
+			return err
+		}},
+		{"models unicode dot", func() error {
+			_, err := fetchModelList(t.Context(), "https://api。anthropic.com/v1", "secret", "anthropic")
+			return err
+		}},
+		{"connection", func() error {
+			return probeModel(t.Context(), "https://api.anthropic.com/v1", "secret", "anthropic", "messages", "model")
+		}},
+		{"connection unicode dot", func() error {
+			return probeModel(t.Context(), "https://api｡anthropic.com/v1", "secret", "anthropic", "messages", "model")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.call()
+			if err == nil || !strings.Contains(err.Error(), "不支持 Anthropic 官方 API 直连") {
+				t.Fatalf("error=%v", err)
+			}
+		})
 	}
 }
 
@@ -107,7 +151,7 @@ func TestReasoningEffortsMessagesUnknownWithoutProbe(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer upstream.Close()
-	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","model":"m","api_backend":"messages"}`)
+	response := invokeReasoningEfforts(t, &Server{}, `{"base_url":"`+upstream.URL+`","model":"m","api_backend":"messages","user_confirmed_probe":true}`)
 	if response.Source != "unknown" || calls.Load() != 0 || !strings.Contains(response.Note, "messages") {
 		t.Fatalf("response=%+v calls=%d", response, calls.Load())
 	}
