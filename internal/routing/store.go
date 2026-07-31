@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -345,11 +346,8 @@ func migrateV1(providers []Provider, routes []ModelRoute, legacy RoutingPolicy, 
 		}
 	}
 	active := ""
-	for _, ref := range []string{legacy.Default, legacy.WebSearch, legacy.Subagents.Explore, legacy.Subagents.Plan} {
-		if route, ok := snapshot.Route(ref); ok {
-			active = route.ProviderID
-			break
-		}
+	if route, ok := snapshot.Route(legacy.Default); ok {
+		active = route.ProviderID
 	}
 	if legacy.Official {
 		active = OfficialProviderID
@@ -364,28 +362,42 @@ func migrateV1(providers []Provider, routes []ModelRoute, legacy RoutingPolicy, 
 				policy.Default = route.ID
 			}
 		}
-		if provider.ID == active {
-			for label, ref := range map[string]string{"default": legacy.Default, "web_search": legacy.WebSearch, "explore": legacy.Subagents.Explore, "plan": legacy.Subagents.Plan} {
-				if route, ok := snapshot.Route(ref); ok && route.ProviderID == provider.ID {
-					switch label {
-					case "default":
-						policy.Default = route.ID
-					case "web_search":
-						policy.WebSearch = route.ID
-					case "explore":
-						policy.Subagents.Explore = route.ID
-					case "plan":
-						policy.Subagents.Plan = route.ID
-					}
-				}
-			}
-			policy.DefaultReasoningEffort = legacy.DefaultReasoningEffort
-		}
 		snapshot.ProviderPolicies[provider.ID] = policy
 	}
 	if legacy.Official {
 		legacy.Official = false
 		snapshot.ProviderPolicies[OfficialProviderID] = legacy
+	} else {
+		if route, ok := snapshot.Route(legacy.Default); ok {
+			policy := snapshot.ProviderPolicies[route.ProviderID]
+			policy.Default = route.ID
+			snapshot.ProviderPolicies[route.ProviderID] = policy
+		}
+		for field, ref := range map[string]string{
+			"web_search": legacy.WebSearch,
+			"explore":    legacy.Subagents.Explore,
+			"plan":       legacy.Subagents.Plan,
+		} {
+			route, ok := snapshot.Route(ref)
+			if !ok {
+				continue
+			}
+			policy := snapshot.ProviderPolicies[route.ProviderID]
+			switch field {
+			case "web_search":
+				policy.WebSearch = route.ID
+			case "explore":
+				policy.Subagents.Explore = route.ID
+			case "plan":
+				policy.Subagents.Plan = route.ID
+			}
+			snapshot.ProviderPolicies[route.ProviderID] = policy
+		}
+		if active != "" {
+			policy := snapshot.ProviderPolicies[active]
+			policy.DefaultReasoningEffort = legacy.DefaultReasoningEffort
+			snapshot.ProviderPolicies[active] = policy
+		}
 	}
 	snapshot.ActiveProviderID = active
 	return snapshot
@@ -443,6 +455,18 @@ func policyWithRouteNames(snapshot Snapshot, policy RoutingPolicy) RoutingPolicy
 	policy.Subagents.Explore = name(policy.Subagents.Explore)
 	policy.Subagents.Plan = name(policy.Subagents.Plan)
 	return policy
+}
+
+// PersistedEqual reports whether two snapshots have the same durable routing
+// state. Runtime hydration, compatibility mirrors, and timestamps are ignored.
+func PersistedEqual(left, right Snapshot) bool {
+	left = sanitizedSnapshot(left)
+	right = sanitizedSnapshot(right)
+	left.UpdatedAt = time.Time{}
+	right.UpdatedAt = time.Time{}
+	left.Policy = RoutingPolicy{}
+	right.Policy = RoutingPolicy{}
+	return reflect.DeepEqual(left, right)
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {

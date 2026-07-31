@@ -276,6 +276,119 @@ func TestRoutingPolicyPUTRejectsMixedProviderPolicy(t *testing.T) {
 	return
 }
 
+func TestRoutingPolicyPUTRejectsIncapableWebSearchWithoutChangingState(t *testing.T) {
+	s := newRoutingTestServer(t)
+	catalog, _, err := s.currentRouting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRoute := catalog.ModelRoutes[0]
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := os.ReadFile(s.Routing.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"active_provider_id": activeRoute.ProviderID,
+		"web_search":         activeRoute.ID,
+	})
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload)))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "responses 后端并支持后端搜索") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+	assertFileBytesEqual(t, s.Routing.Path(), beforeRouting)
+}
+
+func TestRoutingPolicyPUTAcceptsCapableActiveProviderWebSearch(t *testing.T) {
+	s := newRoutingTestServer(t)
+	items := mustProfiles(t, s)
+	active, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := active.Provider(active.ActiveProviderID)
+	if !ok {
+		t.Fatal("active provider missing")
+	}
+	var profile profiles.Profile
+	for _, item := range items {
+		if item.ID == provider.ProfileID {
+			profile = item
+			break
+		}
+	}
+	profile.Models[0].APIBackend = "responses"
+	profile.Models[0].SupportsBackendSearch = true
+	if _, err := s.Profiles.Update(profile.ID, profile); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyCurrentRouting(); err != nil {
+		t.Fatal(err)
+	}
+	catalog, _, err := s.currentRouting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var route routingModelDTO
+	for _, candidate := range catalog.ModelRoutes {
+		if candidate.ProviderID == catalog.ActiveProviderID {
+			route = candidate
+			break
+		}
+	}
+	payload, _ := json.Marshal(map[string]any{"active_provider_id": route.ProviderID, "web_search": route.ID})
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ActivePolicy().WebSearch != route.Name {
+		t.Fatalf("web_search=%q want %q", stored.ActivePolicy().WebSearch, route.Name)
+	}
+}
+
+func TestProfilesGETMarksOnlyRoutingActiveCustomProvider(t *testing.T) {
+	s := newRoutingTestServer(t)
+	response := httptest.NewRecorder()
+	s.handleProfiles(response, loopbackRequest(http.MethodGet, "/api/profiles", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var profilesResponse []struct {
+		ID       string `json:"id"`
+		IsActive bool   `json:"is_active"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &profilesResponse); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, _ := stored.Provider(stored.ActiveProviderID)
+	activeCount := 0
+	for _, profile := range profilesResponse {
+		if profile.IsActive {
+			activeCount++
+			if profile.ID != provider.ProfileID {
+				t.Fatalf("profile %q marked active, want %q", profile.ID, provider.ProfileID)
+			}
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("active profile count=%d response=%s", activeCount, response.Body.String())
+	}
+}
+
 func TestRoutingPolicyPUTCanClearSubagentRoutes(t *testing.T) {
 	s := newRoutingTestServer(t)
 	catalog, _, err := s.currentRouting()

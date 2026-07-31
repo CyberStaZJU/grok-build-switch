@@ -222,8 +222,9 @@ func TestOfficialActivationMessageRespectsSwitchedResult(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		`if (result.switched)`,
+		`official && !profile.logged_in ? "登录"`,
 		`toast("已切换到官方账号。新开 grok 会话生效。", "success")`,
-		`toast("请完成官方账号登录，登录完成后再次点击切换", "success")`,
+		`toast("已打开官方登录。完成登录后不会自动启用，请回到此处再次点击“启用”。", "success")`,
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("official activation result handling is missing %q", fragment)
@@ -231,6 +232,28 @@ func TestOfficialActivationMessageRespectsSwitchedResult(t *testing.T) {
 	}
 	if bytes.Contains(appData, []byte(`success: "已切换到官方账号。新开 grok 会话生效。"`)) {
 		t.Fatal("official activation must not use an unconditional success message")
+	}
+}
+
+func TestProviderActivationAndRoutingDropdownContracts(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`profile.is_active ? "disabled" : ""`,
+		`customProviderSwitchWarning(routing.active_provider_id, profile)`,
+		`officialProviderSwitchWarning(state.status?.active_id)`,
+		`route.api_backend === "responses" && route.supports_backend_search === true`,
+		`id === "routingWebSearch" ? webSearchRoutes : routes`,
+		`const activeProviderID = state.routing?.active_provider_id || ""`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("provider activation/routing contract is missing %q", fragment)
+		}
+	}
+	if bytes.Contains(appData, []byte("登录并启用")) {
+		t.Fatal("logged-out official card still claims login immediately enables official routing")
 	}
 }
 

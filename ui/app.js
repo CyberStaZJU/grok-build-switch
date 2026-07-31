@@ -255,6 +255,20 @@ function customPrompt(message, defaultValue) {
   });
 }
 
+function customProviderSwitchWarning(currentProviderID, targetProvider) {
+  if (!currentProviderID || currentProviderID === targetProvider.id || currentProviderID === OFFICIAL_PROVIDER_KEY) return "";
+  return `当前启用的是另一个自定义供应商。切换到「${targetProvider.name}」会立即改写 default、web_search、Explore 和 Plan；旧会话固定的自定义模型别名仍会保留。是否继续？`;
+}
+
+function officialProviderSwitchWarning(currentProviderID) {
+  if (!currentProviderID || currentProviderID === OFFICIAL_PROVIDER_KEY) return "";
+  return "切换到官方账号会立即移除 config.toml 中全部自定义模型定义、自定义端点和认证。切回自定义供应商时会从 Profile 重建目录，但当前自定义路由会被官方路由替换。是否继续？";
+}
+
+function capableWebSearchRoutes(routes, official = false) {
+  return official ? routes : routes.filter((route) => route.api_backend === "responses" && route.supports_backend_search === true);
+}
+
 // Custom confirm dialog (window.confirm is unreliable in Wails WebView)
 function customConfirm(message, { okLabel = "确定", cancelLabel = "取消", danger = false } = {}) {
   return new Promise((resolve) => {
@@ -572,20 +586,23 @@ function renderProfiles() {
 			</div>
 			<div class="providerActions">
 				<button type="button" class="btn sm ghost" data-action="pin">${profile.pinned ? "取消置顶" : "置顶"}</button>
-        <button type="button" class="btn sm primary" data-action="activate" ${profile.is_active ? "disabled" : ""}>${official && !profile.logged_in ? "登录并启用" : profile.is_active ? "已启用" : "启用"}</button>
+        <button type="button" class="btn sm primary" data-action="activate" ${profile.is_active ? "disabled" : ""}>${official && !profile.logged_in ? "登录" : profile.is_active ? "已启用" : "启用"}</button>
 				${official ? "" : '<button type="button" class="btn sm" data-action="edit">编辑</button><button type="button" class="btn sm ghost" data-action="copy">复制</button><button type="button" class="btn sm ghost" data-action="export">导出</button><button type="button" class="btn sm danger" data-action="delete">删除</button>'}
 			</div>
 		`;
 
 		el.querySelector('[data-action="pin"]').onclick = () => toggleProviderPin(profile.key);
     el.querySelector('[data-action="activate"]').onclick = () => {
-      if (official) return activateOfficial(el.querySelector('[data-action="activate"]'));
+      const activateButton = el.querySelector('[data-action="activate"]');
+      if (official) return activateOfficial(activateButton);
       return run(async () => {
         const routing = await api("/api/routing");
+        const warning = customProviderSwitchWarning(routing.active_provider_id, profile);
+        if (warning && !(await customConfirm(warning, { okLabel: "确认切换" }))) return false;
         const policy = routing.provider_policies?.[profile.id] || {};
         await api("/api/routing/policy", { method: "PUT", body: JSON.stringify({ active_provider_id: profile.id, ...policy }) });
         await refreshAll();
-      }, { button: el.querySelector('[data-action="activate"]'), busyLabel: "启用中…", success: `已启用「${profile.name}」` });
+      }, { button: activateButton, busyLabel: "启用中…", success: `已启用「${profile.name}」` });
     };
 		bindProviderDrag(el, profile.key);
 
@@ -687,6 +704,11 @@ async function reorderProviderCards(sourceKey, targetKey) {
 }
 
 async function activateOfficial(button) {
+  const warning = state.status?.official_logged_in ? officialProviderSwitchWarning(state.status?.active_id) : "";
+  if (warning) {
+    const confirmed = await customConfirm(warning, { okLabel: "切换到官方", danger: true });
+    if (!confirmed) return;
+  }
 	await run(async () => {
 		const result = await api("/api/official/activate", { method: "POST" });
 		await refreshAll();
@@ -694,12 +716,12 @@ async function activateOfficial(button) {
 		if (result.switched) {
 			toast("已切换到官方账号。新开 grok 会话生效。", "success");
 		} else {
-			toast("请完成官方账号登录，登录完成后再次点击切换", "success");
+			toast("已打开官方登录。完成登录后不会自动启用，请回到此处再次点击“启用”。", "success");
 		}
 		return false;
 	}, {
 		button,
-		busyLabel: "切换中…",
+		busyLabel: state.status?.official_logged_in ? "切换中…" : "登录中…",
 	});
 }
 
@@ -2263,6 +2285,7 @@ function renderRouting(snapshot) {
     const official = providerID === OFFICIAL_PROVIDER_KEY;
     const policy = snapshot.provider_policies?.[providerID] || (providerID === activeProviderID ? snapshot.policy : {}) || {};
     const routes = official ? (snapshot.official_models || []) : (snapshot.model_routes || []).filter((route) => route.provider_id === providerID);
+    const webSearchRoutes = capableWebSearchRoutes(routes, official);
     const warning = $("routingCompatibilityWarning");
     warning.hidden = false;
     warning.textContent = official
@@ -2272,7 +2295,8 @@ function renderRouting(snapshot) {
     for (const [id, value] of Object.entries(values)) {
       const select = $(id);
       select.innerHTML = id === "routingDefault" ? "" : '<option value="">（未设置）</option>';
-      for (const route of routes) {
+      const selectRoutes = id === "routingWebSearch" ? webSearchRoutes : routes;
+      for (const route of selectRoutes) {
         const option = document.createElement("option");
         option.value = route.id;
         option.dataset.routeName = route.name;
@@ -2317,6 +2341,14 @@ function saveRoutingPolicy() {
     subagents: { explore: $("routingExplore").value, plan: $("routingPlan").value },
   };
   run(async () => {
+    const activeProviderID = state.routing?.active_provider_id || "";
+    if (providerID !== activeProviderID) {
+      const provider = state.routing?.providers?.find((item) => item.id === providerID);
+      const warning = providerID === OFFICIAL_PROVIDER_KEY
+        ? officialProviderSwitchWarning(activeProviderID)
+        : customProviderSwitchWarning(activeProviderID, provider || { id: providerID, name: providerID });
+      if (warning && !(await customConfirm(warning, { okLabel: providerID === OFFICIAL_PROVIDER_KEY ? "切换到官方" : "确认切换", danger: providerID === OFFICIAL_PROVIDER_KEY }))) return false;
+    }
     await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(payload) });
     await refreshAll();
     await loadRoutingView();
