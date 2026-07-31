@@ -2,12 +2,13 @@ package ssh
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"grok_switch/internal/httpjson"
 )
 
 // Handler wraps the Manager with HTTP handlers.
@@ -224,7 +225,9 @@ func (h *Handler) handleImportSSHConfig(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		IDs []string `json:"ids"` // which hosts to import (empty = all)
 	}
-	decodeJSON(w, r, &req)
+	if !decodeJSONOptions(w, r, &req, true) {
+		return
+	}
 
 	configs := ParseSSHConfig()
 	if len(req.IDs) > 0 {
@@ -287,9 +290,11 @@ func isLoopback(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(out); err != nil && err != io.EOF {
+	return decodeJSONOptions(w, r, out, false)
+}
+
+func decodeJSONOptions(w http.ResponseWriter, r *http.Request, out any, allowEmpty bool) bool {
+	if err := httpjson.Decode(w, r, out, httpjson.Options{MaxBytes: 1 << 20, AllowEmpty: allowEmpty}); err != nil {
 		writeError(w, os.ErrInvalid, http.StatusBadRequest)
 		return false
 	}
