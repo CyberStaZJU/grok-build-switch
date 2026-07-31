@@ -38,7 +38,7 @@ const TEMPLATES = {
   anthropic: {
     name: "Anthropic",
     upstream_format: "anthropic",
-    base_url: "https://api.anthropic.com",
+    base_url: "https://api.anthropic.com/v1",
     default_model: "",
     models: [],
     available_models: [],
@@ -52,14 +52,14 @@ const REASONING_EFFORT_LABELS = {
 };
 
 function normalizeReasoningEffort(effort) {
-  return REASONING_EFFORTS.includes(effort) ? effort : "low";
+  return REASONING_EFFORTS.includes(effort) ? effort : "none";
 }
 
 function newProfileDraft() {
   return {
     template: "responses",
     upstream_format: "openai_responses",
-    default_reasoning_effort: "low",
+    default_reasoning_effort: "none",
     models: [],
     available_models: [],
   };
@@ -67,35 +67,55 @@ function newProfileDraft() {
 
 let csrfTokenPromise = null;
 
-async function csrfToken() {
+async function csrfToken({ refresh = false } = {}) {
+  if (refresh) csrfTokenPromise = null;
   if (!csrfTokenPromise) {
-    csrfTokenPromise = fetch("/api/csrf").then(async (res) => {
+    const pending = fetch("/api/csrf").then(async (res) => {
       if (!res.ok) throw new Error("无法获取安全令牌");
-      return (await res.json()).token;
+      const token = String((await res.json()).token || "").trim();
+      if (!token) throw new Error("服务器返回了空安全令牌");
+      return token;
     });
+    csrfTokenPromise = pending;
+    try {
+      await pending;
+    } catch (err) {
+      if (csrfTokenPromise === pending) csrfTokenPromise = null;
+      throw err;
+    }
   }
   return csrfTokenPromise;
 }
 
+function csrfRejected(res, data) {
+  if (res.status !== 403) return false;
+  const code = String(data?.code || "").toLowerCase();
+  if (code === "csrf" || code.startsWith("csrf_") || code.endsWith("_csrf") || code.includes("csrf_token")) return true;
+  return String(data?.error || "").toLowerCase().includes("csrf");
+}
+
 async function api(path, options = {}) {
   const method = String(options.method || "GET").toUpperCase();
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (!["GET", "HEAD", "OPTIONS"].includes(method) && path.startsWith("/api/")) {
-    headers["X-Grok-Switch-CSRF"] = await csrfToken();
+  const needsCSRF = !["GET", "HEAD", "OPTIONS"].includes(method) && path.startsWith("/api/");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if (needsCSRF) {
+      headers["X-Grok-Switch-CSRF"] = await csrfToken({ refresh: attempt === 1 });
+    }
+    const res = await fetch(path, {
+      ...options,
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return data;
+    if (!needsCSRF || attempt > 0 || !csrfRejected(res, data)) {
+      const error = new Error(data.error || res.statusText || "请求失败");
+      error.code = data.code || "";
+      error.status = res.status;
+      error.data = data;
+      throw error;
+    }
   }
-  const res = await fetch(path, {
-    ...options,
-    headers,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const error = new Error(data.error || res.statusText || "请求失败");
-    error.code = data.code || "";
-    error.status = res.status;
-    error.data = data;
-    throw error;
-  }
-  return data;
 }
 
 // Custom prompt dialog (window.prompt is unreliable in Wails WebView2)
@@ -854,7 +874,7 @@ function setReasoningEffortOptions(supported = REASONING_EFFORTS, statuses = {})
   if (!select) return;
   const current = REASONING_EFFORTS.includes(select.value) ? select.value : "";
   const allowed = unique(supported.filter((effort) => REASONING_EFFORTS.includes(effort)));
-  const options = allowed.length ? allowed : ["low", "medium", "high"];
+  const options = allowed.length ? allowed : ["none"];
   select.replaceChildren(...options.map((effort) => {
     const option = document.createElement("option");
     option.value = effort;
@@ -872,7 +892,7 @@ function updateReasoningEffortMetadata() {
   const selected = $("defaultModel")?.value || "";
   const card = defaultModelCard();
   const efforts = card ? JSON.parse(card.dataset.reasoningEfforts || "[]") : [];
-  const supported = efforts.length ? efforts : ["low", "medium", "high"];
+  const supported = efforts.length ? efforts : ["none"];
   setReasoningEffortOptions(supported);
   if (!selected) {
     status.textContent = "选择默认模型后，将按该模型能力显示推理档位。";
@@ -880,7 +900,7 @@ function updateReasoningEffortMetadata() {
     status.textContent = `当前模型可用档位：${supported.join("、")}。`;
     status.classList.add("ok");
   } else {
-    status.textContent = "模型未声明档位，暂按兼容默认值 low、medium、high；可点击检测更新。";
+    status.textContent = "模型未声明推理能力，默认禁用；如需探测，请点击检测并确认会向上游发送 7 个最小请求。";
   }
 }
 
@@ -891,11 +911,15 @@ async function detectReasoningEfforts() {
   const model = card?.querySelector('[data-field="model"]')?.value.trim() || current.default_model;
   const baseURL = card?.modelDraft?.base_url || current.base_url;
   const apiBackend = card?.modelDraft?.api_backend || apiBackendFor(current.upstream_format);
+  const confirmed = await customConfirm(`将向 ${baseURL || "上游服务"} 为模型 ${model} 发送 7 个最小请求，逐项探测 reasoning_effort。是否继续？`, {
+    okLabel: "发送 7 个探测请求",
+  });
+  if (!confirmed) return false;
   const requestContext = `${current.id}\n${current.default_model}\n${model}\n${baseURL}\n${apiBackend}`;
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "正在检测支持档位…";
+    status.textContent = "正在发送 7 个最小请求检测支持档位…";
   }
   try {
     const data = await api("/api/models/reasoning-efforts", {
@@ -903,6 +927,7 @@ async function detectReasoningEfforts() {
       body: JSON.stringify({
         profile_id: current.id, base_url: baseURL, api_key: current.api_key,
         upstream_format: current.upstream_format, model, api_backend: apiBackend,
+        user_confirmed_probe: true,
       }),
     });
     const latest = readForm();
@@ -919,7 +944,7 @@ async function detectReasoningEfforts() {
       latestCard.dataset.reasoningEfforts = JSON.stringify(recommended);
       latestCard.dataset.reasoningEffortsSource = data.source === "declared" ? "declared" : "probe";
     }
-    setReasoningEffortOptions(recommended.length ? recommended : ["low", "medium", "high"], statuses);
+    setReasoningEffortOptions(recommended.length ? recommended : ["none"], statuses);
     const details = data.source === "declared"
       ? [`模型明确声明支持：${recommended.join("、") || "未提供档位"}`]
       : (data.results || []).map((item) => {
@@ -1152,7 +1177,7 @@ function readForm() {
     api_key: apiKey,
     available_models: state.availableModels,
     default_model: $("defaultModel")?.value?.trim() || "",
-    default_reasoning_effort: $("defaultReasoningEffort")?.value || "low",
+    default_reasoning_effort: $("defaultReasoningEffort")?.value || "none",
     models: rows.map((row) => {
       const name = row.querySelector('[data-field="name"]')?.value.trim() || "";
       const model = row.querySelector('[data-field="model"]')?.value.trim() || "";
