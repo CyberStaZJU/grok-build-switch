@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -17,12 +18,13 @@ import (
 )
 
 type Store struct {
-	path string
-	mu   sync.Mutex
+	path        string
+	mu          sync.Mutex
+	idGenerator func() (string, error)
 }
 
 func NewStore(path string) *Store {
-	return &Store{path: path}
+	return &Store{path: path, idGenerator: newID}
 }
 
 func (s *Store) Path() string {
@@ -57,10 +59,11 @@ func (s *Store) Create(profile Profile) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	now := time.Now()
-	if profile.ID == "" {
-		profile.ID = newID()
+	profile.ID, err = s.uniqueIDLocked(profiles)
+	if err != nil {
+		return Profile{}, err
 	}
+	now := time.Now()
 	if profile.CreatedAt.IsZero() {
 		profile.CreatedAt = now
 	}
@@ -148,6 +151,13 @@ func (s *Store) ReadLegacyRoutingFields() (*LegacyRoutingFields, error) {
 	if err != nil {
 		return nil, err
 	}
+	var persisted []Profile
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return nil, err
+	}
+	if err := validatePersistedIDs(persisted); err != nil {
+		return nil, s.quarantineLocked(data, err)
+	}
 	var rawProfiles []map[string]any
 	if err := json.Unmarshal(data, &rawProfiles); err != nil {
 		return nil, err
@@ -214,13 +224,69 @@ func (s *Store) readLocked() ([]Profile, error) {
 		}
 		return profiles, nil
 	}
+	if err := validatePersistedIDs(profiles); err != nil {
+		return nil, s.quarantineLocked(data, err)
+	}
 	for i := range profiles {
 		profiles[i] = Normalize(profiles[i])
 	}
 	return profiles, nil
 }
 
+func validatePersistedIDs(profiles []Profile) error {
+	seen := make(map[string]struct{}, len(profiles))
+	for i, profile := range profiles {
+		if profile.ID == "" {
+			return fmt.Errorf("profile at index %d has empty id", i)
+		}
+		if _, exists := seen[profile.ID]; exists {
+			return fmt.Errorf("duplicate profile id %q", profile.ID)
+		}
+		seen[profile.ID] = struct{}{}
+	}
+	return nil
+}
+
+func (s *Store) quarantineLocked(original []byte, cause error) error {
+	backup, err := recovery.BackupCorrupt(s.path)
+	if err != nil {
+		return fmt.Errorf("invalid profile identities: %v; quarantine profiles: %w", cause, err)
+	}
+	preserved, err := os.ReadFile(backup)
+	if err != nil {
+		return fmt.Errorf("invalid profile identities: %v; verify quarantine %s: %w", cause, backup, err)
+	}
+	if !bytes.Equal(preserved, original) {
+		return fmt.Errorf("invalid profile identities: %v; quarantine %s did not preserve original bytes", cause, backup)
+	}
+	log.Printf("quarantined profiles file %s after invalid profile identities: %v; backup=%s", s.path, cause, backup)
+	return fmt.Errorf("invalid profile identities: %v; profiles quarantined at %s", cause, backup)
+}
+
+func (s *Store) uniqueIDLocked(profiles []Profile) (string, error) {
+	used := make(map[string]struct{}, len(profiles))
+	for _, profile := range profiles {
+		used[profile.ID] = struct{}{}
+	}
+	for attempts := 0; attempts < 128; attempts++ {
+		id, err := s.idGenerator()
+		if err != nil {
+			return "", fmt.Errorf("generate profile id: %w", err)
+		}
+		if id == "" {
+			continue
+		}
+		if _, exists := used[id]; !exists {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("generate unique profile id: exhausted attempts")
+}
+
 func (s *Store) writeLocked(profiles []Profile) error {
+	if err := validatePersistedIDs(profiles); err != nil {
+		return fmt.Errorf("write profiles: %w", err)
+	}
 	data, err := json.MarshalIndent(profiles, "", "  ")
 	if err != nil {
 		return err
@@ -257,10 +323,10 @@ func atomicWrite(path string, data []byte) error {
 	return nil
 }
 
-func newID() string {
-	var b [6]byte
+func newID() (string, error) {
+	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", err
 	}
-	return fmt.Sprintf("%d-%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
+	return hex.EncodeToString(b[:]), nil
 }
