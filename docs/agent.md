@@ -1,348 +1,152 @@
-# Grok Build Switch — Agent 文档
+# Grok Build Switch — 维护者文档
 
-> 面向维护者的架构与约定手册。写给你自己，也写给下一个接手的人。
+> 面向维护者的当前架构、产品边界与数据安全约定。最后更新：2026-07-30。
 
 ---
 
 ## 1. 项目定位
 
-Grok Build Switch 是一个 macOS 桌面应用，作为 **Grok CLI 的统一代理与供应商路由器**。它让用户在多个 AI 供应商（OpenAI 兼容、Anthropic、CodeBuddy、订阅代理、官方 Grok 等）之间切换，而无需手动编辑 `~/.grok/config.toml`。
+Grok Build Switch 是一个 macOS 桌面应用，用于管理 Grok CLI 官方登录路由、普通 Profile、统一模型路由、订阅代理和 `~/.grok/config.toml`，并提供 LAN、SSH、菜单栏与 Wails 入口。
 
-### 1.1 代码与资产真相源
+### 1.1 真相源与工作区边界
 
-- **GitHub `CyberStaZJU/grok-build-switch` 是代码、测试、轻量文档和发布记录的权威真相源**；本机 `~/Documents/System/grok-build-switch` 只是可丢弃、可重新 clone 的工作副本。
-- 本地未提交修改在 commit 并 push 到 GitHub 前仍是唯一副本，禁止把 dirty checkout 当作已备份内容删除或重建。
-- `dist/`、`.app/`、DMG、日志和运行配置不进入仓库；正式安装包通过 GitHub Releases 发布，需要时重新下载或构建。
-- `ui/vendor/` 是 tracked `go:embed` 前端资产，属于源码的一部分；根 `vendor/` 是 `go test -mod=vendor`/离线构建依赖并包含固定版本 CLIProxyAPI 包，只有在构建脚本能从锁定版本可靠重建并通过测试后才可清理。
-- API key、OAuth、Profile、路由、会话和本机应用状态只保存在 `~/Library/Application Support/Grok Build Switch/`，**绝不上传 GitHub**。
+- GitHub `CyberStaZJU/grok-build-switch` 是代码、测试、轻量文档和发布记录的权威源。
+- 本地未提交修改在 commit/push 前是不可替代的工作，不得重置或覆盖。
+- 构建产物、日志、凭据和运行配置不进入 Git。
+- 修改当前产品文档时，不回写历史博客或历史设计文档。
 
-核心能力：
-- **多供应商路由**：一个 GUI 管理多个 Profile，每个 Profile 含多个模型定义。
-- **会话保持**：跨供应商切换时，通过逻辑会话图（session graph）保留对话上下文。
-- **订阅代理**：内嵌 CLIProxyAPI，把 Grok 的请求转发到 ChatGPT/Gemini 订阅账号。
-- **CodeBuddy 集成**：本地代码助手，纯文本、只读、无工具调用。
-- **ACP Agent 管理**：通过 `grok agent stdio` 启动/管理 Grok Agent 子进程。
+### 1.2 当前产品边界
 
----
+保留能力：
 
-## 2. 入口点与构建标签
+- Grok CLI 官方登录与官方路由；
+- 普通 Profile；
+- default、web_search、explore、plan 统一模型路由；
+- CLIProxyAPI 订阅代理；
+- `config.toml` 查看、校验与编辑；
+- LAN、SSH、macOS 菜单栏和 Wails。
 
-| 文件 | 构建标签 | 作用 |
-|:---|:---|:---|
-| `main.go` | `!wailsgui` | 默认入口：HTTP 服务器 + 系统托盘 + 浏览器 UI |
-| `gui_main.go` | `wailsgui` | Wails 桌面 GUI 入口 |
-
-构建命令（`build-macos.sh`）：
-```bash
-go build -tags wailsgui,desktop,production -o "Grok Build Switch.app" .
-```
-
-关键构建标签：
-- `wailsgui`：启用 Wails 桌面 GUI（默认关闭，走托盘+浏览器）。
-- `desktop`：启用桌面平台特性。
-- `production`：启用生产模式（崩溃日志、单实例锁等）。
+以上清单是完整产品范围。清单之外的旧扩展已移除；维护者不得在无新产品决策时重新接线，也不得在当前说明中保留其功能、接口或数据目录清单。
 
 ---
 
-## 3. 模块布局（`internal/`）
+## 2. 入口与核心职责
 
-```
-internal/
-├── agentbridge/     # ACP Agent 子进程管理（启动/停止/会话/工具/权限）
-├── autostart/       # 开机自启动（LaunchAgent / 注册表）
-├── cachestats/      # Grok 缓存统计
-├── cliproxy/        # CLIProxyAPI 生命周期管理（内嵌二进制、启动/停止）
-├── codebuddy/       # CodeBuddy CLI 发现与调用
-├── config/          # TOML 读写（tomlio.go）、路由到 Profile 的映射（routing.go）
-├── cpamint/         # CPA Mint 服务
-├── crash/           # 崩溃捕获与报告
-├── grokauth/        # 官方 Grok 认证状态
-├── grokpool/        # Grok 认证目录池管理
-├── netproxy/        # 网络代理
-├── notify/          # 系统通知
-├── paths/           # 数据目录路径解析与迁移
-├── profiles/        # Profile 存储（profiles.json）
-├── recovery/        # 损坏文件备份恢复
-├── registrar/       # 账号注册服务
-├── remoteaccess/    # 局域网访问会话
-├── routing/         # 路由模型与策略（routing.json）
-├── server/          # HTTP 服务器与所有 API 处理器
-├── settings/        # 应用设置（settings.json）
-├── singleinstance/  # 单实例锁
-├── ssh/             # SSH 远程访问
-├── switcher/        # config.toml 事务性切换与备份
-└── tray/            # 系统托盘 UI
-```
-
----
-
-## 4. 数据流：一次供应商切换
-
-```
-用户点击「启用」
-  → handleProfileByID (POST /api/profiles/:id/activate)
-    → prepareAgentForProviderSwitch(target)
-      → 检查是否同供应商（sameProvider）
-      → 若不同：读取旧会话历史 → 生成迁移文本 → 记录逻辑会话检查点
-    → activateProfileRouting(id) 或 sw.Activate(id)
-      → routing.ProjectWithPolicy → 重建路由目录
-      → grokconfig.PreviewRouting → 验证 TOML 可写
-      → sw.ApplyRouting → 备份 + 原子写入 config.toml
-      → routing.Replace → 持久化路由策略
-      → profiles.SetActive → 更新 active 标记
-    → commitProviderHandoff(handoff)
-      → 停止旧 Agent 子进程
-      → 保存 handoff 状态（供下次 Agent.Start 消费）
-    → Agent.Start → 新会话 → 注入迁移文本
-```
-
-**事务回滚**：任何步骤失败时，按逆序回滚：恢复 config.toml、恢复 routing.json、恢复 active profile。
-
----
-
-## 5. 核心数据结构
-
-### 5.1 Profile（`internal/profiles/model.go`）
-
-```go
-type Profile struct {
-    ID, Name, Source, Template string
-    UpstreamFormat string            // openai_chat / openai_responses / anthropic / ...
-    BaseURL, APIKey string
-    AvailableModels []string
-    DefaultModel, DefaultReasoningEffort string
-    WebSearchModel string               // 联网搜索模型（可空）
-    SubagentsModels struct{ Explore, Plan string }
-    Models []ModelDef                   // 完整模型定义列表
-    IsActive bool
-    WebSearchCapable bool               // 运行时计算，不序列化
-}
-
-type ModelDef struct {
-    Name, Model, BaseURL, APIKey, APIBackend string
-    SupportsBackendSearch, SupportsReasoningEffort bool
-    ReasoningEfforts []string
-    ContextWindow, MaxCompletionTokens int64
-}
-```
-
-### 5.2 Routing（`internal/routing/model.go`）
-
-```go
-type RoutingPolicy struct {
-    Official bool
-    Default, DefaultReasoningEffort string
-    WebSearch string
-    WebSearchCapable bool
-    Subagents struct{ Explore, Plan string }
-}
-
-type ModelRoute struct {
-    ID, Name, ProviderID, ProfileModel string
-    Model, APIBackend, BaseURL, APIKey string  // 运行时注入，不序列化
-    SupportsBackendSearch, SupportsReasoningEffort bool
-    ReasoningEfforts []string
-}
-
-type Snapshot struct {
-    Version int
-    Providers []Provider
-    ModelRoutes []ModelRoute
-    Policy RoutingPolicy
-    UpdatedAt time.Time
-    Hydrated bool  // 标记是否已注入运行时凭证
-}
-```
-
-### 5.3 Session Graph（`internal/server/session_graph.go`）
-
-```
-logicalSession (稳定 ID)
-  ├── branch: {providerID|backend|baseURL} → native session (provider A)
-  └── branch: {providerID|backend|baseURL} → native session (provider B)
-```
-
-- 逻辑会话 ID 在跨供应商切换时保持不变。
-- 每个供应商分支保留自己的原生 session ID。
-- 健康标记：`healthy` / `degraded`。
-
----
-
-## 6. 持久化文件
-
-| 文件 | 位置 | 作用 |
-|:---|:---|:---|
-| `profiles.json` | `~/Library/Application Support/Grok Build Switch/` | 所有供应商 Profile |
-| `routing.json` | 同上 | 路由目录与策略（凭证已脱敏） |
-| `settings.json` | 同上 | 应用设置（端口、自启动等） |
-| `session_graph.json` | 同上 | 逻辑会话图 |
-| `grok_switch.log` | 同上 | 运行日志 |
-| `config.toml` | `~/.grok/config.toml` | Grok CLI 的实时配置（Switch 写入） |
-| `backups/` | 数据目录 | config.toml 自动备份（最多 10 份） |
-
----
-
-## 7. 约定与禁忌
-
-### 7.1 安全
-- **永不序列化凭证到 routing.json**：`sanitizedSnapshot` 在写入前清除所有 BaseURL/APIKey/ExtraHeaders。
-- **永不日志输出 API Key**：`publicCodeBuddyStatus` 等函数会脱敏。
-- **config.toml 写入必须原子**：`atomicWrite` 使用 tempfile + rename。
-
-### 7.2 单例
-- **只运行一个 CLIProxyAPI 进程**：`cliproxy.Manager` 保证。
-- **只运行一个 grok_switch 实例**：`singleinstance.Acquire` 文件锁。
-
-### 7.3 事务
-- config.toml 修改前**必须备份**：`sw.Backup()`。
-- 路由策略修改是**全量替换**：先 `PreviewRouting` 验证，再 `ApplyRouting` + `Replace`。
-- 失败时必须**按逆序回滚**。
-
-### 7.4 CodeBuddy
-- **纯文本、只读**：不转发 tools/functions/parallel_tool_calls。
-- **无 Edit/Write/Bash**：CodeBuddy 模型不能作为工具执行器。
-- **无 `-y`、无 daemon**：每次调用都是独立进程。
-
-### 7.5 web_search / x_search
-- 只有 `api_backend == "responses" && supports_backend_search == true` 的模型才支持原生 `x_search`。
-- 不支持的模型：`WebSearchCapable = false`，当前仅提示使用 browser-use（TODO：自动切换）。
-
----
-
-## 8. 调试经验（踩坑记录）
-
-### 8.1 stream_tool_calls 与空工具名
-
-**现象**：`todo_write` 等工具调用报 "Tool not found"，工具名为空。Grok 日志出现 `shell.turn.action_stationarity_nudge` 且 `tool_name:""`。
-
-**根因**：OpenAI 兼容 API 的 streaming tool_call 格式为增量 chunk——首个 chunk 含 `function.name`，后续 chunk 含 `function.arguments`。部分端点（如 `gpt-5.6-sol@API池`）返回的 chunk 中 `function.name` 缺失或为空，导致 Grok 解析失败，工具名丢失。
-
-**诊断方法**：
-1. 查看 Grok 日志中 `action_stationarity_nudge` 事件
-2. 用 `curl` 直接请求上游 API，观察 SSE 流中 `tool_calls[0].function.name` 是否在第一帧就出现
-
-**修复**：在 `~/.grok/config.toml` 的 `[models]` 下设置 `stream_tool_calls = false`，强制工具调用以完整 JSON 返回而非增量流式。对已知可靠的模型（LongCat-2.0、codebuddy/*）可单独设为 `true`。
-
-**影响**：`stream_tool_calls = false` 不损失模型能力，仅改变传输格式——工具调用在完成后一次性返回，而非逐 token 拼接。
-
-### 8.2 systray 与 Wails 的 AppDelegate 符号冲突
-
-**现象**：macOS 构建报 `duplicate symbol _OBJC_METACLASS_$_AppDelegate`。
-
-**根因**：Wails 框架和 `fyne.io/systray` 都在 vendored Objective-C 代码中定义了 `AppDelegate` 类，链接时产生重复符号。
-
-**修复**：在 `vendor/fyne.io/systray/systray_darwin.m` 中将 `AppDelegate` 重命名为 `SystrayAppDelegate`（包括类名、实例变量类型、`alloc/init` 调用）。
-
-**教训**：在 vendored Objective-C 代码中，类名应具备项目前缀，避免与宿主框架冲突。
-
-### 8.3 路由策略的部分合并语义
-
-**需求**：菜单栏常驻窗口需要在不覆盖其他字段的前提下，仅更新路由策略中的 `default` 字段。
-
-**方案**：`handleRoutingPolicy` 先解码为 `map[string]json.RawMessage`，检测哪些字段存在，仅合并这些字段到已存储的策略中。`decodeRoutingJSON` 在目标类型为 `*map[string]json.RawMessage` 时允许未知字段。
-
-**测试注意**：合并语义下，省略的字段保持旧值。测试必须发送显式的零值字段（如 `{"official":false,"default":"..."}`）来验证覆盖行为。
-
-### 8.4 CLIProxyAPI PATCH 返回 404
-
-**现象**：通过 CLIProxyAPI 管理 API 的 `PATCH /auth-files` 端点禁用或修改账号返回 404。
-
-**根因**：CLIProxyAPI v7.2.94 的管理 API 仅支持 `GET /auth-files` 和 `DELETE /auth-files?name=...`，不支持 PATCH。
-
-**修复**：`UpdateAccount` 和 `DeleteAccount` 改为直接操作 auth 文件（位于 `~/Library/Application Support/Grok Build Switch/cliproxy/auth/`），使用 `updateAuthFileDisabled` 和 `os.Remove`。
-
-### 8.5 CodeBuddy Harness 的 stream-json 格式
-
-**背景**：CodeBuddy CLI（`/opt/homebrew/bin/codebuddy`）是 Node.js agent 代理，`--output-format stream-json` 输出 NDJSON 流。
-
-**格式解析**：
-- 文本：`{"type":"content_block_start","content_block":{"type":"text"}}` + `{"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}`
-- 工具调用：`content_block_start`（type=tool_use）→ 多个 `input_json_delta`（增量 JSON 片段）→ `content_block_stop`
-- 工具结果：`{"type":"tool_result","tool_use_id":"...","content":"..."}`
-
-**实现要点**：
-- 需 `toolAccumulator` 结构收集跨多个 delta 的 `input_json` 片段
-- `ParseEvent` 接收 `*toolAccumulator` 参数维护状态
-- `content_block_stop` 时发射完整的 `EventToolUse`
-
-**权限模式**：桥接器固定使用只读工具白名单 `Read,Grep,Glob`。即使请求附带 Bash/Write/Edit 等工具 schema，也只视为可能残留的协议元数据，不自动提升 CodeBuddy 权限。
-
-### 8.6 菜单栏常驻（NSStatusItem）实现
-
-**目标**：点红色叉后窗口隐藏到菜单栏，类似 TailScale/输入法。
-
-**方案**：
-- 使用 `fyne.io/systray` 的 `Register()` 进入外部循环模式（`RunWithExternalLoop`）
-- Wails 的 `beforeClose` 回调返回 `true` 拦截关闭 → 调用 `WindowHide`
-- 菜单栏点击「显示主窗口」→ `WindowShow`；点击「退出」→ 调用 systray 的 stopper 释放 Cocoa 主循环后 `Wails.Exit`
-
-**构建标签分离**：`gui_tray_darwin_provider.go` 使用 `//go:build wailsgui && darwin`，避免与 Windows 的 `gui_tray_provider.go` 类型重复定义冲突。
-
-**Wails 窗口方法**：通过 `wailsRuntime.Window.Show(runtimeContext)` 和 `wailsRuntime.Window.Hide(runtimeContext)` 控制。运行时上下文存储在 `guiTrayController.wailsRuntime`。
-
-### 8.7 subagents 路由独立于 default
-
-**现象**：用户设置 `default = gpt-5.6-sol` 后，子代理（explore/plan）仍使用 LongCat-2.0。
-
-**根因**：`~/.grok/config.toml` 中 `[subagents.models]` 独立配置 `explore` 和 `plan` 模型，与 `[models].default` 是不同字段。
-
-**修复方向**：在路由策略中统一设置 `[subagents.models]` 的 explore/plan，或在路由视图中增加对这些字段的可视化配置。
-
----
-
-## 9. 常见操作
-
-### 9.1 构建与测试
-```bash
-# 运行所有测试
-go test ./...
-
-# 带竞态检测
-go test -race ./...
-
-# 构建 macOS 应用（必须在 macOS Apple Silicon 上）
-bash build-macos.sh
-
-# 仅构建不打包
-BUILD_DIR=./dist go build -tags wailsgui,desktop,production -o dist/grok_switch .
-```
-
-### 9.2 调试
-- 日志：`~/Library/Application Support/Grok Build Switch/grok_switch.log`
-- Agent 日志：`~/Library/Application Support/Grok Build Switch/agent.log`
-- 崩溃日志：`crash.ShowInfo` 原生对话框
-
-### 9.3 数据迁移
-- 旧数据目录 `~/.grok_switch` → `~/Library/Application Support/Grok Build Switch/`
-- 由 `paths.Resolve()` 自动处理。
-
-### 9.4 备份与恢复
-- config.toml 每次修改前自动备份到 `backups/`。
-- 损坏的 JSON 文件由 `recovery.BackupCorrupt` 自动备份并重建。
-
----
-
-## 10. 关键依赖
-
-| 依赖 | 版本 | 用途 |
-|:---|:---|:---|
-| `go-toml` | v2.2.4 | TOML 解析/序列化 |
-| `acp-go-sdk` | v0.13.5 | Agent Client Protocol |
-| `chromedp` | v0.16.0 | 浏览器自动化（browser-use） |
-| `wails` | v2.13.0 | 桌面 GUI 框架 |
-| CLIProxyAPI | v7.2.94 | 订阅代理（内嵌二进制） |
-| CodeBuddy | 外部 CLI | 本地代码助手 |
-
----
-
-## 11. 术语表
-
-| 术语 | 含义 |
+| 入口 | 作用 |
 |:---|:---|
-| **Profile** | 一个供应商配置，含 URL、Key、模型列表 |
-| **ModelRoute** | 路由目录中的一个模型条目（名称已消歧） |
-| **RoutingPolicy** | 当前激活的路由选择（default/web_search/explore/plan） |
-| **Hydrated Snapshot** | 已注入运行时凭证的内存路由快照（不序列化） |
-| **Session Graph** | 逻辑会话到多供应商原生会话的映射 |
-| **Provider Handoff** | 跨供应商切换时的会话迁移事务 |
-| **WebSearchCapable** | 模型是否支持原生 x_search 工具 |
+| 默认应用入口 | 启动本地 HTTP 服务、菜单栏和浏览器管理页 |
+| Wails 入口 | 启动桌面窗口并复用同一服务能力 |
+| 菜单栏 | 打开窗口、查看状态和执行常用路由操作 |
+
+两个桌面入口都应只初始化当前保留能力。入口行为必须保持一致，不得因构建标签重新暴露已移除范围。
+
+核心职责可以概括为：
+
+```text
+Profiles ─┐
+          ├─> unified routing ─> ~/.grok/config.toml
+Official ─┘
+
+Subscription proxy ─> supported proxy routes
+LAN / SSH          ─> protected remote management
+Menu bar / Wails   ─> local desktop access
+```
+
+---
+
+## 3. 路由事务
+
+路由更新应遵守：
+
+```text
+HTTP request
+  → strict decode
+  → merge current policy
+  → validate profile/model selection
+  → preview target config
+  → atomically write config.toml
+  → persist routing policy
+  → roll back this write on persistence failure
+```
+
+重要约束：
+
+- `routing.json` 表示统一路由策略，`config.toml` 表示 Grok CLI 执行配置；
+- 官方认证由 Grok CLI 官方登录流程管理；
+- 路由更新只处理配置与模型选择；
+- 普通 Profile UI 只管理基础连接信息和常用模型；
+- UI 不超出当前产品范围。
+
+---
+
+## 4. 数据边界与清理授权
+
+### 4.1 保留数据
+
+以下数据属于当前产品或 Grok CLI，必须保留：
+
+- `~/.grok/config.toml`；
+- Grok CLI 官方认证；
+- 普通 Profile；
+- 统一路由策略；
+- 订阅代理账号、令牌和凭据；
+- LAN、SSH 和当前应用设置。
+
+### 4.2 已授权清理
+
+用户已明确授权清理已移除能力遗留在应用 DataDir 中的旧记录。实现或执行清理时必须使用可审计的范围判断：
+
+1. 仅处理能够确认属于已移除能力的应用自有记录；
+2. 将 Grok CLI 官方认证列入硬性排除项；
+3. 将订阅代理账号、令牌和凭据列入硬性排除项；
+4. 不以整个目录为单位扩大删除范围；
+5. 对未知文件或混合数据停止自动删除并报告。
+
+不要在当前文档中保留已移除能力的具体旧路径或接口清单；清理实现应以代码中的受控迁移规则和测试为准。
+
+---
+
+## 5. HTTP 与安全边界
+
+当前 HTTP 服务只应暴露保留功能所需的管理和代理能力。新增或修改状态的端点必须遵守：
+
+- 默认本机监听；
+- LAN 配对与可信来源检查；
+- 修改请求的 CSRF 防护；
+- 请求体大小限制和严格解码；
+- 响应脱敏，禁止返回 API Key、OAuth token 或私有 header；
+- 不新增已移除能力的兼容端点。
+
+---
+
+## 6. 前端约定
+
+- 当前 UI 聚焦官方登录、普通 Profile、统一模型路由、订阅代理、配置编辑、LAN 和 SSH。
+- 菜单栏与 Wails 必须提供一致的当前能力。
+- UI 入口、状态卡和表单只覆盖当前产品范围。
+- 非原生搜索模型不得被描述为自动获得额外搜索工具。
+- 历史博客与设计文档不作为当前 UI 需求来源。
+
+---
+
+## 7. 构建与验证
+
+常规变更至少验证：
+
+```bash
+node --check ui/app.js
+go test ./...
+go test -tags wailsgui .
+```
+
+产品边界相关变更还应覆盖：
+
+- 官方登录和官方路由；
+- 普通 Profile 与统一路由事务；
+- 订阅代理及其凭据保留；
+- `config.toml` 编辑；
+- LAN、SSH、菜单栏和 Wails；
+- DataDir 遗留清理不会触及 Grok CLI 官方认证或订阅代理凭据；
+- 当前 UI 和当前产品文档不出现已移除能力。
+
+发布前运行构建、签名/公证检查和安装包 smoke test。构建产物必须留在 `dist/` 或仓库外，不提交 Git。

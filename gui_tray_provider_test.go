@@ -23,7 +23,13 @@ func TestGUITrayProviderClientSnapshotAndActivate(t *testing.T) {
 			_, _ = w.Write([]byte(`{"active_profile":{"id":"vendor-1","name":"供应商一"},"official_active":false,"config_matches_active":true}`))
 		case "GET /api/profiles":
 			_, _ = w.Write([]byte(`[{"id":"vendor-1","name":"供应商一","base_url":"https://one.example","is_active":true},{"id":"vendor-2","name":"供应商二","base_url":"https://two.example","is_active":false}]`))
+		case "GET /api/csrf":
+			_, _ = w.Write([]byte(`{"token":"native-token"}`))
 		case "POST /api/profiles/vendor-2/activate", "POST /api/official/activate":
+			if r.Header.Get("X-Grok-Switch-CSRF") != "native-token" {
+				http.Error(w, "missing csrf", http.StatusForbidden)
+				return
+			}
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
 			http.NotFound(w, r)
@@ -57,6 +63,7 @@ func TestGUITrayProviderClientSnapshotAndActivate(t *testing.T) {
 	for _, key := range []string{
 		"GET /api/status",
 		"GET /api/profiles",
+		"GET /api/csrf",
 		"POST /api/profiles/vendor-2/activate",
 		"POST /api/official/activate",
 	} {

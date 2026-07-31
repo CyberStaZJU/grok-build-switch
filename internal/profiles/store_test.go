@@ -61,28 +61,21 @@ func TestStoreRejectsUnsupportedDefaultReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestNormalizeAddsReasoningEffortDefaults(t *testing.T) {
+func TestNormalizePreservesReasoningCapabilityMetadata(t *testing.T) {
 	profile := Normalize(Profile{
-		DefaultModel: "grok-4.5",
-		Models:       []ModelDef{{Name: "grok-4.5", Model: "grok-4.5"}},
+		DefaultModel: "plain-model",
+		Models:       []ModelDef{{Name: "plain-model", Model: "plain-model"}},
 	})
-	if profile.DefaultReasoningEffort != "high" {
+	if profile.DefaultReasoningEffort != "" {
 		t.Fatalf("DefaultReasoningEffort = %q", profile.DefaultReasoningEffort)
 	}
 	model := profile.Models[0]
-	if !model.SupportsReasoningEffort {
-		t.Fatal("SupportsReasoningEffort should default to true")
+	if model.SupportsReasoningEffort || len(model.ReasoningEfforts) != 0 || model.ReasoningEffortsSource != "" {
+		t.Fatalf("Normalize fabricated reasoning metadata: %#v", model)
 	}
-	want := []string{"low", "medium", "high"}
-	if !stringSlicesEqual(model.ReasoningEfforts, want) {
-		t.Fatalf("ReasoningEfforts = %#v, want %#v", model.ReasoningEfforts, want)
-	}
-	if model.ReasoningEffortsSource != "default" {
-		t.Fatalf("ReasoningEffortsSource = %q, want default", model.ReasoningEffortsSource)
-	}
-	declared := Normalize(Profile{Models: []ModelDef{{Name: "m", ReasoningEffortsSource: "declared"}}})
-	if declared.Models[0].ReasoningEffortsSource != "declared" {
-		t.Fatalf("explicit ReasoningEffortsSource was overwritten: %#v", declared.Models[0])
+	declared := Normalize(Profile{Models: []ModelDef{{Name: "m", ReasoningEfforts: []string{"low", "high", "low"}, ReasoningEffortsSource: "declared"}}})
+	if !declared.Models[0].SupportsReasoningEffort || !stringSlicesEqual(declared.Models[0].ReasoningEfforts, []string{"low", "high"}) || declared.Models[0].ReasoningEffortsSource != "declared" {
+		t.Fatalf("explicit reasoning metadata was not preserved: %#v", declared.Models[0])
 	}
 }
 

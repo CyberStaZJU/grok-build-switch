@@ -220,6 +220,14 @@ func mustJSON(t *testing.T, value any) string {
 	return string(data)
 }
 
+func TestApplyOfficialRoutingTextRemovesClearedSubagents(t *testing.T) {
+	input := []byte("[models]\ndefault = 'grok-4.5'\n\n[subagents.models]\nexplore = 'old'\nplan = 'old'\n")
+	text := string(ApplyOfficialRoutingText(input, routing.RoutingPolicy{Official: true, Default: "grok-4.5"}))
+	if strings.Contains(text, "[subagents.models]") || strings.Contains(text, "explore =") || strings.Contains(text, "plan =") {
+		t.Fatalf("cleared official subagents were retained:\n%s", text)
+	}
+}
+
 func TestApplyOfficialRoutingTextKeepsOfficialModelPins(t *testing.T) {
 	input := []byte(`[endpoints]
 models_base_url = "https://private.example/v1"

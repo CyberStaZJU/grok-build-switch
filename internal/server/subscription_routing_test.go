@@ -38,7 +38,7 @@ func TestEnsureSubscriptionProxyRoutesKeepsCombinedRouting(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sw := &switcher.Switcher{ConfigPath: configPath, BackupsDir: filepath.Join(dir, "backups"), Profiles: profileStore}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
 	list, _ := profileStore.List()
 	hydrated, err := routing.ProjectWithPolicy(list, stored.Policy)
 	if err != nil {

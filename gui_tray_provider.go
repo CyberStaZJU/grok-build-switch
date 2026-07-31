@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,8 +48,10 @@ func (s guiTrayProviderSnapshot) fingerprint() string {
 }
 
 type guiTrayProviderClient struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	csrfMu    sync.Mutex
+	csrfToken string
 }
 
 func newGUITrayProviderClient(baseURL string) *guiTrayProviderClient {
@@ -91,12 +94,38 @@ func (c *guiTrayProviderClient) activateOfficial(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/api/official/activate", nil)
 }
 
+func (c *guiTrayProviderClient) csrf(ctx context.Context) (string, error) {
+	c.csrfMu.Lock()
+	defer c.csrfMu.Unlock()
+	if c.csrfToken != "" {
+		return c.csrfToken, nil
+	}
+	var response struct {
+		Token string `json:"token"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/csrf", &response); err != nil {
+		return "", err
+	}
+	if response.Token == "" {
+		return "", fmt.Errorf("本地服务未返回安全令牌")
+	}
+	c.csrfToken = response.Token
+	return c.csrfToken, nil
+}
+
 func (c *guiTrayProviderClient) do(ctx context.Context, method, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		token, err := c.csrf(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-Grok-Switch-CSRF", token)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err

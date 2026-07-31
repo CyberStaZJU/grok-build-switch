@@ -11,12 +11,25 @@ import (
 	"strings"
 	"time"
 
-	acp "github.com/coder/acp-go-sdk"
-
 	grokconfig "grok_switch/internal/config"
+	"grok_switch/internal/grokauth"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/routing"
 )
+
+var defaultOfficialRoutingModels = []profiles.ModelDef{
+	{
+		Name:                    "grok-4.5",
+		Model:                   "grok-4.5",
+		APIBackend:              "official",
+		SupportsBackendSearch:   true,
+		SupportsReasoningEffort: true,
+		ReasoningEfforts:        []string{"low", "medium", "high"},
+		ReasoningEffortsSource:  "declared",
+		ContextWindow:           500000,
+		MaxCompletionTokens:     65536,
+	},
+}
 
 type routingProviderDTO struct {
 	ID             string `json:"id"`
@@ -41,12 +54,6 @@ type routingModelDTO struct {
 	MaxCompletionTokens     int64    `json:"max_completion_tokens,omitempty"`
 }
 
-type browserUseStatusDTO struct {
-	Available bool   `json:"available"`
-	Command   string `json:"command,omitempty"`
-	Error     string `json:"error,omitempty"`
-}
-
 type routingSnapshotDTO struct {
 	Version          int                   `json:"version"`
 	Providers        []routingProviderDTO  `json:"providers"`
@@ -55,7 +62,6 @@ type routingSnapshotDTO struct {
 	OfficialLoggedIn bool                  `json:"official_logged_in"`
 	Policy           routing.RoutingPolicy `json:"policy"`
 	WebSearchCapable bool                  `json:"web_search_capable"`
-	BrowserUse       browserUseStatusDTO   `json:"browser_use"`
 	UpdatedAt        time.Time             `json:"updated_at"`
 }
 
@@ -88,9 +94,18 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 	s.routingMu.Lock()
 	defer s.routingMu.Unlock()
 
-	// Support partial updates: decode into a map to detect which fields were
-	// actually present in the request, then merge into the current policy.
-	var rawPatch map[string]json.RawMessage
+	// Support partial updates while strictly validating field names and types.
+	var rawPatch struct {
+		Official               *bool   `json:"official"`
+		Default                *string `json:"default"`
+		DefaultReasoningEffort *string `json:"default_reasoning_effort"`
+		WebSearch              *string `json:"web_search"`
+		WebSearchCapable       *bool   `json:"web_search_capable"`
+		Subagents              *struct {
+			Explore *string `json:"explore"`
+			Plan    *string `json:"plan"`
+		} `json:"subagents"`
+	}
 	if err := decodeRoutingJSON(w, r, &rawPatch); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -107,47 +122,24 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	// Merge: start from the current stored policy, override only provided fields.
 	policy := currentStored.Policy
-	if _, ok := rawPatch["official"]; ok {
-		var v bool
-		if err := json.Unmarshal(rawPatch["official"], &v); err == nil {
-			policy.Official = v
-		}
+	if rawPatch.Official != nil {
+		policy.Official = *rawPatch.Official
 	}
-	if _, ok := rawPatch["default"]; ok {
-		var v string
-		if err := json.Unmarshal(rawPatch["default"], &v); err == nil {
-			policy.Default = v
-		}
+	if rawPatch.Default != nil {
+		policy.Default = *rawPatch.Default
 	}
-	if _, ok := rawPatch["default_reasoning_effort"]; ok {
-		var v string
-		if err := json.Unmarshal(rawPatch["default_reasoning_effort"], &v); err == nil {
-			policy.DefaultReasoningEffort = v
-		}
+	if rawPatch.DefaultReasoningEffort != nil {
+		policy.DefaultReasoningEffort = *rawPatch.DefaultReasoningEffort
 	}
-	if _, ok := rawPatch["web_search"]; ok {
-		var v string
-		if err := json.Unmarshal(rawPatch["web_search"], &v); err == nil {
-			policy.WebSearch = v
-		}
+	if rawPatch.WebSearch != nil {
+		policy.WebSearch = *rawPatch.WebSearch
 	}
-	if _, ok := rawPatch["subagents"]; ok {
-		var subagentPatch map[string]json.RawMessage
-		if err := json.Unmarshal(rawPatch["subagents"], &subagentPatch); err != nil {
-			writeError(w, fmt.Errorf("读取子代理路由策略: %w", err), http.StatusBadRequest)
-			return
+	if rawPatch.Subagents != nil {
+		if rawPatch.Subagents.Explore != nil {
+			policy.Subagents.Explore = *rawPatch.Subagents.Explore
 		}
-		if raw, present := subagentPatch["explore"]; present {
-			if err := json.Unmarshal(raw, &policy.Subagents.Explore); err != nil {
-				writeError(w, fmt.Errorf("读取 explore 路由: %w", err), http.StatusBadRequest)
-				return
-			}
-		}
-		if raw, present := subagentPatch["plan"]; present {
-			if err := json.Unmarshal(raw, &policy.Subagents.Plan); err != nil {
-				writeError(w, fmt.Errorf("读取 plan 路由: %w", err), http.StatusBadRequest)
-				return
-			}
+		if rawPatch.Subagents.Plan != nil {
+			policy.Subagents.Plan = *rawPatch.Subagents.Plan
 		}
 	}
 	if policy.Official {
@@ -161,12 +153,6 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	currentHydrated, err := routing.ProjectWithPolicy(profilesList, currentStored.Policy)
-	if err != nil {
-		writeError(w, err, http.StatusInternalServerError)
-		return
-	}
-	sourceProvider, _ := providerIdentityForRouting(currentHydrated)
 	hydrated, err := routing.ProjectWithPolicy(profilesList, policy)
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -181,22 +167,6 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	targetProvider, _ := providerIdentityForRouting(hydrated)
-	var handoff *providerHandoff
-	if !sameProvider(sourceProvider, targetProvider) {
-		var same bool
-		handoff, same, err = s.prepareAgentForProviderSwitch(targetProvider)
-		if err != nil {
-			writeError(w, err, http.StatusConflict)
-			return
-		}
-		_ = same
-		if handoff != nil {
-			previousPolicy := currentStored.Policy
-			handoff.SourceRoutingPolicy = &previousPolicy
-		}
-	}
-
 	oldConfig, readErr := os.ReadFile(s.Switcher.ConfigPath)
 	configExisted := readErr == nil
 	if readErr != nil && !os.IsNotExist(readErr) {
@@ -215,15 +185,6 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	if err := s.commitProviderHandoff(handoff); err != nil {
-		rollbackErr := s.Switcher.RestoreConfigState(oldConfig, configExisted)
-		_, routingRollbackErr := s.Routing.Replace(currentHydrated)
-		if rollbackErr != nil || routingRollbackErr != nil {
-			err = fmt.Errorf("%v；恢复配置失败: %v；恢复路由失败: %v", err, rollbackErr, routingRollbackErr)
-		}
-		writeError(w, err, http.StatusConflict)
-		return
-	}
 
 	hydrated, err = routing.ProjectWithPolicy(profilesList, stored.Policy)
 	if err != nil {
@@ -234,40 +195,6 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 	hydrated.UpdatedAt = stored.UpdatedAt
 	s.changed()
 	writeJSON(w, s.routingDTO(hydrated))
-}
-
-func (s *Server) activateProfileRouting(id string) (profiles.Profile, error) {
-	if s.Routing == nil || s.Profiles == nil || s.Switcher == nil {
-		return profiles.Profile{}, fmt.Errorf("路由服务未初始化")
-	}
-	s.routingMu.Lock()
-	defer s.routingMu.Unlock()
-
-	target, err := s.Profiles.Get(id)
-	if err != nil {
-		return profiles.Profile{}, err
-	}
-	stored, err := s.Routing.Snapshot()
-	if err != nil {
-		return profiles.Profile{}, err
-	}
-	profileList, err := s.Profiles.List()
-	if err != nil {
-		return profiles.Profile{}, err
-	}
-	catalog := routing.Project(profileList)
-	defaultRoute, ok := routeForProfile(catalog, target.ID, target.DefaultModel)
-	if !ok {
-		return profiles.Profile{}, fmt.Errorf("profile %q 的默认模型 %q 没有可用路由", target.Name, target.DefaultModel)
-	}
-	policy := retainValidRoutingPolicy(stored.Policy, catalog)
-	policy.Official = false
-	policy.Default = defaultRoute.Name
-	policy.DefaultReasoningEffort = target.DefaultReasoningEffort
-	if _, err := s.applyRoutingPolicyTransaction(profileList, policy); err != nil {
-		return profiles.Profile{}, err
-	}
-	return target, nil
 }
 
 func (s *Server) handleRoutingReapply(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +248,11 @@ func (s *Server) applyCurrentRoutingLocked() error {
 }
 
 func (s *Server) applyRoutingPolicyTransaction(profileList []profiles.Profile, policy routing.RoutingPolicy) (routing.Snapshot, error) {
+	if policy.Official {
+		if err := validateOfficialRoutingPolicy(policy); err != nil {
+			return routing.Snapshot{}, err
+		}
+	}
 	hydrated, err := routing.ProjectWithPolicy(profileList, policy)
 	if err != nil {
 		return routing.Snapshot{}, err
@@ -348,43 +280,7 @@ func (s *Server) applyRoutingPolicyTransaction(profileList []profiles.Profile, p
 	}
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
-	s.applyMCPPolicyLocked(hydrated)
 	return hydrated, nil
-}
-
-// applyMCPPolicyLocked configures the Bridge's MCP servers based on the
-// subagent target providers. Non-Grok subagents get browser-use injected.
-// Must be called with routingMu held (or during init).
-func (s *Server) applyMCPPolicyLocked(hydrated routing.Snapshot) {
-	if s.Agent == nil {
-		return
-	}
-	// Collect all subagent target models and decide whether any need browser-use.
-	var servers []acp.McpServer
-	for _, subagent := range []string{"explore", "plan"} {
-		servers = append(servers, McpServersForSubagent(hydrated, subagent)...)
-	}
-	// Also consider the main session's web_search target.
-	servers = append(servers, McpServersForMain(hydrated)...)
-	s.Agent.SetMcpServers(dedupeMCPServers(servers))
-}
-
-// dedupeMCPServers removes duplicate MCP servers by name.
-func dedupeMCPServers(servers []acp.McpServer) []acp.McpServer {
-	seen := make(map[string]bool, len(servers))
-	out := make([]acp.McpServer, 0, len(servers))
-	for _, s := range servers {
-		name := ""
-		if s.Stdio != nil {
-			name = s.Stdio.Name
-		}
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		out = append(out, s)
-	}
-	return out
 }
 
 func hydratedRouteProviderID(snapshot routing.Snapshot) string {
@@ -502,22 +398,17 @@ func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 		})
 	}
 	officialModels, officialLoggedIn := s.officialRoutingModels()
-	command, _, browserUseAvailable := BrowserUseCommand()
-	browserUseStatus := browserUseStatusDTO{Available: browserUseAvailable, Command: command}
-	if !browserUseAvailable {
-		browserUseStatus.Error = "未找到 browser-use MCP 可执行文件；需要搜索回退的路由将不会获得 web_search/web_fetch 工具"
-	}
 	return routingSnapshotDTO{
 		Version: snapshot.Version, Providers: providers, ModelRoutes: models,
 		OfficialModels: officialModels, OfficialLoggedIn: officialLoggedIn,
 		Policy: snapshot.Policy, WebSearchCapable: snapshot.Policy.WebSearchCapable,
-		BrowserUse: browserUseStatus, UpdatedAt: snapshot.UpdatedAt,
+		UpdatedAt: snapshot.UpdatedAt,
 	}
 }
 
 func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {
 	effort := strings.TrimSpace(snapshot.Policy.DefaultReasoningEffort)
-	if effort == "" {
+	if effort == "" || effort == "none" {
 		return nil
 	}
 	if snapshot.Policy.Official {
@@ -571,18 +462,70 @@ func validateOfficialRoutingPolicy(policy routing.RoutingPolicy) error {
 	return nil
 }
 
-func (s *Server) officialRoutingModels() ([]routingModelDTO, bool) {
-	if s.Paths.GrokHome == "" {
-		return nil, false
+func (s *Server) resolveRoutingModel(snapshot routing.Snapshot, name string) (routing.ModelRoute, bool) {
+	if !snapshot.Policy.Official {
+		return snapshot.Route(name)
 	}
-	if _, err := os.Stat(filepath.Join(s.Paths.GrokHome, "auth.json")); err != nil {
+	baseURL, apiKey := "", ""
+	extraHeaders := map[string]string(nil)
+	if credential, ok := s.nativeOfficialCredential(); ok {
+		baseURL = strings.TrimRight(grokauth.UpstreamURL(), "/")
+		apiKey = credential.AccessToken
+		extraHeaders = map[string]string{
+			"X-XAI-Token-Auth":      "xai-grok-cli",
+			"x-grok-client-version": "0.2.93",
+			"User-Agent":            "xai-grok-workspace/0.2.93",
+		}
+	}
+	if baseURL == "" || apiKey == "" {
+		return routing.ModelRoute{}, false
+	}
+	for _, model := range defaultOfficialRoutingModels {
+		if model.Name == name || model.Model == name {
+			return routing.ModelRoute{
+				ID: model.Name, Name: model.Name, ProviderID: "official", ProfileModel: model.Name,
+				Model: model.Model, APIBackend: "responses", BaseURL: baseURL, APIKey: apiKey, ExtraHeaders: extraHeaders,
+				SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
+				ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
+				ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+			}, true
+		}
+	}
+	return routing.ModelRoute{}, false
+}
+
+func (s *Server) nativeOfficialCredential() (grokauth.Credential, bool) {
+	if s.Paths.GrokHome == "" {
+		return grokauth.Credential{}, false
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Paths.GrokHome, "auth.json"))
+	if err != nil || len(strings.TrimSpace(string(raw))) == 0 {
+		return grokauth.Credential{}, false
+	}
+	credential, err := grokauth.ParseCredential(raw)
+	if err != nil || strings.TrimSpace(credential.AccessToken) == "" {
+		return grokauth.Credential{}, false
+	}
+	if !credential.ExpiresAt.IsZero() && !credential.ExpiresAt.After(time.Now()) {
+		return grokauth.Credential{}, false
+	}
+	return credential, true
+}
+
+func (s *Server) officialLoggedIn() bool {
+	_, ok := s.nativeOfficialCredential()
+	return ok
+}
+
+func (s *Server) officialRoutingModels() ([]routingModelDTO, bool) {
+	if !s.officialLoggedIn() {
 		return nil, false
 	}
 	models := make([]routingModelDTO, 0, len(defaultOfficialRoutingModels))
 	for _, model := range defaultOfficialRoutingModels {
 		models = append(models, routingModelDTO{
 			ID: model.Name, Name: model.Name, ProviderID: "official", ProfileModel: model.Name,
-			Model: model.Model, APIBackend: "official",
+			Model: model.Model, APIBackend: "responses",
 			SupportsBackendSearch:   model.SupportsBackendSearch,
 			SupportsReasoningEffort: model.SupportsReasoningEffort,
 			ReasoningEfforts:        append([]string(nil), model.ReasoningEfforts...),
@@ -596,11 +539,7 @@ func (s *Server) officialRoutingModels() ([]routingModelDTO, bool) {
 func decodeRoutingJSON(w http.ResponseWriter, r *http.Request, out any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	decoder := json.NewDecoder(r.Body)
-	// When decoding into a map (partial update), allow unknown fields so the
-	// frontend can send a subset of policy fields.
-	if _, isMap := out.(*map[string]json.RawMessage); !isMap {
-		decoder.DisallowUnknownFields()
-	}
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
 		return fmt.Errorf("请求格式无效: %w", err)
 	}

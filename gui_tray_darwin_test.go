@@ -4,8 +4,42 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
+
+func TestDarwinTrayProviderClientAddsCSRFToken(t *testing.T) {
+	csrfRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/csrf":
+			csrfRequests++
+			_, _ = w.Write([]byte(`{"token":"darwin-token"}`))
+		case "PUT /api/routing/policy":
+			if r.Header.Get("X-Grok-Switch-CSRF") != "darwin-token" {
+				http.Error(w, "missing csrf", http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newDarwinTrayProviderClient(server.URL)
+	if err := client.updatePolicy(context.Background(), map[string]any{"default": "grok-4.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.updatePolicy(context.Background(), map[string]any{"web_search": "grok-4.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if csrfRequests != 1 {
+		t.Fatalf("CSRF requests = %d, want 1", csrfRequests)
+	}
+}
 
 func TestDarwinCloseHidesWindowToMenuBar(t *testing.T) {
 	controller := newGUITrayController("http://127.0.0.1:17878", nil)

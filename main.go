@@ -13,17 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"grok_switch/internal/agentbridge"
 	"grok_switch/internal/autostart"
 	"grok_switch/internal/browseruse"
 	"grok_switch/internal/cliproxy"
-	"grok_switch/internal/cpamint"
 	"grok_switch/internal/crash"
-	"grok_switch/internal/grokauth"
-	"grok_switch/internal/grokpool"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
-	"grok_switch/internal/registrar"
 	"grok_switch/internal/remoteaccess"
 	"grok_switch/internal/routing"
 	"grok_switch/internal/server"
@@ -90,36 +85,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	oauthClientID := currentSettings.OAuthClientID
 
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
-	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
-	grokAuthStore.SetClientID(oauthClientID)
-	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir, oauthClientID)
-	if err != nil {
-		fatal(err)
-	}
-	if err := grokAuthStore.SetProxyURL(grokPool.Status().Settings.ProxyURL); err != nil {
-		fatal(err)
-	}
-	if singleStatus, statusErr := grokAuthStore.Status(); statusErr == nil && singleStatus.Configured {
-		if raw, readErr := os.ReadFile(resolved.GrokAuthFile); readErr == nil {
-			if _, migrateErr := grokPool.Ensure([]grokpool.ImportFile{{Name: "legacy-grok-auth.json", Content: string(raw)}}); migrateErr != nil {
-				crash.Logf("migrate legacy Grok auth into pool: %v", migrateErr)
-			}
-		}
-	}
-	grokPool.Start()
-	defer grokPool.Close()
-	registrarService, err := registrar.NewService(resolved.DataDir)
-	if err != nil {
-		fatal(err)
-	}
-	defer registrarService.Close()
-	registrarService.SetClientID(oauthClientID)
 	sw := &switcher.Switcher{
 		ConfigPath: resolved.GrokConfig,
-		BackupsDir: resolved.BackupsDir,
 		Profiles:   profileStore,
 	}
 	if err := sw.EnsureDefaultProfile(); err != nil {
@@ -151,9 +120,6 @@ func main() {
 	if err := autostart.Sync(currentSettings.Autostart, exePath, currentSettings.SilentAutostart); err != nil {
 		crash.Logf("autostart sync failed: %v", err)
 	}
-	agent := agentbridge.New(resolved.GrokHome, filepath.Join(resolved.DataDir, "agent.log"))
-	agent.SetDefaultCwd(currentSettings.AgentDefaultCwd)
-	defer agent.Stop()
 	home, _ := os.UserHomeDir()
 	proxyManager := cliproxy.NewManager(resolved.DataDir, home, cliproxy.ResolveBuiltinBinary(exePath), cliproxy.DarwinKeychain{})
 	sshHandler := ssh.NewHandler(resolved.DataDir)
@@ -164,12 +130,7 @@ func main() {
 		Routing:           routingStore,
 		Settings:          settingsStore,
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
-		GrokAuth:          grokAuthStore,
-		GrokPool:          grokPool,
-		CpaMint:           cpamint.NewService(oauthClientID),
-		Registrar:         registrarService,
 		Switcher:          sw,
-		Agent:             agent,
 		SubscriptionProxy: proxyManager,
 		SSH:               sshHandler,
 		BrowserOpener:     server.SafeBrowserOpener{},
@@ -183,9 +144,6 @@ func main() {
 	if err := appServer.EnsureSubscriptionProxyRoutes(); err != nil {
 		_ = httpServer.Shutdown(context.Background())
 		fatal(fmt.Errorf("更新订阅代理路由失败: %w", err))
-	}
-	if err := appServer.EnsureCodeBuddyProfile(); err != nil {
-		crash.Logf("CodeBuddy managed profile skipped: %v", err)
 	}
 	if err := appServer.ApplyCurrentRouting(); err != nil {
 		_ = httpServer.Shutdown(context.Background())

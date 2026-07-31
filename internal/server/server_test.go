@@ -14,10 +14,60 @@ import (
 	"grok_switch/internal/settings"
 )
 
+func loopbackRequest(method, target, body string) *http.Request {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:12345"
+	request.Header.Set("Content-Type", "application/json")
+	return request
+}
+
 func TestListenRejectsInvalidPreferredPort(t *testing.T) {
 	server := &Server{}
 	if _, _, err := server.Listen(70000); err == nil {
 		t.Fatal("Listen() accepted an invalid preferred port")
+	}
+}
+
+func TestRemovedRoutesReturnNotFound(t *testing.T) {
+	s := &Server{}
+	mux := http.NewServeMux()
+	s.routes(mux)
+	for _, route := range []string{
+		"/api/agent/status",
+		"/api/agent/sessions",
+		"/api/agent/ws",
+		"/api/session-graph",
+		"/api/session-graph/merge",
+		"/api/backups",
+		"/api/backups/config.toml/restore",
+		"/api/grok-auth",
+		"/api/grok-auth/refresh",
+		"/api/grok-pool",
+		"/api/grok-pool/inspect",
+		"/api/grok-pool/bulk",
+		"/api/grok-pool/import-dir",
+		"/api/grok-pool/open-auth-dir",
+		"/api/grok-pool/accounts/account-id",
+		"/api/cpa-mint",
+		"/api/registrar",
+		"/api/registrar/probe",
+		"/api/registrar/start",
+		"/api/registrar/stop",
+		"/api/registrar/job",
+		"/api/registrar/job/log",
+		"/api/codebuddy/status",
+		"/codebuddy/v1",
+		"/codebuddy/v1/models",
+		"/codebuddy/v1/chat/completions",
+		"/grok/v1",
+		"/grok/v1/responses",
+	} {
+		request := httptest.NewRequest(http.MethodGet, route, nil)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", route, response.Code)
+		}
 	}
 }
 
@@ -102,6 +152,11 @@ func TestRemoteSessionAndOriginProtection(t *testing.T) {
 	valid.RemoteAddr = "192.168.1.10:40000"
 	valid.Host = "192.168.1.10:17878"
 	valid.Header.Set("Origin", "http://192.168.1.10:17878")
+	csrfToken, err := s.csrfToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.Header.Set(csrfHeader, csrfToken)
 	valid.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
 	response := httptest.NewRecorder()
 	next.ServeHTTP(response, valid)

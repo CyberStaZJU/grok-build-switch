@@ -1,220 +1,87 @@
 # Grok Build Switch — Plan 文档
 
-> 近期待办、中期方向与风险。最后更新：2026-07-24。
+> 近期收尾、中期方向与风险。最后更新：2026-07-31。
 
 ---
 
-## 0. 本期已完成
+## 0. 本期产品收敛
 
-| 项目 | 状态 | 关键文件 |
-|:---|:---|:---|
-| CodeBuddy 工具历史兼容与只读边界 | ✅ 完成 | `internal/codebuddy/runner.go`、`events.go`、`prompt.go`、`server/codebuddy.go` |
-| 菜单栏常驻（macOS NSStatusItem） | ✅ 完成 | `gui_tray_darwin.go`、`gui_tray_darwin_provider.go`、`vendor/fyne.io/systray/systray_darwin.m` |
-| 订阅代理状态/控制修复 | ✅ 完成 | `internal/cliproxy/adapter.go`、`internal/server/subscription_proxy.go` |
-| stream_tool_calls 配置修复 | ✅ 完成 | `~/.grok/config.toml`（全局 false，按模型覆盖 true） |
-| 路由策略部分合并语义 | ✅ 完成 | `internal/server/routing.go`（`map[string]json.RawMessage` 增量更新） |
-| 跨供应商子代理 browser-use 注入 | ✅ 部分完成 | `internal/browseruse/mcp.go`、`internal/server/browseruse_policy.go` |
-| Subagents `coding` 字段清理 | ✅ 完成 | 从 `SubagentsPolicy` 移除 `Coding` 字段，清理 10+ 文件引用 |
-| `is_active` 概念移除 | ✅ 完成 | 路由策略作为唯一真相，所有 Profile 平等参与路由 |
+当前产品范围已收敛为：Grok CLI 官方登录与路由、普通 Profile、统一模型路由、订阅代理、`config.toml` 编辑、LAN、SSH、macOS 菜单栏和 Wails 桌面窗口。
+
+核心范围之外的旧扩展已移除。当前文档、界面和运行入口只展示上述保留能力，不再保留被删功能、接口或数据目录的现行清单。
 
 ---
 
-## 1. 近期待办（本周）
+## 1. 近期验证与收尾
 
-### 1.1 修复 `/model` 切换漂移
+### 1.1 保留功能回归
 
-**目标**：用户在对话栏使用 `/model` 后，Switch 自动同步策略，不报误报，模型立即可用。
+- 验证 Grok CLI 官方登录由官方流程完成，登录后官方路由可正常应用。
+- 验证普通 Profile 的创建、编辑、删除和模型选择。
+- 验证 default、web_search、explore、plan 的统一路由事务和失败回滚。
+- 验证订阅代理生命周期、账号状态与代理路由，不改变其凭据。
+- 验证 `config.toml` 查看、校验和编辑流程。
+- 验证 LAN 配对、CSRF、SSH、菜单栏与 Wails 入口。
+- 验证当前 UI 和当前产品文档不再展示已移除能力。
 
-**方案**：
-1. 在 `currentRouting()`（`server/routing.go`）中增加「仅 default 漂移」检测：
-   - 读取磁盘 config.toml 的 `[models].default`。
-   - 若该值是路由目录中的有效路由，且与 `policy.Default` 不同，则自动更新策略。
-2. 修改 `CurrentMatchesRouting` 或 `handleStatus`：区分「供应商漂移（真）」与「模型漂移（可自动修复）」。
-3. 添加回归测试：模拟 `/model` 写入 config.toml，验证策略自动同步。
+### 1.2 DataDir 清理
 
-**涉及文件**：
-- `internal/server/routing.go`
-- `internal/config/routing.go`（`CurrentMatchesRouting`）
-- `internal/server/routing_test.go`
+2026-07-31 已完成旧 `backups/` 目录清理并核验保留数据。其余历史记录继续按明确归属逐项审计。
 
----
+用户已授权清理已移除能力留下的应用自有旧记录。执行时必须：
 
-### 1.2 web_search 自动切换到 browser-use（已部分完成）
+1. 只匹配能够确认属于已移除能力的记录；
+2. 保留 Grok CLI 官方认证；
+3. 保留订阅代理账号和凭据；
+4. 保留普通 Profile、统一路由、LAN、SSH 与应用设置；
+5. 对未知记录停止自动处理并报告。
 
-**目标**：当 `WebSearchCapable = false` 时，禁用原生搜索，自动提供 browser-use 搜索。
+### 1.3 发布前检查
 
-**已完成**：
-- `internal/browseruse/mcp.go` 实现，暴露 `web_search`/`web_fetch` 工具。
-- `internal/server/browseruse_policy.go` 实现子代理的 MCP 注入逻辑。
-
-**待完成**：
-1. **禁用原生搜索**：`ProfileForRouting` / `ApplyProfile` 中，当 `WebSearchCapable = false` 时，不写入 `[models].web_search`。
-2. **UI 提示**：路由视图中标注「此模型使用 browser-use 搜索」。
-3. **主对话的 browser-use 注入**：当前仅子代理有 browser-use 注入，主对话仍需处理。
-
-**涉及文件**：
-- `internal/config/routing.go`（`ProfileForRouting`）
-- `internal/agentbridge/bridge.go`（`NewSessionLocked`、`LoadSessionLocked`）
-- `internal/server/routing.go`（`routingDTO` 增加 `web_search_backend` 字段）
+- 运行当前项目规定的静态检查和 Go 测试。
+- 构建默认入口与 `wailsgui` 入口。
+- 对应用包执行启动、菜单栏、窗口和核心路由 smoke test。
+- 检查发布说明只描述当前能力；历史博客保持原样。
 
 ---
 
-### 1.3 统一 web_search / explore / plan 写入源
+## 2. 中期方向
 
-**目标**：消除供应商表单与路由视图的配置冲突。
+### 2.1 路由一致性
 
-**方案**：
-1. 路由策略（`routing.RoutingPolicy`）作为唯一真相。
-2. 供应商表单中的 `web_search_model`、`subagents_explore_model`、`subagents_plan_model` 仅作为「默认值」使用。
-3. 激活 Profile 时，若路由策略中对应字段为空，则从 Profile 填充；若已有值，保留路由策略的值。
-4. 路由视图保存时，不回写 Profile（避免循环）。
-5. UI 提示：「模型路由已单独配置，修改请在路由视图中进行」。
+- 继续收敛 `config.toml` 与 `routing.json` 的一致性语义。
+- 区分有效的 Grok CLI 外部模型切换与真正的配置漂移。
+- 为官方、自定义和订阅代理路由增加统一事务测试。
 
-**涉及文件**：
-- `internal/server/routing.go`（`activateProfileRouting`、`handleRoutingPolicy`）
-- `ui/app.js`（`saveRoutingPolicy`、`syncEnabledModelList`）
+### 2.2 模型能力探测
 
----
+- 以可执行能力为准展示搜索、协议和上下文支持。
+- 不基于模型名称猜测工具能力。
+- 普通 Profile UI 保持聚焦，只展示当前路由所需的基础模型选择。
 
-## 2. 中期方向（1-4 周）
+### 2.3 服务端与桌面入口
 
-### 2.1 跨供应商子代理工具协议适配（已部分完成）
-
-**目标**：explore/plan 子代理在不同供应商间可靠工作。
-
-**已完成**：`browseruse_policy.go` 在非 Grok 子代理目标时注入 browser-use MCP 替代 `x_search`。
-
-**待完成**：
-1. 主对话的 browser-use 注入（不仅限于子代理）。
-2. 子代理启动时根据目标供应商 `api_backend` 过滤/转换完整工具定义（不仅是 web_search）。
-3. 在 `repairMalformedToolHistory` 基础上增加「协议降级」层。
+- 将配置读写、模型列表和能力探测从大型服务文件中继续拆分。
+- 增加请求大小、未知字段、鉴权和 CSRF 覆盖。
+- 为菜单栏、Wails 和浏览器管理页建立一致的核心功能测试矩阵。
 
 ---
 
-### 2.2 自动探测模型能力
+## 3. 长期方向
 
-**目标**：减少手动配置 `supports_backend_search`、`reasoning_efforts`。
-
-**方案**：
-1. 利用现有的 `handleReasoningEfforts` 探测机制，扩展为通用能力探测。
-2. 新增 `GET /api/models/capabilities` 端点，探测：
-   - 是否支持 `x_search`（responses + backend_search）
-   - 是否支持 `reasoning_effort`
-   - 上下文窗口大小
-3. Profile 编辑时提供「自动探测」按钮。
-
----
-
-### 2.3 代码拆分与测试补全
-
-**目标**：降低 `server.go` 复杂度，提高测试覆盖。
-
-**方案**：
-1. 将 `handleConfig`、`handleFetchModels`、`handleReasoningEfforts` 拆到独立文件。
-2. 为 `server.go` 中剩余处理器编写表驱动测试。
-3. 增加端到端测试：模拟完整供应商切换流程。
-
----
-
-### 2.4 subagents 路由可视化
-
-**目标**：在路由视图中暴露 `[subagents.models]` 的 explore/plan 配置，避免用户困惑于 default 已变但子代理仍用旧模型。
-
-**方案**：
-1. 路由策略增加 `subagents_explore`、`subagents_plan` 字段。
-2. 路由视图增加对应选择器。
-3. 写入 config.toml 时映射到 `[subagents.models].explore/plan`。
-
----
-
-## 3. 长期方向（1-3 月）
-
-### 3.1 多平台支持
-- Windows 已有部分支持（`process_windows.go`、`autostart_windows.go`），但 GUI 和托盘待完善。
-- Linux 支持（无托盘，仅 HTTP 服务器模式）。
-
-### 3.2 配置即代码
-- 支持 `grok_switch.yaml` 声明式配置，便于版本控制和团队共享。
-- 导入/导出配置包。
-
-### 3.3 智能路由
-- 根据任务类型（编码/搜索/规划）自动选择最优供应商和模型。
-- 基于延迟/成本/成功率的反馈路由。
+- 发布自动化、签名、公证和 GitHub Release 资产验证。
+- 更清晰的版本变更与迁移说明。
+- 对保留的敏感运行配置进行权限和脱敏审计。
+- 保持产品围绕 Grok CLI 配置与路由管理，不在无新决策时扩回已移除范围。
 
 ---
 
 ## 4. 风险
 
-### 4.1 Grok CLI 协议变更
-- **风险**：`grok agent stdio` 的 ACP 协议或 config.toml schema 变更，导致 Switch 写入无效配置。
-- **缓解**：`PreviewRouting` 在写入前验证；`UseOfficialAuthText` 清理未知键；跟进 Grok 文档更新。
-
-### 4.2 CLIProxyAPI 版本锁定
-- **风险**：CLIProxyAPI 更新后，内嵌二进制不兼容。
-- **缓解**：`build-macos.sh` 中 SHA256 校验；版本号硬编码在代码中，更新时同步修改。
-
-### 4.3 macOS 签名与公证
-- **风险**：无 `APPLE_SIGNING_IDENTITY` 时退化为 ad-hoc 签名，Gatekeeper 可能拦截。
-- **缓解**：`build-macos.sh` 支持 `--require-signature` 强制要求签名；文档说明公证流程。
-
-### 4.4 凭证安全
-- **风险**：`profiles.json` 明文存储 API Key；`config.toml` 写入时若权限过大可能泄露。
-- **缓解**：文件权限 `0600`；数据目录在 `~/Library/Application Support/`；不序列化凭证到 `routing.json`。
-
-### 4.5 单 CLIProxyAPI 进程假设
-- **风险**：若用户手动启动另一个 CLIProxyAPI 实例，端口冲突。
-- **缓解**：`cliproxy.Manager` 检测现有进程；启动前检查端口占用。
-
----
-
-## 5. 决策记录
-
-### 5.1 为什么用路由层而非直接写 config.toml？
-- 直接写 config.toml 无法处理多供应商共存（模型名冲突、供应商切换时的会话保持）。
-- 路由层提供抽象：Profile → Routing → Hydrated Snapshot → config.toml。
-
-### 5.2 为什么 session graph 用逻辑 ID？
-- Grok CLI 的 session ID 是供应商原生的，跨供应商无法直接 resume。
-- 逻辑 ID 作为稳定锚点，每个供应商分支独立管理。
-
-### 5.3 为什么 CodeBuddy 保持只读？
-- CodeBuddy CLI 虽支持 Bash/Write/Edit，但 OpenAI 兼容请求中的工具 schema 可能只是 `/model` 切换后残留的会话元数据，不能据此推断用户授权执行。
-- 因此桥接层固定只开放 `Read/Grep/Glob`；历史 `tool_use/tool_result` 只作为引用文本进入 prompt，不会重放或升级权限。
-- 若未来开放写入能力，必须使用独立的显式授权字段和可审计的隔离/回收生命周期，不能通过工具名称自动触发。
-
-### 5.4 为什么菜单栏常驻选择 systray 而非纯 cgo？
-- 纯 cgo 方案（自写 Objective-C NSStatusItem）导致 `AppDelegate` 符号与 Wails 冲突。
-- `fyne.io/systray` 的 `Register()` + `RunWithExternalLoop` 模式可与 Wails 的 Cocoa 主循环共存。
-- 代价：需修改 vendored systray 的类名（`AppDelegate` → `SystrayAppDelegate`）以避免重复符号。
-
-### 5.5 为什么路由策略采用部分合并而非全量替换？
-- 菜单栏常驻窗口只需要更新 `default` 字段，不应覆盖 `web_search`/`explore/plan`。
-- `map[string]json.RawMessage` 方案允许检测请求中实际存在的字段，仅合并这些字段。
-- 全量替换要求客户端发送完整策略，增加出错概率和网络开销。
-
-### 5.6 为什么 stream_tool_calls 需要按模型配置？
-- 不同 API 端点的 streaming tool_call 实现质量不同。
-- LongCat-2.0 和 codebuddy/* 的 streaming 格式可靠，可安全启用。
-- gpt-5.6-sol@API池 等端点的 streaming chunk 可能丢失 `function.name`，必须关闭。
-- 全局默认 `false`，按模型白名单启用 `true` 是最安全的策略。
-
-### 5.7 为什么 CLIProxyAPI 账号管理改用直接文件操作？
-- CLIProxyAPI v7.2.94 管理 API 不支持 PATCH（返回 404），无法通过 HTTP 接口修改账号。
-- Auth 文件存储在 `~/Library/Application Support/Grok Build Switch/cliproxy/auth/`，格式简单。
-- 直接 `os.Remove` 删除文件比 URL 编码的 DELETE 请求更可靠。
-
----
-
-### 5.8 为什么 GitHub 是唯一代码真相源？
-- System 项目不是实验数据仓；代码、测试、轻量文档和发布记录适合由 GitHub 统一维护，本机只需保留工作 clone。
-- 本地构建产物和应用运行状态不应成为备份对象：构建产物由源码/锁定依赖重建，运行状态保存在 Application Support 且包含敏感凭证，不能进入 GitHub。
-- “GitHub 已维护”以远端分支包含对应 commit 为准；dirty 文件、仅本地 commit 或失效 remote 都不算已备份，清理 clone 前必须逐项核验。
-
----
-
-## 6. 参考
-
-- 架构手册：`docs/agent.md`
-- 状态与问题：`docs/status.md`
-- 设计文档：`docs/design/session-load-notification-overflow.md`、`docs/design/subagents-config-fix.md`
-- 用户文档：`README.md`、`docs/usage.md`
+| 风险 | 缓解措施 |
+|:---|:---|
+| 当前文档或 UI 重新出现已移除能力 | 发布前执行产品边界关键词和界面入口审查 |
+| DataDir 清理误伤保留凭据 | 使用明确归属 allowlist；官方认证与订阅代理凭据设为禁止删除 |
+| 路由与 `config.toml` 漂移 | 保持事务写入、校验和回滚测试 |
+| 非原生搜索路由被误认为可用 | 只暴露实际可执行能力 |
+| 多入口行为不一致 | 对菜单栏、Wails 和浏览器管理页执行同一 smoke 矩阵 |

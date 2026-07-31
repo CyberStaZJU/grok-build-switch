@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,8 +59,10 @@ func (s cacheStatsSnapshot) fingerprint() string {
 
 // darwinTrayProviderClient fetches routing state and cache stats from the local server.
 type darwinTrayProviderClient struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	csrfMu    sync.Mutex
+	csrfToken string
 }
 
 func newDarwinTrayProviderClient(baseURL string) *darwinTrayProviderClient {
@@ -137,6 +140,25 @@ func (c *darwinTrayProviderClient) do(ctx context.Context, method, path string, 
 	return c.doRaw(ctx, method, path, nil, out)
 }
 
+func (c *darwinTrayProviderClient) getCSRFToken(ctx context.Context) (string, error) {
+	c.csrfMu.Lock()
+	defer c.csrfMu.Unlock()
+	if c.csrfToken != "" {
+		return c.csrfToken, nil
+	}
+	var response struct {
+		Token string `json:"token"`
+	}
+	if err := c.doRaw(ctx, http.MethodGet, "/api/csrf", nil, &response); err != nil {
+		return "", err
+	}
+	if response.Token == "" {
+		return "", fmt.Errorf("本地服务未返回安全令牌")
+	}
+	c.csrfToken = response.Token
+	return c.csrfToken, nil
+}
+
 func (c *darwinTrayProviderClient) doRaw(ctx context.Context, method, path string, body []byte, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -147,6 +169,13 @@ func (c *darwinTrayProviderClient) doRaw(ctx context.Context, method, path strin
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		token, err := c.getCSRFToken(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-Grok-Switch-CSRF", token)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

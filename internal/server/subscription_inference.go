@@ -161,128 +161,150 @@ func copyProxyHeaders(dst, src http.Header) {
 	}
 }
 
-// repairMalformedToolHistory preserves normal requests exactly. If any empty
-// tool/function name is found, legacy tool calls and results are removed from
-// the conversation while user/assistant text and current tool definitions are
-// retained. This is the request-level equivalent of a safe provider handoff.
+// repairMalformedToolHistory only removes malformed protocol-level calls and
+// their matching results. Unrelated nested objects and valid tool history are
+// preserved byte-for-byte when no repair is needed.
 func repairMalformedToolHistory(raw []byte) ([]byte, bool, error) {
-	var root any
+	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, false, err
 	}
-	if !containsEmptyName(root) {
+	changed := false
+	if messages, ok := root["messages"].([]any); ok {
+		root["messages"], changed = repairChatMessages(messages)
+	}
+	if input, ok := root["input"].([]any); ok {
+		var repaired bool
+		root["input"], repaired = repairResponsesInput(input)
+		changed = changed || repaired
+	}
+	if tools, ok := root["tools"].([]any); ok {
+		var repaired bool
+		root["tools"], repaired = cleanToolDefinitions(tools)
+		changed = changed || repaired
+	}
+	if !changed {
 		return raw, false, nil
 	}
-	if object, ok := root.(map[string]any); ok {
-		if messages, exists := object["messages"].([]any); exists {
-			object["messages"] = cleanChatMessages(messages)
-		}
-		if input, exists := object["input"].([]any); exists {
-			object["input"] = cleanResponsesInput(input)
-		}
-		if tools, exists := object["tools"].([]any); exists {
-			object["tools"] = cleanToolDefinitions(tools)
-		}
-	}
-	fillEmptyNames(root)
 	repaired, err := json.Marshal(root)
 	return repaired, true, err
 }
 
-func containsEmptyName(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		if name, ok := value["name"].(string); ok && strings.TrimSpace(name) == "" {
-			return true
+func repairChatMessages(messages []any) ([]any, bool) {
+	badIDs := map[string]bool{}
+	badFunctionNames := map[string]bool{}
+	changed := false
+	for _, item := range messages {
+		message, ok := item.(map[string]any)
+		if !ok || stringValue(message["role"]) != "assistant" {
+			continue
 		}
-		for _, child := range value {
-			if containsEmptyName(child) {
-				return true
+		if calls, ok := message["tool_calls"].([]any); ok {
+			kept := calls[:0]
+			for _, call := range calls {
+				object, _ := call.(map[string]any)
+				function, _ := object["function"].(map[string]any)
+				if name, exists := function["name"].(string); exists && strings.TrimSpace(name) == "" {
+					badIDs[stringValue(object["id"])] = true
+					changed = true
+					continue
+				}
+				kept = append(kept, call)
+			}
+			if len(kept) == 0 {
+				delete(message, "tool_calls")
+			} else {
+				message["tool_calls"] = kept
 			}
 		}
-	case []any:
-		for _, child := range value {
-			if containsEmptyName(child) {
-				return true
+		if call, ok := message["function_call"].(map[string]any); ok {
+			if name, exists := call["name"].(string); exists && strings.TrimSpace(name) == "" {
+				badFunctionNames[name] = true
+				delete(message, "function_call")
+				changed = true
 			}
 		}
 	}
-	return false
-}
-
-func cleanChatMessages(messages []any) []any {
+	if !changed {
+		return messages, false
+	}
 	out := make([]any, 0, len(messages))
 	for _, item := range messages {
 		message, ok := item.(map[string]any)
-		if !ok {
-			out = append(out, item)
+		if ok && stringValue(message["role"]) == "tool" && badIDs[stringValue(message["tool_call_id"])] {
 			continue
 		}
-		role, _ := message["role"].(string)
-		if role == "tool" || role == "function" {
+		if ok && stringValue(message["role"]) == "function" && badFunctionNames[stringValue(message["name"])] {
 			continue
 		}
-		delete(message, "tool_calls")
-		delete(message, "function_call")
-		if role == "assistant" && !hasTextContent(message["content"]) {
+		if ok && stringValue(message["role"]) == "assistant" && message["tool_calls"] == nil && message["function_call"] == nil && !hasTextContent(message["content"]) {
 			continue
 		}
-		out = append(out, message)
+		out = append(out, item)
 	}
-	return out
+	return out, true
 }
 
-func cleanResponsesInput(input []any) []any {
-	out := make([]any, 0, len(input))
+func firstNonEmptyServer(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func repairResponsesInput(input []any) ([]any, bool) {
+	badIDs := map[string]bool{}
 	for _, item := range input {
 		object, ok := item.(map[string]any)
-		if !ok {
-			out = append(out, item)
-			continue
-		}
-		typeName := strings.ToLower(stringValue(object["type"]))
-		if isToolProtocolType(typeName) {
-			continue
-		}
-		if content, ok := object["content"].([]any); ok {
-			cleaned := make([]any, 0, len(content))
-			for _, part := range content {
-				partObject, isObject := part.(map[string]any)
-				if isObject && isToolProtocolType(strings.ToLower(stringValue(partObject["type"]))) {
-					continue
-				}
-				cleaned = append(cleaned, part)
-			}
-			object["content"] = cleaned
-		}
-		out = append(out, object)
-	}
-	return out
-}
-
-func cleanToolDefinitions(tools []any) []any {
-	out := make([]any, 0, len(tools))
-	for _, item := range tools {
-		object, ok := item.(map[string]any)
-		if !ok {
+		if !ok || strings.ToLower(stringValue(object["type"])) != "function_call" {
 			continue
 		}
 		if name, exists := object["name"].(string); exists && strings.TrimSpace(name) == "" {
+			badIDs[firstNonEmptyServer(stringValue(object["call_id"]), stringValue(object["id"]))] = true
+		}
+	}
+	if len(badIDs) == 0 {
+		return input, false
+	}
+	out := make([]any, 0, len(input))
+	for _, item := range input {
+		object, ok := item.(map[string]any)
+		if ok {
+			typeName := strings.ToLower(stringValue(object["type"]))
+			id := firstNonEmptyServer(stringValue(object["call_id"]), stringValue(object["id"]))
+			if badIDs[id] && (typeName == "function_call" || typeName == "function_call_output") {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out, true
+}
+
+func cleanToolDefinitions(tools []any) ([]any, bool) {
+	out := make([]any, 0, len(tools))
+	changed := false
+	for _, item := range tools {
+		object, ok := item.(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		if name, exists := object["name"].(string); exists && strings.TrimSpace(name) == "" {
+			changed = true
 			continue
 		}
 		if function, exists := object["function"].(map[string]any); exists {
 			if name, named := function["name"].(string); named && strings.TrimSpace(name) == "" {
+				changed = true
 				continue
 			}
 		}
 		out = append(out, object)
 	}
-	return out
-}
-
-func isToolProtocolType(value string) bool {
-	return strings.Contains(value, "function_call") || strings.Contains(value, "tool_call") ||
-		strings.Contains(value, "tool_result") || strings.Contains(value, "function_result")
+	return out, changed
 }
 
 func hasTextContent(value any) bool {
@@ -299,22 +321,6 @@ func hasTextContent(value any) bool {
 		}
 	}
 	return false
-}
-
-func fillEmptyNames(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		if name, ok := value["name"].(string); ok && strings.TrimSpace(name) == "" {
-			value["name"] = "grok_switch_recovered_tool"
-		}
-		for _, child := range value {
-			fillEmptyNames(child)
-		}
-	case []any:
-		for _, child := range value {
-			fillEmptyNames(child)
-		}
-	}
 }
 
 func stringValue(value any) string {

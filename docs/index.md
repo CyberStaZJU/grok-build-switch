@@ -1,23 +1,30 @@
-# grok_build_switch
+# Grok Build Switch
 
-`grok_build_switch` 是一个 Windows 本地托盘工具，用来管理 Grok Build 的 `config.toml`。你可以把不同上游、API Key、默认模型、联网搜索模型和 explore/plan 子代理模型保存成供应商 Profile，然后一键切换。
+Grok Build Switch 是一个 macOS 本地菜单栏/桌面工具，用于管理 Grok CLI 官方登录路由、普通供应商 Profile、统一模型路由和 `~/.grok/config.toml`。
 
 ## 快速入口
 
 - [使用教程](usage.md)
-- [项目仓库](https://github.com/1parado/grok-build-switch)
+- [产品说明](product.md)
+- [当前状态](status.md)
+- [项目仓库](https://github.com/CyberStaZJU/grok-build-switch)
 - [联系方式](contact.md)
 
-## 它适合做什么
+## 当前能力
 
-- 管理多个 Grok Build 上游配置
-- 在不同供应商、模型和 API Key 之间快速切换
-- 自动备份切换前的 `config.toml`
-- 通过本地 Web 面板完成配置和编辑
-- 使用 Windows 托盘菜单快速打开面板或切换供应商
+- 使用 Grok CLI 官方登录流程并切换官方模型路由
+- 管理多个普通 Profile、Base URL、API Key 和模型
+- 配置 default、web_search、explore 和 plan 统一路由
+- 使用内嵌 CLIProxyAPI 管理订阅代理
+- 查看、校验和编辑 `config.toml`
+- 通过 LAN、SSH、macOS 菜单栏和 Wails 使用管理功能
 
-## 下载
+## 当前产品边界
 
-前往 GitHub 仓库的 [Releases](https://github.com/1parado/grok-build-switch/releases) 页面下载 Windows 可执行文件。
+“当前能力”是完整产品范围；其他旧扩展已移除，不再作为当前功能、接口或数据目录列出。
 
+用户已授权清理这些已移除能力留下的应用 DataDir 旧记录。该清理不得删除 Grok CLI 官方认证，也不得删除订阅代理账号或凭据。
 
+## 安装
+
+当前 macOS arm64 版本请按仓库 README 从源码构建；发布资产可用后再从项目 Releases 页面下载。

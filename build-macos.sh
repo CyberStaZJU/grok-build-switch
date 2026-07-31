@@ -12,11 +12,35 @@ if [[ "$VERSION" =~ ^v[0-9] ]]; then
 fi
 EXECUTABLE_NAME="grok_switch"
 ARCH="arm64"
+MACOS_MIN_VERSION="15.0"
 BUILD_DIR="${BUILD_DIR:-dist/macos}"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
 CONTENTS="${APP_BUNDLE}/Contents"
 DMG_PATH="${BUILD_DIR}/${APP_NAME// /-}-${VERSION}-macOS-${ARCH}.dmg"
 REQUIRE_SIGNATURE=false
+
+verify_macos_minos() {
+  local binary="$1"
+  local minos
+  minos="$(xcrun vtool -show-build "$binary" | awk '/^[[:space:]]*minos / { print $2; exit }')"
+  if [[ -z "$minos" ]]; then
+    printf 'error: unable to determine macOS minimum version for %s.\n' "$binary" >&2
+    exit 1
+  fi
+  if ! awk -v actual="$minos" -v declared="$MACOS_MIN_VERSION" 'BEGIN {
+    split(actual, a, "."); split(declared, d, ".")
+    for (i = 1; i <= 3; i++) {
+      av = (a[i] == "" ? 0 : a[i] + 0); dv = (d[i] == "" ? 0 : d[i] + 0)
+      if (av < dv) exit 0
+      if (av > dv) exit 1
+    }
+    exit 0
+  }'; then
+    printf 'error: %s requires macOS %s, above declared minimum %s.\n' "$binary" "$minos" "$MACOS_MIN_VERSION" >&2
+    exit 1
+  fi
+  printf 'Verified %s requires macOS %s (declared %s+).\n' "$binary" "$minos" "$MACOS_MIN_VERSION"
+}
 
 usage() {
   printf 'Usage: %s [--require-signature]\n' "$0"
@@ -45,15 +69,16 @@ fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-printf 'Building %s %s (%s)...\n' "$APP_NAME" "$VERSION" "$ARCH"
-go test -mod=vendor ./...
-CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" go build -mod=vendor \
+printf 'Building %s %s (%s, macOS %s+)...\n' "$APP_NAME" "$VERSION" "$ARCH" "$MACOS_MIN_VERSION"
+go test -mod=readonly ./...
+CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" MACOSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION" go build -mod=readonly \
   -tags "wailsgui,desktop,production" \
   -trimpath -ldflags "-s -w" \
   -o "$CONTENTS/MacOS/$EXECUTABLE_NAME" .
 
 CLIPROXY_VERSION="7.2.94"
-CLIPROXY_ARCHIVE="vendor/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
+CLIPROXY_CACHE_DIR="${CLIPROXY_CACHE_DIR:-${HOME}/Library/Caches/Grok Build Switch/build-deps}"
+CLIPROXY_ARCHIVE="${CLIPROXY_CACHE_DIR}/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
 CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
 CLIPROXY_SHA256="e3be2bc37e115a73a1a5bb11f67e6ddb72f313c4377261312b7551e58b428cef"
 CLIPROXY_SIZE=14243376
@@ -61,7 +86,8 @@ if [[ ! -f "$CLIPROXY_ARCHIVE" ]]; then
   printf 'Downloading pinned CLIProxyAPI v%s archive...\n' "$CLIPROXY_VERSION"
   mkdir -p "$(dirname "$CLIPROXY_ARCHIVE")"
   CLIPROXY_DOWNLOAD="$(mktemp "${CLIPROXY_ARCHIVE}.XXXXXX")"
-  if ! curl --fail --location --retry 3 --output "$CLIPROXY_DOWNLOAD" "$CLIPROXY_URL"; then
+  if ! curl --http1.1 --fail --location --retry 8 --retry-all-errors --continue-at - \
+    --output "$CLIPROXY_DOWNLOAD" "$CLIPROXY_URL"; then
     rm -f "$CLIPROXY_DOWNLOAD"
     printf 'error: failed to download CLIProxyAPI archive.\n' >&2
     exit 1
@@ -86,6 +112,8 @@ mkdir -p "$CONTENTS/Resources/cliproxy"
 install -m 0700 "$CLIPROXY_TMP/cli-proxy-api" "$CONTENTS/Resources/cliproxy/CLIProxyAPI"
 install -m 0600 "$CLIPROXY_TMP/LICENSE" "$CONTENTS/Resources/cliproxy/LICENSE"
 file "$CONTENTS/Resources/cliproxy/CLIProxyAPI" | grep -q 'Mach-O 64-bit executable arm64'
+verify_macos_minos "$CONTENTS/MacOS/$EXECUTABLE_NAME"
+verify_macos_minos "$CONTENTS/Resources/cliproxy/CLIProxyAPI"
 cat > "$CONTENTS/Resources/cliproxy/manifest.json" <<MANIFEST
 {"version":"v${CLIPROXY_VERSION}","commit":"36b45d57a3e804b9dfcee307e5d7b3e8cea5acfc","archive_sha256":"${CLIPROXY_SHA256}","binary":"CLIProxyAPI","license":"LICENSE"}
 MANIFEST
@@ -104,7 +132,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleIconFile</key><string>AppIcon.icns</string>
-  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
@@ -151,6 +179,12 @@ if [[ -n "$FORBIDDEN_XATTRS" ]]; then
   printf 'error: forbidden extended attributes remain before signing:\n%s\n' "$FORBIDDEN_XATTRS" >&2
   exit 1
 fi
+# Documents may be managed by a file provider that recreates Finder metadata when the
+# recursive validation above reads the bundle. Clear only the bundle root as the final
+# filesystem operation before codesign; do not recursively inspect the bundle afterward.
+xattr -d com.apple.FinderInfo "$APP_BUNDLE" 2>/dev/null || true
+xattr -d com.apple.ResourceFork "$APP_BUNDLE" 2>/dev/null || true
+xattr -d com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
 if [[ -n "$SIGN_IDENTITY" ]]; then
   printf 'Signing application with Developer ID identity.\n'
   codesign --force --deep --options runtime --timestamp \
@@ -162,7 +196,15 @@ else
   codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 fi
 
-hdiutil create -volname "$APP_NAME" -srcfolder "$APP_BUNDLE" \
+# Package from a local staging copy. Documents file providers may attach FinderInfo
+# while hdiutil recursively reads its source; staging outside Documents keeps the DMG
+# payload identical to the signed bundle without introducing forbidden metadata.
+DMG_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/gbs-dmg-stage.XXXXXX")"
+trap 'rm -rf "$CLIPROXY_TMP" "$DMG_STAGE"' EXIT
+ditto --norsrc "$APP_BUNDLE" "$DMG_STAGE/$APP_NAME.app"
+xattr -cr "$DMG_STAGE/$APP_NAME.app"
+codesign --verify --deep --strict --verbose=2 "$DMG_STAGE/$APP_NAME.app"
+hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE/$APP_NAME.app" \
   -ov -format UDZO "$DMG_PATH" >/dev/null
 
 if [[ -n "$SIGN_IDENTITY" ]]; then

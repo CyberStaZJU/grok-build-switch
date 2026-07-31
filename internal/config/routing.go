@@ -148,14 +148,16 @@ func rewriteOfficialPolicySections(lines []string, modelValues map[string]string
 	for i := 0; i < len(lines); {
 		header := parseHeader(lines[i])
 		values, managed := sectionValues[header]
-		if !managed {
+		if !managed && header != "subagents.models" {
 			out = append(out, lines[i])
 			i++
 			continue
 		}
 		end := skipSection(lines, i+1)
-		out = append(out, rewriteValues(lines[i:end], values)...)
-		seen[header] = true
+		if managed {
+			out = append(out, rewriteValues(lines[i:end], values)...)
+			seen[header] = true
+		}
 		i = end
 	}
 	for _, section := range []string{"models", "subagents.models"} {
