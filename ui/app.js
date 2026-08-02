@@ -25,26 +25,6 @@ let toastTimer = null;
 let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
 let subscriptionLoginBusy = false;
-const TEMPLATES = {
-  openai: {
-    name: "OpenAI 兼容",
-    upstream_format: "openai_chat",
-    base_url: "https://api.openai.com/v1",
-    default_model: "",
-    models: [],
-    available_models: [],
-  },
-  responses: {
-    name: "OpenAI Responses",
-    upstream_format: "openai_responses",
-    base_url: "https://api.openai.com/v1",
-    default_model: "",
-    models: [],
-    available_models: [],
-  },
-};
-
-const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const REASONING_EFFORT_LABELS = {
   none: "禁用推理 (none)", minimal: "最小 (minimal)", low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max，仅部分模型)",
@@ -56,7 +36,6 @@ function normalizeReasoningEffort(effort) {
 
 function newProfileDraft() {
   return {
-    template: "responses",
     upstream_format: "openai_responses",
     default_reasoning_effort: "none",
     models: [],
@@ -770,13 +749,12 @@ function openEdit(profile) {
 
 function fillForm(profile) {
   $("formTitle").textContent = profile.id ? "编辑供应商" : "添加供应商";
-  $("formHint").textContent = profile.id ? "修改供应商信息后保存；实际使用的模型由“模型路由”统一管理" : "名称、类型与 API Key 即可开始；保存后到“模型路由”选择要使用的模型";
+  $("formHint").textContent = profile.id ? "修改供应商信息后保存；实际使用的模型由“模型路由”统一管理" : "名称、服务地址与 API Key 即可开始；保存后到“模型路由”选择要使用的模型";
   $("profileId").value = profile.id || "";
   $("name").value = profile.name || "";
   $("baseUrl").value = profile.base_url || "";
   $("profileApiKey").value = profile.api_key || firstModelKey(profile) || "";
   $("upstreamFormat").value = upstreamFormatValue(profile.upstream_format);
-  $("templateSelect").value = templateValue(profile);
   $("defaultReasoningEffort").value = normalizeReasoningEffort(profile.default_reasoning_effort);
   state.availableModels = unique([
     ...(profile.available_models || []),
@@ -790,38 +768,6 @@ function fillForm(profile) {
   syncEnabledModelList(profile.default_model || "");
   hideConnectionStatus();
   if ($("connectBlock")) $("connectBlock").open = false;
-}
-
-function applyTemplate(key) {
-  const tpl = TEMPLATES[key];
-  if (!tpl) return;
-  const keepName = $("name").value.trim();
-  const keepKey = $("profileApiKey").value.trim();
-  // Template only fills connection skeleton — no default models, no enabled models.
-  fillForm({
-    id: $("profileId").value,
-    name: keepName || tpl.name,
-    template: key,
-    upstream_format: tpl.upstream_format,
-    base_url: tpl.base_url,
-    api_key: keepKey || tpl.api_key || "",
-    default_reasoning_effort: $("defaultReasoningEffort").value,
-    default_model: "",
-    models: [],
-    available_models: [],
-  });
-  $("templateSelect").value = key;
-  toast(`已套用「${tpl.name}」地址与协议，请自行启用模型`, "info");
-}
-
-function templateValue(profile) {
-  if (TEMPLATE_KEYS.has(profile.template)) return profile.template;
-  // Older profiles did not persist their selected template. Recover the
-  // closest template from the protocol while defaulting new profiles to Responses.
-  if (!profile.id && !profile.name && !profile.base_url) return "responses";
-  if (profile.upstream_format === "openai_responses" || profile.upstream_format === "responses") return "responses";
-  if (profile.upstream_format === "anthropic" || profile.upstream_format === "messages") return "custom";
-  return "openai";
 }
 
 function copyProfile(profile) {
@@ -840,7 +786,6 @@ function copyProfile(profile) {
 function stripSecrets(profile, includeKey) {
   const out = {
     name: profile.name,
-    template: profile.template || templateValue(profile),
     upstream_format: profile.upstream_format,
     base_url: profile.base_url,
     default_model: profile.default_model,
@@ -1304,7 +1249,6 @@ function readForm() {
   return {
     id: $("profileId").value,
     name: $("name").value.trim(),
-    template: $("templateSelect").value || "responses",
     upstream_format: $("upstreamFormat").value,
     base_url: $("baseUrl").value.trim(),
     api_key: apiKey,
@@ -2084,10 +2028,6 @@ if ($("layoutListBtn")) {
 }
 
 // Edit form
-$("templateSelect").onchange = () => {
-  const key = $("templateSelect").value;
-  if (key !== "custom") applyTemplate(key);
-};
 $("cancelBtn").onclick = () => fillForm(newProfileDraft());
 $("upstreamFormat").onchange = syncModelBackends;
 $("detectReasoningEffortsBtn").onclick = () => run(detectReasoningEfforts, {

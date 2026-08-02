@@ -51,6 +51,33 @@ func TestListenInstallsHTTPErrorLogBeforeServing(t *testing.T) {
 	}
 }
 
+func TestProfileRequestsRejectRemovedPresetField(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeProfiles, err := os.ReadFile(s.Profiles.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	s.handleProfiles(response, loopbackRequest(http.MethodPost, "/api/profiles", `{"name":"legacy","template":"responses","upstream_format":"openai_responses","base_url":"https://api.example.com/v1"}`))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") || !strings.Contains(response.Body.String(), "template") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Profiles.Path(), beforeProfiles)
+}
+
+func TestProfileResponsesDoNotExposePresetMetadata(t *testing.T) {
+	s := newRoutingTestServer(t)
+	response := httptest.NewRecorder()
+	s.handleProfiles(response, loopbackRequest(http.MethodGet, "/api/profiles", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"template"`) {
+		t.Fatalf("profile response exposes removed preset field: %s", response.Body.String())
+	}
+}
+
 func TestOfficialAnthropicProfileMutationsLeaveRoutingAndConfigUnchanged(t *testing.T) {
 	s := newRoutingTestServer(t)
 	beforeProfiles, err := os.ReadFile(s.Profiles.Path())
