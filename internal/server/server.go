@@ -401,7 +401,6 @@ type profilePublicDTO struct {
 	IsActive               bool                    `json:"is_active"`
 	Name                   string                  `json:"name"`
 	Source                 string                  `json:"source,omitempty"`
-	Template               string                  `json:"template,omitempty"`
 	UpstreamFormat         string                  `json:"upstream_format"`
 	HasAPIKey              bool                    `json:"has_api_key"`
 	AvailableModels        []string                `json:"available_models"`
@@ -414,7 +413,7 @@ type profilePublicDTO struct {
 
 func publicProfile(profile profiles.Profile) profilePublicDTO {
 	out := profilePublicDTO{
-		ID: profile.ID, Name: profile.Name, Source: profile.Source, Template: profile.Template,
+		ID: profile.ID, Name: profile.Name, Source: profile.Source,
 		UpstreamFormat: profile.UpstreamFormat,
 		HasAPIKey:      profile.EffectiveAPIKey() != "", AvailableModels: append([]string(nil), profile.AvailableModels...),
 		DefaultModel: profile.DefaultModel, DefaultReasoningEffort: profile.DefaultReasoningEffort,

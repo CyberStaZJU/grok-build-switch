@@ -273,6 +273,28 @@ func TestSSHConnectionManagementControlsExist(t *testing.T) {
 	}
 }
 
+func TestProfilePresetFeatureIsAbsent(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := append(append([]byte{}, htmlData...), appData...)
+	for _, stale := range []string{
+		`id="templateSelect"`, "类型模板", "TEMPLATES", "TEMPLATE_KEYS", "applyTemplate", "templateValue",
+	} {
+		if bytes.Contains(combined, []byte(stale)) {
+			t.Fatalf("profile preset feature remains in embedded UI: %s", stale)
+		}
+	}
+	if !bytes.Contains(htmlData, []byte(`id="upstreamFormat"`)) {
+		t.Fatal("profile protocol-format selector must remain available")
+	}
+}
+
 func TestProfileEditorUsesSaveOnly(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {

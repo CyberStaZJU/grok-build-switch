@@ -10,7 +10,6 @@ const appPath = path.join(__dirname, "app.js");
 const appSource = fs.readFileSync(appPath, "utf8");
 const testableSource = appSource.split("// Custom confirm dialog")[0] + `
 this.appTest = {
-  TEMPLATES,
   api,
   csrfToken,
   newProfileDraft,
@@ -257,11 +256,12 @@ test("cache statistics render empty and missing-log states", async () => {
   assert.match(elements.cacheRecent.innerHTML, /暂无数据/);
 });
 
-test("official Anthropic template is absent and unknown reasoning defaults to none", () => {
+test("new profiles default to disabled reasoning without preset metadata", () => {
   const app = loadApp(async () => response(500));
-  assert.equal(app.TEMPLATES.anthropic, undefined);
+  const draft = app.newProfileDraft();
   assert.equal(app.normalizeReasoningEffort("unknown"), "none");
-  assert.equal(app.newProfileDraft().default_reasoning_effort, "none");
+  assert.equal(draft.default_reasoning_effort, "none");
+  assert.equal(Object.hasOwn(draft, "template"), false);
 });
 
 test("failed and empty CSRF token acquisitions are not cached", async () => {

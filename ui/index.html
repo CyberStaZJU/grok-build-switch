@@ -77,7 +77,7 @@
     <main id="viewEdit" class="view" hidden>
       <div class="pageHead">
         <h1 class="pageTitle" id="formTitle">添加供应商</h1>
-        <p class="pageDesc" id="formHint">名称、类型与 API Key 即可开始</p>
+        <p class="pageDesc" id="formHint">名称、服务地址与 API Key 即可开始</p>
       </div>
 
       <form id="profileForm" class="formCard">
@@ -86,13 +86,6 @@
         <div class="formGrid">
           <label class="field">名称
             <input id="name" required placeholder="例如 OpenRouter">
-          </label>
-          <label class="field">类型模板
-            <select id="templateSelect">
-              <option value="responses">OpenAI Responses</option>
-              <option value="custom">自定义</option>
-              <option value="openai">OpenAI 兼容</option>
-            </select>
           </label>
           <label class="field span2">服务地址
             <input id="baseUrl" required class="mono" placeholder="https://api.example.com/v1">
@@ -456,6 +449,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=49"></script>
+  <script src="/app.js?v=50"></script>
 </body>
 </html>

@@ -9,30 +9,26 @@ import (
 	"testing"
 )
 
-func TestStorePreservesProfileTemplate(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
-	created, err := store.Create(Profile{
-		Name:           "Responses Provider",
-		Template:       "responses",
-		UpstreamFormat: "openai_responses",
-		BaseURL:        "https://api.example.com/v1",
-	})
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+func TestStoreRewritesLegacyPresetMetadataWithoutPreservingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	original := []byte(`[{"id":"legacy","name":"Legacy","template":"responses","upstream_format":"openai_responses","base_url":"https://api.example.com/v1"}]` + "\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	profiles, err := store.List()
+	store := NewStore(path)
+	profile, err := store.Get("legacy")
 	if err != nil {
-		t.Fatalf("List() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if len(profiles) != 1 {
-		t.Fatalf("List() returned %d profiles, want 1", len(profiles))
+	if profile.UpstreamFormat != "openai_responses" {
+		t.Fatalf("UpstreamFormat = %q, want openai_responses", profile.UpstreamFormat)
 	}
-	if profiles[0].ID != created.ID {
-		t.Fatalf("List() profile ID = %q, want %q", profiles[0].ID, created.ID)
+	if _, err := store.Update(profile.ID, profile); err != nil {
+		t.Fatalf("Update() error = %v", err)
 	}
-	if profiles[0].Template != "responses" {
-		t.Fatalf("List() template = %q, want responses", profiles[0].Template)
+	if got := string(readBytes(t, path)); strings.Contains(got, `"template"`) {
+		t.Fatalf("legacy preset metadata persisted after rewrite: %s", got)
 	}
 }
 

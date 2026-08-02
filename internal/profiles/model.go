@@ -26,7 +26,6 @@ type Profile struct {
 	ID                     string     `json:"id"`
 	Name                   string     `json:"name"`
 	Source                 string     `json:"source,omitempty"`
-	Template               string     `json:"template,omitempty"`
 	UpstreamFormat         string     `json:"upstream_format"`
 	BaseURL                string     `json:"base_url"`
 	APIKey                 string     `json:"api_key"`
