@@ -654,10 +654,11 @@ const COLLABORATION_LAUNCH_TIERS = {
 function collaborationLaunchParameters(selectedTier = $("collaborationTier")?.value || "adaptive", objective = $("collaborationLaunchObjective")?.value || "") {
   const selected = COLLABORATION_LAUNCH_TIERS[selectedTier] || COLLABORATION_LAUNCH_TIERS.adaptive;
   const normalizedObjective = String(objective || "").trim();
+  const args = { objective: normalizedObjective || "<填写任务目标>", tier: selected.tier };
   return {
     ...selected,
     objective: normalizedObjective,
-    instruction: `使用 ${selected.label} 运行 gbs-max-collab，目标是：${normalizedObjective || "<填写任务目标>"}`,
+    instruction: `请调用 workflow 工具运行 named workflow gbs-max-collab，设置 name="gbs-max-collab"、args=${JSON.stringify(args)}，并精确设置 agent_budget=${selected.budget}。不要使用 /gbs-max-collab 或 /workflow slash 启动；如果不能精确设置 agent_budget=${selected.budget}，请不要启动并说明原因。`,
   };
 }
 
