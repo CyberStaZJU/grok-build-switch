@@ -154,6 +154,45 @@ func TestCurrentMatchesRoutingIgnoresSyntheticProfileKeyOrder(t *testing.T) {
 	}
 }
 
+func TestCurrentMatchesRoutingStrictDefaultsDetectsReasoningDriftWithoutChangingOrdinaryStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	profileList := []profiles.Profile{{
+		ID: "p", Name: "P", BaseURL: "https://p.example/v1", APIKey: "secret", DefaultModel: "m",
+		Models: []profiles.ModelDef{{Name: "m", Model: "m", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high"}, ReasoningEffortsSource: "declared"}},
+	}}
+	state := routing.Project(profileList)
+	state.ProviderPolicies["p"] = routing.RoutingPolicy{Default: "p:m", DefaultReasoningEffort: "high"}
+	snapshot, err := routing.ProjectWithSnapshot(profileList, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyRoutingToFile(path, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := strings.Replace(string(data), "default_reasoning_effort = 'high'", "default_reasoning_effort = 'medium'", 1)
+	if drifted == string(data) {
+		t.Fatalf("test did not mutate reasoning effort:\n%s", data)
+	}
+	if err := os.WriteFile(path, []byte(drifted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := CurrentMatchesRouting(path, snapshot)
+	if err != nil || !ordinary {
+		t.Fatalf("ordinary CurrentMatchesRouting() = %v, %v; runtime effort drift should remain tolerated", ordinary, err)
+	}
+	strict, err := CurrentMatchesRoutingStrictDefaults(path, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strict {
+		t.Fatal("strict collaboration routing match accepted reasoning effort drift")
+	}
+}
+
 func TestRoutingPreviewSnippetAndMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -277,5 +316,47 @@ plan = "custom-model"
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("official routing output retained %q:\n%s", forbidden, text)
 		}
+	}
+}
+
+func TestRoutingFastVariantRendersWithoutSwitchMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	standard := "subscription/codex/gpt-5.6-terra"
+	fast := standard + "-fast"
+	profilesList := []profiles.Profile{{
+		ID: "codex", Name: "Codex", BaseURL: "http://127.0.0.1:8317/v1", APIKey: "secret", DefaultModel: standard,
+		Models: []profiles.ModelDef{
+			{Name: standard, Model: standard, APIBackend: "chat_completions", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard},
+			{Name: fast, Model: fast, APIBackend: "chat_completions", SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard},
+		},
+	}}
+	state := routing.Project(profilesList)
+	state.ProviderPolicies["codex"] = routing.RoutingPolicy{Default: "codex:" + fast}
+	snapshot, err := routing.ProjectWithSnapshot(profilesList, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyRoutingToFile(path, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`default = 'subscription/codex/gpt-5.6-terra-fast'`, `[model.'subscription/codex/gpt-5.6-terra-fast']`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"speed_tier", "standard_anchor", "service_tier"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("Switch-only metadata leaked as %q:\n%s", forbidden, text)
+		}
+	}
+	matched, err := CurrentMatchesRouting(path, snapshot)
+	if err != nil || !matched {
+		t.Fatalf("CurrentMatchesRouting() = %v, %v", matched, err)
 	}
 }

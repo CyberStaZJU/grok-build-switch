@@ -50,11 +50,11 @@ type PermissionOption struct {
 // Attachment is a user-supplied file sent alongside a prompt. Images become
 // inline ACP image blocks; text files are folded into the prompt as snippets.
 type Attachment struct {
-	Kind     string `json:"kind"`               // "image" | "text_file"
-	Data     string `json:"data,omitempty"`     // base64 (no data: prefix) for images
+	Kind     string `json:"kind"`           // "image" | "text_file"
+	Data     string `json:"data,omitempty"` // base64 (no data: prefix) for images
 	MimeType string `json:"mime_type,omitempty"`
 	Name     string `json:"name,omitempty"`
-	Text     string `json:"text,omitempty"`     // file contents for text_file
+	Text     string `json:"text,omitempty"` // file contents for text_file
 }
 
 type Status struct {

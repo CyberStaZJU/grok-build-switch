@@ -128,3 +128,36 @@ func TestCoreManagementEndpointsRejectUnknownTrailingAndOversizeJSON(t *testing.
 		})
 	}
 }
+
+func TestCollaborationFullStackRejectsUnknownTrailingAndOversizeJSON(t *testing.T) {
+	s, requestBody := newCollaborationTestServer(t)
+	mux := http.NewServeMux()
+	s.routes(mux)
+	handler := s.withAccess(mux)
+	token, err := s.csrfToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "unknown", body: strings.TrimSuffix(requestBody, "}") + `,"unknown":true}`},
+		{name: "trailing", body: requestBody + `{}`},
+		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", int(managementJSONLimit)+1) + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17878/api/collaboration/preview", strings.NewReader(tc.body))
+			req.RemoteAddr = "127.0.0.1:44000"
+			req.Host = "127.0.0.1:17878"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(csrfHeader, token)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}

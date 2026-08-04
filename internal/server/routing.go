@@ -15,6 +15,10 @@ import (
 	"grok_switch/internal/routing"
 )
 
+var replaceRoutingSnapshot = func(store *routing.Store, snapshot routing.Snapshot) (routing.Snapshot, error) {
+	return store.Replace(snapshot)
+}
+
 var defaultOfficialRoutingModels = []profiles.ModelDef{
 	{
 		Name:                    "grok-4.5",
@@ -48,6 +52,8 @@ type routingModelDTO struct {
 	SupportsReasoningEffort bool     `json:"supports_reasoning_effort"`
 	ReasoningEfforts        []string `json:"reasoning_efforts,omitempty"`
 	ReasoningEffortsSource  string   `json:"reasoning_efforts_source,omitempty"`
+	SpeedTier               string   `json:"speed_tier,omitempty"`
+	StandardAnchor          string   `json:"standard_anchor,omitempty"`
 	ContextWindow           int64    `json:"context_window,omitempty"`
 	MaxCompletionTokens     int64    `json:"max_completion_tokens,omitempty"`
 }
@@ -237,9 +243,13 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	oldConfig, readErr := os.ReadFile(s.Switcher.ConfigPath)
-	configExisted := readErr == nil
-	if readErr != nil && !os.IsNotExist(readErr) {
+	oldConfig, configExisted, readErr := readRoutingFileState(s.Switcher.ConfigPath)
+	if readErr != nil {
+		writeError(w, readErr, http.StatusInternalServerError)
+		return
+	}
+	oldRouting, routingExisted, readErr := readRoutingFileState(s.Routing.Path())
+	if readErr != nil {
 		writeError(w, readErr, http.StatusInternalServerError)
 		return
 	}
@@ -247,11 +257,9 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	stored, err := s.Routing.Replace(hydrated)
+	stored, err := replaceRoutingSnapshot(s.Routing, hydrated)
 	if err != nil {
-		if rollbackErr := s.Switcher.RestoreConfigState(oldConfig, configExisted); rollbackErr != nil {
-			err = fmt.Errorf("保存路由策略失败: %v；恢复原配置失败: %w", err, rollbackErr)
-		}
+		err = s.rollbackRoutingPersistence(oldConfig, configExisted, oldRouting, routingExisted, err)
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -360,24 +368,49 @@ func (s *Server) applyRoutingSnapshotTransaction(profileList []profiles.Profile,
 	if _, err := grokconfig.PreviewRouting(s.Switcher.ConfigPath, hydrated); err != nil {
 		return routing.Snapshot{}, err
 	}
-	oldConfig, readErr := os.ReadFile(s.Switcher.ConfigPath)
-	configExisted := readErr == nil
-	if readErr != nil && !os.IsNotExist(readErr) {
+	oldConfig, configExisted, readErr := readRoutingFileState(s.Switcher.ConfigPath)
+	if readErr != nil {
+		return routing.Snapshot{}, readErr
+	}
+	oldRouting, routingExisted, readErr := readRoutingFileState(s.Routing.Path())
+	if readErr != nil {
 		return routing.Snapshot{}, readErr
 	}
 	if err := s.Switcher.ApplyRouting(hydrated); err != nil {
 		return routing.Snapshot{}, err
 	}
-	stored, err := s.Routing.Replace(hydrated)
+	stored, err := replaceRoutingSnapshot(s.Routing, hydrated)
 	if err != nil {
-		if rollbackErr := s.Switcher.RestoreConfigState(oldConfig, configExisted); rollbackErr != nil {
-			return routing.Snapshot{}, fmt.Errorf("保存路由策略失败: %v；恢复原配置失败: %w", err, rollbackErr)
-		}
-		return routing.Snapshot{}, err
+		return routing.Snapshot{}, s.rollbackRoutingPersistence(oldConfig, configExisted, oldRouting, routingExisted, err)
 	}
 	hydrated.Version = stored.Version
 	hydrated.UpdatedAt = stored.UpdatedAt
 	return hydrated, nil
+}
+
+func readRoutingFileState(path string) ([]byte, bool, error) {
+	content, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return content, true, nil
+}
+
+func (s *Server) rollbackRoutingPersistence(oldConfig []byte, configExisted bool, oldRouting []byte, routingExisted bool, cause error) error {
+	var failures []string
+	if err := s.Routing.RestoreBytes(oldRouting, routingExisted); err != nil {
+		failures = append(failures, "routing: "+err.Error())
+	}
+	if err := s.Switcher.RestoreConfigState(oldConfig, configExisted); err != nil {
+		failures = append(failures, "config: "+err.Error())
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("保存路由策略失败: %v；恢复原状态失败: %s", cause, strings.Join(failures, "; "))
+	}
+	return cause
 }
 
 func hydratedRouteProviderID(snapshot routing.Snapshot) string {
@@ -476,7 +509,8 @@ func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 			SupportsReasoningEffort: route.SupportsReasoningEffort,
 			ReasoningEfforts:        append([]string(nil), route.ReasoningEfforts...),
 			ReasoningEffortsSource:  route.ReasoningEffortsSource,
-			ContextWindow:           route.ContextWindow, MaxCompletionTokens: route.MaxCompletionTokens,
+			SpeedTier:               route.SpeedTier, StandardAnchor: route.StandardAnchor,
+			ContextWindow: route.ContextWindow, MaxCompletionTokens: route.MaxCompletionTokens,
 		})
 	}
 	officialModels, officialLoggedIn := s.officialRoutingModels()

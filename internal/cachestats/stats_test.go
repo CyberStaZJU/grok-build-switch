@@ -45,14 +45,44 @@ func TestCollectAggregatesHitRate(t *testing.T) {
 	if report.Overall.PromptTokens != 150 || report.Overall.CachedPromptTokens != 105 {
 		t.Fatalf("tokens = %d/%d", report.Overall.PromptTokens, report.Overall.CachedPromptTokens)
 	}
+	if report.Overall.CompletionTokens != 8 || report.Overall.ReasoningTokens != 2 {
+		t.Fatalf("completion/reasoning = %d/%d, want 8/2", report.Overall.CompletionTokens, report.Overall.ReasoningTokens)
+	}
 	if report.Overall.HitRate == nil || *report.Overall.HitRate < 0.69 || *report.Overall.HitRate > 0.71 {
 		t.Fatalf("hit_rate = %v", report.Overall.HitRate)
 	}
 	if len(report.ByModel) != 1 || report.ByModel[0].Model != "k3" {
 		t.Fatalf("by_model = %#v", report.ByModel)
 	}
+	if len(report.Recent) != 2 || report.Recent[0].CompletionTokens != 3 || report.Recent[1].CompletionTokens != 5 || report.Recent[1].ReasoningTokens != 2 {
+		t.Fatalf("recent completion/reasoning = %#v", report.Recent)
+	}
 	if report.Session == nil || report.Session.Turns != 2 {
 		t.Fatalf("session = %#v", report.Session)
+	}
+}
+
+func TestCollectCountsReasoningOnlyTurn(t *testing.T) {
+	home := t.TempDir()
+	logDir := filepath.Join(home, "logs")
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	line := `{"ts":"` + now + `","msg":"shell.turn.inference_done","sid":"reasoning-only","ctx":{"reasoning_tokens":7}}` + "\n"
+	if err := os.WriteFile(filepath.Join(logDir, "unified.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Collect(home, 24, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Overall.Turns != 1 || report.Overall.ReasoningTokens != 7 {
+		t.Fatalf("reasoning-only aggregate = %#v", report.Overall)
+	}
+	if len(report.Recent) != 1 || report.Recent[0].ReasoningTokens != 7 {
+		t.Fatalf("reasoning-only recent = %#v", report.Recent)
 	}
 }
 

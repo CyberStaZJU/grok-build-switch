@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"strings"
 	"testing"
 
 	"grok_switch/internal/profiles"
@@ -23,6 +24,28 @@ func TestWebSearchCapableOfficial(t *testing.T) {
 	s := Snapshot{Policy: RoutingPolicy{Official: true, WebSearch: "anything"}}
 	if !s.WebSearchCapable() {
 		t.Fatal("official mode should always be web_search capable")
+	}
+}
+
+func TestEmptyRoutingSnapshotValidatesWithoutSyntheticEmptyProviderPolicy(t *testing.T) {
+	snapshot := Project(nil)
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("empty projected snapshot invalid: %v", err)
+	}
+	projected, err := ProjectWithSnapshot(nil, snapshot)
+	if err != nil {
+		t.Fatalf("empty hydrated snapshot invalid: %v", err)
+	}
+	if _, ok := projected.ProviderPolicies[""]; ok {
+		t.Fatal("empty projected snapshot contains synthetic empty-provider policy")
+	}
+}
+
+func TestRoutingSnapshotRejectsExplicitEmptyProviderPolicy(t *testing.T) {
+	snapshot := Project(nil)
+	snapshot.ProviderPolicies[""] = RoutingPolicy{}
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("explicit empty-provider policy unexpectedly validated")
 	}
 }
 
@@ -200,5 +223,70 @@ func TestProjectWithPolicySetsWebSearchCapable(t *testing.T) {
 	}
 	if !snapshot.Policy.WebSearchCapable {
 		t.Fatal("m2 is responses + backend_search; web_search should be capable")
+	}
+}
+
+func TestProjectMapsExplicitSpeedRelationshipsWithoutChangingStandardIdentity(t *testing.T) {
+	standard := "subscription/codex/gpt-5.6-terra"
+	fast := standard + "-fast"
+	snapshot := Project([]profiles.Profile{{
+		ID: "codex", Name: "Codex", DefaultModel: standard,
+		Models: []profiles.ModelDef{
+			{Name: fast, Model: fast, SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard},
+			{Name: standard, Model: standard, SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard},
+		},
+	}})
+	if err := snapshot.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	standardID := "codex:" + standard
+	fastID := "codex:" + fast
+	standardRoute, ok := routeByExactID(snapshot, standardID)
+	if !ok {
+		t.Fatalf("standard route %q missing: %#v", standardID, snapshot.ModelRoutes)
+	}
+	if standardRoute.ID != standardID || standardRoute.Name != standard || standardRoute.ProfileModel != standard || standardRoute.SpeedTier != profiles.SpeedTierStandard || standardRoute.StandardAnchor != standardID {
+		t.Fatalf("standard identity changed: %#v", standardRoute)
+	}
+	fastRoute, ok := routeByExactID(snapshot, fastID)
+	if !ok || fastRoute.SpeedTier != profiles.SpeedTierFast || fastRoute.StandardAnchor != standardID {
+		t.Fatalf("fast relationship = %#v", fastRoute)
+	}
+}
+
+func TestSnapshotValidateRejectsForgedSpeedRelationships(t *testing.T) {
+	base := Snapshot{
+		Version: CurrentVersion, ActiveProviderID: "p1",
+		Providers: []Provider{{ID: "p1", Name: "P1"}, {ID: "p2", Name: "P2"}},
+		ModelRoutes: []ModelRoute{
+			{ID: "p1:standard", Name: "standard", ProviderID: "p1", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: "p1:standard"},
+			{ID: "p1:fast", Name: "fast", ProviderID: "p1", SpeedTier: profiles.SpeedTierFast, StandardAnchor: "p1:standard"},
+			{ID: "p2:standard", Name: "other", ProviderID: "p2", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: "p2:standard"},
+		},
+		ProviderPolicies: map[string]RoutingPolicy{"p1": {Default: "p1:standard"}, "p2": {Default: "p2:standard"}},
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid fixture: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Snapshot)
+		want   string
+	}{
+		{name: "partial", mutate: func(s *Snapshot) { s.ModelRoutes[1].StandardAnchor = "" }, want: "both be present"},
+		{name: "cross provider", mutate: func(s *Snapshot) { s.ModelRoutes[1].StandardAnchor = "p2:standard" }, want: "same provider"},
+		{name: "missing", mutate: func(s *Snapshot) { s.ModelRoutes[1].StandardAnchor = "p1:missing" }, want: "unknown standard anchor"},
+		{name: "anchor is fast", mutate: func(s *Snapshot) { s.ModelRoutes[1].StandardAnchor = "p1:fast" }, want: "standard route"},
+		{name: "standard not self anchored", mutate: func(s *Snapshot) { s.ModelRoutes[0].StandardAnchor = "p1:fast" }, want: "self-anchor"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := base
+			snapshot.ModelRoutes = append([]ModelRoute(nil), base.ModelRoutes...)
+			test.mutate(&snapshot)
+			err := snapshot.Validate()
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.want)) {
+				t.Fatalf("Validate() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }

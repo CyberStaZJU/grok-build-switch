@@ -5,6 +5,13 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"grok_switch/internal/modelvariants"
+)
+
+const (
+	SpeedTierStandard = modelvariants.SpeedTierStandard
+	SpeedTierFast     = modelvariants.SpeedTierFast
 )
 
 type ModelDef struct {
@@ -18,6 +25,8 @@ type ModelDef struct {
 	SupportsReasoningEffort bool              `json:"supports_reasoning_effort"`
 	ReasoningEfforts        []string          `json:"reasoning_efforts"`
 	ReasoningEffortsSource  string            `json:"reasoning_efforts_source,omitempty"`
+	SpeedTier               string            `json:"speed_tier,omitempty"`
+	StandardAnchor          string            `json:"standard_anchor,omitempty"`
 	ContextWindow           int64             `json:"context_window"`
 	MaxCompletionTokens     int64             `json:"max_completion_tokens"`
 }
@@ -37,6 +46,10 @@ type Profile struct {
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
+// Matches compares the view that can be projected to and reconstructed from
+// Grok's config.toml. Switch-only catalog metadata such as SpeedTier and
+// StandardAnchor is intentionally ignored here; durable profile/routing stores
+// validate and compare that metadata separately.
 func (p Profile) Matches(other Profile) bool {
 	p = Normalize(p)
 	other = Normalize(other)
@@ -103,6 +116,53 @@ func modelEqual(a, b ModelDef) bool {
 
 func (p Profile) EffectiveAPIKey() string {
 	return effectiveAPIKey(p)
+}
+
+// ValidateModelVariants verifies only explicitly declared Standard/Fast
+// relationships. Unclassified models remain valid and are never inferred from
+// their names. Classified pairs must be complete, exact, and provider-local at
+// the later routing layer.
+func ValidateModelVariants(p Profile) error {
+	p = Normalize(p)
+	byName := make(map[string]ModelDef, len(p.Models))
+	for _, model := range p.Models {
+		name := modelKey(model)
+		if _, exists := byName[name]; exists {
+			return fmt.Errorf("duplicate profile model %q", name)
+		}
+		byName[name] = model
+	}
+	for _, model := range p.Models {
+		name := modelKey(model)
+		tier := strings.TrimSpace(model.SpeedTier)
+		anchor := strings.TrimSpace(model.StandardAnchor)
+		if (tier == "") != (anchor == "") {
+			return fmt.Errorf("model %q speed_tier and standard_anchor must both be present or both be absent", name)
+		}
+		if tier == "" {
+			continue
+		}
+		if model.SpeedTier != tier || model.StandardAnchor != anchor {
+			return fmt.Errorf("model %q speed metadata must not contain surrounding whitespace", name)
+		}
+		switch tier {
+		case SpeedTierStandard:
+			if anchor != name {
+				return fmt.Errorf("standard model %q must self-anchor", name)
+			}
+		case SpeedTierFast:
+			standard, ok := byName[anchor]
+			if !ok {
+				return fmt.Errorf("fast model %q references missing standard anchor %q", name, anchor)
+			}
+			if standard.SpeedTier != SpeedTierStandard || standard.StandardAnchor != anchor {
+				return fmt.Errorf("fast model %q standard anchor %q is not an explicit standard route", name, anchor)
+			}
+		default:
+			return fmt.Errorf("model %q has invalid speed tier %q", name, tier)
+		}
+	}
+	return nil
 }
 
 // ValidateDefaultReasoningEffort ensures the profile-level default is accepted

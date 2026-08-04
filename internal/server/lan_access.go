@@ -79,6 +79,9 @@ func loopbackOnlyRequest(r *http.Request) bool {
 	if requestPath == "/api/config" || strings.HasPrefix(requestPath, "/api/config/") {
 		return true
 	}
+	if requestPath == "/api/collaboration" || strings.HasPrefix(requestPath, "/api/collaboration/") {
+		return true
+	}
 	if requestPath == "/api/ssh" || strings.HasPrefix(requestPath, "/api/ssh/") {
 		return true
 	}

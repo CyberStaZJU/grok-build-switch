@@ -415,6 +415,42 @@ web_search = "old"
 	}
 }
 
+func TestCurrentMatchesSpeedVariantAfterApplyWithoutMetadataLeak(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	standard := "subscription/codex/gpt-5.6-terra"
+	fast := standard + "-fast"
+	profile := profiles.Profile{
+		Name:         "trusted variants",
+		BaseURL:      "http://127.0.0.1:8317/v1",
+		APIKey:       "local-key",
+		DefaultModel: fast,
+		Models: []profiles.ModelDef{
+			{Name: standard, Model: standard, APIBackend: "chat_completions", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard},
+			{Name: fast, Model: fast, APIBackend: "chat_completions", SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard},
+		},
+	}
+	if err := os.WriteFile(path, []byte("[models]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"speed_tier", "standard_anchor", "service_tier"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("Switch-only metadata leaked as %q:\n%s", forbidden, raw)
+		}
+	}
+	ok, err := CurrentMatches(path, profile)
+	if err != nil || !ok {
+		t.Fatalf("CurrentMatches() = %v, %v", ok, err)
+	}
+}
+
 func TestCurrentMatchesIgnoresRuntimeReasoningEffortDrift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

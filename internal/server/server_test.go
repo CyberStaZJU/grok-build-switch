@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"grok_switch/internal/profiles"
 	"grok_switch/internal/remoteaccess"
 	"grok_switch/internal/settings"
 )
@@ -66,6 +67,71 @@ func TestProfileRequestsRejectRemovedPresetField(t *testing.T) {
 	assertFileBytesEqual(t, s.Profiles.Path(), beforeProfiles)
 }
 
+func TestProfileRequestsRejectInternalSpeedMetadataWithoutChangingState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		method string
+		field  string
+	}{
+		{name: "create speed tier", method: http.MethodPost, field: `"speed_tier":"standard"`},
+		{name: "create standard anchor", method: http.MethodPost, field: `"standard_anchor":"subscription/codex/gpt-5.6-terra"`},
+		{name: "update speed tier", method: http.MethodPut, field: `"speed_tier":"standard"`},
+		{name: "update standard anchor", method: http.MethodPut, field: `"standard_anchor":"subscription/codex/gpt-5.6-terra"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newRoutingTestServer(t)
+			beforeProfiles, err := os.ReadFile(s.Profiles.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeRouting, err := os.ReadFile(s.Routing.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := "/api/profiles"
+			handler := s.handleProfiles
+			if test.method == http.MethodPut {
+				items, listErr := s.Profiles.List()
+				if listErr != nil || len(items) == 0 {
+					t.Fatalf("profiles=%#v err=%v", items, listErr)
+				}
+				target += "/" + items[0].ID
+				handler = s.handleProfileByID
+			}
+			body := `{"name":"forged","upstream_format":"openai_chat","base_url":"https://api.example.com/v1","default_model":"subscription/codex/gpt-5.6-terra","models":[{"name":"subscription/codex/gpt-5.6-terra","model":"subscription/codex/gpt-5.6-terra",` + test.field + `}]}`
+			response := httptest.NewRecorder()
+			handler(response, loopbackRequest(test.method, target, body))
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			assertFileBytesEqual(t, s.Profiles.Path(), beforeProfiles)
+			assertFileBytesEqual(t, s.Routing.Path(), beforeRouting)
+			assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+		})
+	}
+}
+
+func TestProfileRequestsRejectForgedServerOwnedFields(t *testing.T) {
+	for _, field := range []string{`"source":"subscription-proxy:codex"`, `"created_at":"2026-08-03T00:00:00Z"`, `"updated_at":"2026-08-03T00:00:00Z"`} {
+		s := newRoutingTestServer(t)
+		before, err := os.ReadFile(s.Profiles.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		body := `{"name":"forged",` + field + `,"upstream_format":"openai_chat","base_url":"https://api.example.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`
+		s.handleProfiles(response, loopbackRequest(http.MethodPost, "/api/profiles", body))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") {
+			t.Fatalf("field=%s status=%d body=%s", field, response.Code, response.Body.String())
+		}
+		assertFileBytesEqual(t, s.Profiles.Path(), before)
+	}
+}
+
 func TestProfileResponsesDoNotExposePresetMetadata(t *testing.T) {
 	s := newRoutingTestServer(t)
 	response := httptest.NewRecorder()
@@ -76,6 +142,59 @@ func TestProfileResponsesDoNotExposePresetMetadata(t *testing.T) {
 	if strings.Contains(response.Body.String(), `"template"`) {
 		t.Fatalf("profile response exposes removed preset field: %s", response.Body.String())
 	}
+}
+
+func TestLocalProfileResponseOmitsInternalSpeedMetadata(t *testing.T) {
+	s := newRoutingTestServer(t)
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted", Source: "subscription-proxy:codex", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1",
+		DefaultModel: "subscription/codex/gpt-5.6-terra", DefaultReasoningEffort: "none",
+		Models: []profiles.ModelDef{
+			{Name: "subscription/codex/gpt-5.6-terra", Model: "subscription/codex/gpt-5.6-terra", APIKey: "trusted-model-key", ExtraHeaders: map[string]string{"X-Test": "header"}, SpeedTier: profiles.SpeedTierStandard, StandardAnchor: "subscription/codex/gpt-5.6-terra"},
+			{Name: "subscription/codex/gpt-5.6-terra-fast", Model: "subscription/codex/gpt-5.6-terra-fast", SpeedTier: profiles.SpeedTierFast, StandardAnchor: "subscription/codex/gpt-5.6-terra"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfiles(response, loopbackRequest(http.MethodGet, "/api/profiles", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, forbidden := range []string{`"speed_tier"`, `"standard_anchor"`, `"source"`, `"created_at"`, `"updated_at"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("local editable profile response exposed %s: %s", forbidden, body)
+		}
+	}
+	for _, required := range []string{profile.ID, "trusted-model-key", `"extra_headers":{"X-Test":"header"}`} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("local editable response omitted %q: %s", required, body)
+		}
+	}
+}
+
+func TestNormalProfileUpdateRejectsSubscriptionOwnedProfile(t *testing.T) {
+	s := newRoutingTestServer(t)
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted", Source: "subscription-proxy:codex", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1",
+		DefaultModel: "subscription/codex/gpt-5.6-terra",
+		Models:       []profiles.ModelDef{{Name: "subscription/codex/gpt-5.6-terra", Model: "subscription/codex/gpt-5.6-terra"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.Profiles.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, `{"id":"`+profile.ID+`","name":"changed","upstream_format":"openai_chat","base_url":"https://api.example.com/v1","default_model":"m","models":[{"name":"m","model":"m"}]}`))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "订阅代理页面更新") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Profiles.Path(), before)
 }
 
 func TestOfficialAnthropicProfileMutationsLeaveRoutingAndConfigUnchanged(t *testing.T) {

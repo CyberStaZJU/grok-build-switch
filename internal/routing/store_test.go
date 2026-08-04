@@ -2,6 +2,7 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,19 @@ import (
 
 	"grok_switch/internal/profiles"
 )
+
+func TestStoreReplaceDropsLegacyEmptyProviderPolicy(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "routing.json"))
+	snapshot := Project(nil)
+	snapshot.ProviderPolicies[""] = RoutingPolicy{}
+	stored, err := store.Replace(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored.ProviderPolicies[""]; ok {
+		t.Fatal("stored snapshot retained empty-provider policy")
+	}
+}
 
 func TestInitializePersistsOnlyCatalogAndPolicy(t *testing.T) {
 	dir := t.TempDir()
@@ -85,6 +99,69 @@ func TestInitializePersistsOnlyCatalogAndPolicy(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("routing.json mode = %o, want 600", got)
+	}
+}
+
+func TestAtomicWriteRenameFailureLeavesExistingFileUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.json")
+	original := []byte("original routing bytes\n")
+	if err := os.WriteFile(path, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected rename failure")
+	oldRename := atomicWriteRename
+	atomicWriteRename = func(_, _ string) error { return injected }
+	defer func() { atomicWriteRename = oldRename }()
+
+	if err := atomicWrite(path, []byte("replacement\n")); !errors.Is(err, injected) {
+		t.Fatalf("atomicWrite() error = %v, want injected failure", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("rename failure changed destination: got=%q want=%q", got, original)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o640 {
+		t.Fatalf("rename failure changed destination mode = %o, want 640", gotMode)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "routing.json.*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files remain after failure: %v", matches)
+	}
+}
+
+func TestAtomicWriteReplacementCommitsContentAndMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.json")
+	if err := os.WriteFile(path, []byte("old\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(path, []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new\n" {
+		t.Fatalf("content = %q, want replacement", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o600 {
+		t.Fatalf("replacement mode = %o, want 600", gotMode)
 	}
 }
 
