@@ -397,7 +397,7 @@ func TestCollaborationDisableStopsUseWithoutDeletingManagedArtifacts(t *testing.
 	if err := os.WriteFile(s.Switcher.ConfigPath, driftedConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	disableRequest := `{"version":4,"enabled":false}`
+	disableRequest := `{"version":5,"enabled":false}`
 	disablePreview := previewCollaboration(t, s, disableRequest)
 	if disablePreview.RoutingChanged || disablePreview.ConfigChanged || len(disablePreview.Artifacts) != 0 {
 		t.Fatalf("disable preview = %#v", disablePreview)
@@ -405,7 +405,7 @@ func TestCollaborationDisableStopsUseWithoutDeletingManagedArtifacts(t *testing.
 	if disablePreview.ConfigBefore != string(driftedConfig) || disablePreview.ConfigAfter != string(driftedConfig) {
 		t.Fatalf("disable preview changed drifted config\nbefore=%q\nafter=%q", disablePreview.ConfigBefore, disablePreview.ConfigAfter)
 	}
-	disableBody := `{"version":4,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
+	disableBody := `{"version":5,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
 	response := invokeCollaboration(t, s.handleCollaboration, http.MethodPut, "/api/collaboration", disableBody)
 	if response.Code != http.StatusOK {
 		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
@@ -454,11 +454,11 @@ func TestCollaborationDisablePreviewWorksWhenRoutingStateIsUnavailable(t *testin
 		t.Fatal(err)
 	}
 
-	preview := previewCollaboration(t, s, `{"version":4,"enabled":false}`)
+	preview := previewCollaboration(t, s, `{"version":5,"enabled":false}`)
 	if preview.Policy.Enabled || preview.RoutingChanged || preview.ConfigChanged || len(preview.Artifacts) != 0 {
 		t.Fatalf("disable preview unexpectedly depended on routing: %#v", preview)
 	}
-	body := `{"version":4,"enabled":false,"confirmed":true,"fingerprint":"` + preview.Fingerprint + `"}`
+	body := `{"version":5,"enabled":false,"confirmed":true,"fingerprint":"` + preview.Fingerprint + `"}`
 	response := invokeCollaboration(t, s.handleCollaboration, http.MethodPut, "/api/collaboration", body)
 	if response.Code != http.StatusOK {
 		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
@@ -627,8 +627,8 @@ func TestCollaborationStatusRejectsSymlinkedManagedArtifact(t *testing.T) {
 func TestCollaborationDisabledStatusStillReportsRetainedArtifactDrift(t *testing.T) {
 	s, request := newCollaborationTestServer(t)
 	applyCollaborationRequest(t, s, request)
-	disablePreview := previewCollaboration(t, s, `{"version":4,"enabled":false}`)
-	disableBody := `{"version":4,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
+	disablePreview := previewCollaboration(t, s, `{"version":5,"enabled":false}`)
+	disableBody := `{"version":5,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
 	if response := invokeCollaboration(t, s.handleCollaboration, http.MethodPut, "/api/collaboration", disableBody); response.Code != http.StatusOK {
 		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -695,8 +695,8 @@ func TestCollaborationDisabledStatusPreservesFourRolePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	disablePreview := previewCollaboration(t, s, `{"version":4,"enabled":false}`)
-	disableBody := `{"version":4,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
+	disablePreview := previewCollaboration(t, s, `{"version":5,"enabled":false}`)
+	disableBody := `{"version":5,"enabled":false,"confirmed":true,"fingerprint":"` + disablePreview.Fingerprint + `"}`
 	if response := invokeCollaboration(t, s.handleCollaboration, http.MethodPut, "/api/collaboration", disableBody); response.Code != http.StatusOK {
 		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -793,7 +793,7 @@ func newCollaborationTestServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	requestMap := map[string]any{
-		"version":     4,
+		"version":     collaboration.CurrentVersion,
 		"mode":        "single_provider",
 		"enabled":     true,
 		"provider_id": profile.ID,

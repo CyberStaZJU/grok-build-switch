@@ -92,8 +92,8 @@ HTTP request
 ### 4.1 真相与边界
 
 - `routing.json` 继续使用 schema v2；不要为本功能新增 routing v3 或 general-purpose 路由槽。
-- `collaboration.json` 使用独立 schema v4，保存 provider ID、四个语义角色各自的稳定 Standard route anchor、显式 `speed_tier` 与 effort、默认提示 tier、1/2/3/4 budget、串行/重试限制及受管 artifact manifest。
-- schema v1/v2/v3 只作为严格迁移输入：v1 coordinator → 主协调与主实现、evidence → 任务拆解、builder → 困难实现 / 复核，全局 effort 复制到四角色；v2 保留四角色 model/effort 并固定 Standard；v3 保留四角色 anchor/speed/effort。三者都迁移到 v4 single-provider，复制顶层 provider 到各角色、写入 workflow 派生的固定 data scope，并保持 federation consent 为空。Snapshot 不重写旧字节，显式 Replace 才保存 v4。旧具体 `-fast` route ID 不按后缀推断为 Fast；若无法作为可信 Standard anchor 解析就 fail closed，要求显式修复，避免意外提高 credit 档。
+- `collaboration.json` 使用独立 schema v5，保存 provider ID、四个语义角色各自的稳定 Standard route anchor、显式 `speed_tier` 与 effort、默认提示 tier、1/2/11/12/13 budget、10 个顶层主实现 agent / 重试限制及受管 artifact manifest。
+- schema v1/v2/v3/v4 只作为严格迁移输入：v1 coordinator → 主协调与主实现、evidence → 任务拆解、builder → 困难实现 / 复核，全局 effort 复制到四角色；v2 保留四角色 model/effort 并固定 Standard；v3 保留四角色 anchor/speed/effort。四者都迁移到 v5 single-provider，复制顶层 provider 到各角色、写入 workflow 派生的固定 data scope，并保持 federation consent 为空。Snapshot 不重写旧字节，显式 Replace 才保存 v5。旧具体 `-fast` route ID 不按后缀推断为 Fast；若无法作为可信 Standard anchor 解析就 fail closed，要求显式修复，避免意外提高 credit 档。
 - policy 不保存 API Key、消息、transcript、session graph、agent ID 或 workflow 运行状态。
 - Switch 只生成 Grok Build 用户级配置；Grok Build 负责实际 `agent()` 和预算消耗。当前生成 workflow 不使用 `resume_from`。
 
@@ -193,7 +193,7 @@ go test -tags wailsgui .
 
 - 官方登录和官方路由；
 - 普通 Profile 与统一路由事务；
-- Max Collaboration schema v4 exact Standard/Fast 解析、concrete effort capability、preview/fingerprint、canonical artifact ownership/type/drift/race、跨文件回滚、policy-only disable 和 workflow validate-only；
+- Max Collaboration schema v5 exact Standard/Fast 解析、concrete effort capability、preview/fingerprint、canonical artifact ownership/type/drift/race、跨文件回滚、policy-only disable 和 workflow validate-only；
 - CLIProxy 完整 YAML ownership merge、canonical ledger/认证 marker、二次 GET rebase、write-ahead recovery journal、跨进程 operation lock、受管 alias 出现/消失的稳定目录收敛、只读 `Models` 与显式 `ReconcileModels` 分离、Standard 无 priority 与精确 Fast `service_tier: priority`；
 - completion/reasoning token 的 aggregate、recent 和 UI 展示；
 - 订阅代理及其凭据保留；
@@ -205,4 +205,4 @@ go test -tags wailsgui .
 发布前运行构建、签名/公证检查和安装包 smoke test。构建产物必须留在 `dist/` 或仓库外，不提交 Git。真实 workflow/model smoke、写入真实 `~/.grok`、推送、发布和删除外部 evidence 都是单独授权动作；本地单元测试与 `validate_only` 不替代这些确认。
 
 
-> Collaboration schema v4 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.

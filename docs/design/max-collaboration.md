@@ -1,6 +1,6 @@
 # Max Collaboration 控制面设计
 
-> 状态：schema v4 四角色 Standard/Fast 控制面、复制式精确预算启动指引和本地单元/集成覆盖已实现；已完成一次 Economy 只读 live smoke，待最新全量 race、独立审查及其余 tier 的经授权试点。最后更新：2026-08-04。
+> 状态：schema v5 四角色 Standard/Fast 控制面、复制式精确预算启动指引和本地单元/集成覆盖已实现；已完成一次 Economy 只读 live smoke，待最新全量 race、独立审查及其余 tier 的经授权试点。最后更新：2026-08-04。
 
 ## 1. 目标
 
@@ -31,14 +31,14 @@ Switch **不**启动 agent，不保存消息、transcript、agent ID 或 session
 
 ## 3. 数据模型与迁移
 
-Collaboration Policy 使用独立 schema v4，保持 routing schema v2 不变。文件位于应用 DataDir 的 `collaboration.json`，包含：
+Collaboration Policy 使用独立 schema v5，保持 routing schema v2 不变。文件位于应用 DataDir 的 `collaboration.json`，包含：
 
 - 明确模式 `single_provider|federated`（默认及 v1/v2/v3 迁移均为 `single_provider`）；federated consent basis 固定为 `all_workflow_tiers_v1`，绑定精确 provider 集合、Economy/Focused Evidence/Focused Build/Assurance/Critical 五条可执行路径的逐跳跨 provider edge map、`bounded_work_products` 与 credentials/secrets/full_transcripts 永不传递常量；Adaptive 只是 prompt 默认提示，不是可执行路径，Default tier 改变不会缩小 consent；
 - coordinator/primary provider ID，仅表示普通 routing default 的所有者；
 - 主协调、任务拆解、主实现、困难实现 / 复核四个角色各自的显式 `provider_id`、稳定 Standard route anchor、`speed_tier`、推理强度与闭集 `data_scope`；
 - 默认提示 tier；
-- Economy=1、Focused=2、Assurance=3、Critical=4；
-- `max_parallel = 1`、`retry_limit = 1`；
+- Economy=1、Focused Evidence=2、Focused Build=11、Assurance=12、Critical=13；
+- `max_parallel = 10`、`retry_limit = 1`；`max_parallel` 是包含主实现的路径固定启动的 workflow 顶层 agent 数量；无安全独立切片的 agent 只做验证，不制造修改；
 - 用户级 artifact scope；
 - 受管文件的绝对路径与 SHA-256。
 
@@ -50,12 +50,12 @@ schema v1/v2/v3 只作为严格迁移输入：
 - v1 `evidence` → 任务拆解；
 - v1 `builder` → 困难实现 / 复核；
 - v1 全局 `reasoning_effort` 复制到四个角色；
-- v2 四角色 model/effort 原样进入对应 v4 assignment；
-- v3 四角色 anchor/speed/effort 原样进入 v4；
+- v2 四角色 model/effort 原样进入对应 v5 assignment；
+- v3 四角色 anchor/speed/effort 原样进入 v5；v4 额外迁移旧预算与 `max_parallel=1`；
 - 旧顶层 provider 复制到每个角色，数据范围固定映射为任务拆解 `repository_only`、其他角色 `repository_plus_minimized_prior_work_products`；
 - 两个旧版本的 `speed_tier` 均迁移为 `standard`。
 
-v1、v2 和 v3 都拒绝未知字段、尾随数据和多份 JSON 文档。迁移结果必须完整通过 v4 校验；无效旧档位等畸形输入 fail closed。`Snapshot` 只在内存迁移，不重写原始旧字节；下一次显式 `Replace` 才持久化 v4。纯 store 迁移不会按 `-fast` 后缀推断关系：旧具体 Fast route ID 会以 Standard-tier model 字符串保留，随后若不能作为可信 Standard anchor 解析则 fail closed，要求用户显式修复。这一边界避免旧数据迁移时无意提高 subscription credit 档。disabled v1 保留 metadata 与 managed manifest，但不恢复活动角色选择。
+v1、v2、v3 和 v4 都拒绝未知字段、尾随数据和多份 JSON 文档。迁移结果必须完整通过 v5 校验；无效旧档位等畸形输入 fail closed。`Snapshot` 只在内存迁移，不重写原始旧字节；下一次显式 `Replace` 才持久化 v5。纯 store 迁移不会按 `-fast` 后缀推断关系：旧具体 Fast route ID 会以 Standard-tier model 字符串保留，随后若不能作为可信 Standard anchor 解析则 fail closed，要求用户显式修复。这一边界避免旧数据迁移时无意提高 subscription credit 档。disabled v1 保留 metadata 与 managed manifest，但不恢复活动角色选择。
 
 ## 4. Standard/Fast 解析与能力校验
 
@@ -114,9 +114,9 @@ payload:
 | `~/.grok/roles/gbs-luna-evidence.toml` | 任务拆解所选模型/档位、`read-only` |
 | `~/.grok/roles/gbs-main-implementation.toml` | 主实现所选模型/档位、`all` |
 | `~/.grok/roles/gbs-sol-builder.toml` | 困难实现 / 复核所选模型/档位、`all` |
-| `~/.grok/workflows/gbs-max-collab.rhai` | 严格串行、精确预算、无 `parallel()` / `fork_context` / `resume_from` |
+| `~/.grok/workflows/gbs-max-collab.rhai` | 顶层阶段串行、精确预算；由 workflow 顶层启动 10 个主实现 agent；无 workflow `parallel()` / `fork_context` / `resume_from` |
 
-当前 Grok Build 只从 `.grok/agents/*.md` / `~/.grok/agents/*.md` 注册自定义 agent type；role TOML 是解析覆盖层，单独存在时 workflow 会报 `Unknown subagent type`。三个沿用的 Terra/Luna/Sol basename 是稳定的 manifest 所有权标识，用来避免升级时遗弃此前由 Switch 管理的文件；schema v4 不把这些名称绑定到特定模型。Renderer 先集中解析四个 assignment，把具体 Standard/Fast alias 与 effort 写入 role TOML，并生成同名 agent definition 注册类型；workflow 使用对应 `agent_type` 与具体 model，不泄露 `speed_tier`、anchor、provider、base URL、凭据或内部 route ID；阶段间只拼接 objective 与最小 work-product 字符串，并显式要求省略 credentials、secrets、无关文件和完整 transcript。普通 package import 或 Switch 启动不会运行这些 artifact。
+当前 Grok Build 只从 `.grok/agents/*.md` / `~/.grok/agents/*.md` 注册自定义 agent type；role TOML 是解析覆盖层，单独存在时 workflow 会报 `Unknown subagent type`。三个沿用的 Terra/Luna/Sol basename 是稳定的 manifest 所有权标识，用来避免升级时遗弃此前由 Switch 管理的文件；schema v5 不把这些名称绑定到特定模型。Renderer 先集中解析四个 assignment，把具体 Standard/Fast alias 与 effort 写入 role TOML，并生成同名 agent definition 注册类型；workflow 使用对应 `agent_type` 与具体 model，不泄露 `speed_tier`、anchor、provider、base URL、凭据或内部 route ID；阶段间只拼接 objective 与最小 work-product 字符串，并显式要求省略 credentials、secrets、无关文件和完整 transcript。普通 package import 或 Switch 启动不会运行这些 artifact。
 
 所有权规则：
 
@@ -136,15 +136,15 @@ payload:
 |:---|:---|---:|
 | Economy | 主协调 | 1 |
 | Focused Evidence | 任务拆解 → 主协调 | 2 |
-| Focused Build | 主实现 → 主协调 | 2 |
-| Assurance | 任务拆解 → 主实现 → 主协调 | 3 |
-| Critical | 任务拆解 → 主实现 → 困难实现 / 复核 → 主协调 | 4 |
+| Focused Build | 10 个主实现 agent → 主协调 | 11 |
+| Assurance | 任务拆解 → 10 个主实现 agent → 主协调 | 12 |
+| Critical | 任务拆解 → 10 个主实现 agent → 困难实现 / 复核 → 主协调 | 13 |
 
-生产 workflow 在首个 agent 启动前检查 `budget().total == expected_budget`。Grok Build 命名 slash workflow 当前默认使用 128，且 slash autocomplete 不提供该 workflow 的自定义参数选择，因此直接输入 `/gbs-max-collab` 会被有意拒绝。必须由 Grok 通过 workflow tool 传入准确的 1/2/3/4。
+生产 workflow 在首个 agent 启动前检查 `budget().total == expected_budget`。Grok Build 命名 slash workflow 当前默认使用 128，且 slash autocomplete 不提供该 workflow 的自定义参数选择，因此直接输入 `/gbs-max-collab` 会被有意拒绝。必须由 Grok 通过 workflow tool 传入准确的 1/2/11/12/13。
 
 `Adaptive` 只保存 Economy-first 的默认提示，不对应一条隐式执行路径。应用提供复制式启动区：用户选择 tier、填写 objective，复制类似“使用 Assurance 运行 gbs-max-collab，目标是：…”的自然语言指令并粘贴到 Grok Build。Grok 必须把它转换为显式 `args.objective`、`args.tier` 和匹配的 `agent_budget`。Critical 不自动触发。生成 workflow 的 metadata 同样说明不能直接使用 named slash launch。
 
-任务拆解阶段返回文件/行号、已确认约束、依赖、工作单元、验收条件、最小测试、风险和下一阶段最小读取集合。主实现消费该工作包，避免重复全仓扫描。困难实现 / 复核在 Critical 路径独立重读实际文件和 diff，可修复确认的本地可逆问题。主协调最后对实际工作区、结果包和测试做收敛与交付。
+任务拆解阶段返回文件/行号、已确认约束、依赖、工作单元、验收条件、最小测试、风险和下一阶段最小读取集合。包含主实现的路径由 workflow 顶层依次启动 10 个主实现 agent；每个 agent 先检查实际工作区和 diff，优先选择未被占用或互不重叠的实现、调试、测试或复核切片，若没有安全的独立切片则只验证而不制造修改。同一文件的写入必须串行或明确唯一归属。困难实现 / 复核在 Critical 路径独立重读实际文件和 diff，可修复确认的本地可逆问题。主协调最后对实际工作区、结果包和测试做收敛与交付。
 
 角色的推理强度由各自生成的 role 文件声明；workflow 调用选择对应 `agent_type` 和已解析模型，不再写死一个全局 `max`。
 
@@ -152,7 +152,7 @@ payload:
 
 ### 7.1 API
 
-- `GET /api/collaboration`：状态、完整 schema-v4 policy 与漂移；enabled/disabled 都检查九个 canonical artifact、文件类型与 hash；
+- `GET /api/collaboration`：状态、完整 schema-v5 policy 与漂移；enabled/disabled 都检查九个 canonical artifact、文件类型与 hash；
 - `POST /api/collaboration/preview`：接收四个 role assignment 和默认 tier，执行无副作用预览；
 - `PUT /api/collaboration`：提交同一请求与最新 fingerprint 后应用或停用。
 
@@ -227,10 +227,10 @@ Switch 不硬编码任何角色或模型的价格，也不把 subscription token
 当前本地测试覆盖：
 
 - domain：四角色 Standard anchor/speed/effort 结构、exact trusted registry、同 provider、重复 anchor、Standard/Fast 解析、缺失/歧义/伪造 Fast fail closed、具体 route effort capability；
-- migration/store：严格 v1/v2/v3→v4 映射、旧具体 Fast ID 不推断、Snapshot 不重写、显式 Replace 保存 v4、disabled metadata/manifest 保留、畸形旧输入 fail closed；
-- renderer：五个确定性 artifact、四个 role 的具体 Standard/Fast alias 与 effort、无内部 speed/provider 元数据、无 `resume_from`、串行顺序、tier guard 和精确预算；
+- migration/store：严格 v1/v2/v3/v4→v5 映射、旧具体 Fast ID 不推断、Snapshot 不重写、显式 Replace 保存 v5、disabled metadata/manifest 保留、畸形旧输入 fail closed；
+- renderer：九个确定性 artifact（四个 agent definition、四个 role、一个 workflow）、四个 role 的具体 Standard/Fast alias 与 effort、无内部 speed/provider 元数据、无 workflow `resume_from`、顶层阶段顺序、10 implementation agents 提示、tier guard 和精确预算；
 - managed ownership/status：unmanaged collision、canonical exact manifest、missing/hash drift、symlink/non-regular、disabled retained drift、写前竞态、私有权限和部分失败回滚；
-- HTTP：完整 middleware-stack loopback/LAN/CSRF/strict/oversize、完整四角色 v4 payload、preview 无副作用、confirmation/fingerprint、速度变更 fingerprint、concrete default 对齐、`web_search`/`explore`/`plan` 保留、完整补偿和 policy-only disable；
+- HTTP：完整 middleware-stack loopback/LAN/CSRF/strict/oversize、完整四角色 v5 payload、preview 无副作用、confirmation/fingerprint、速度变更 fingerprint、concrete default 对齐、`web_search`/`explore`/`plan` 保留、完整补偿和 policy-only disable；
 - UI：Standard-anchor-only 选择、每角色速度解析与 concrete effort、缺失 Fast sentinel、空 speed 不补 Standard、保存的缺失 anchor / 不受支持 effort 保留、preview/apply/disable；
 - workflow path mapping：五条 tier 的角色组合和预算在 renderer 单元测试中逐条覆盖。
 

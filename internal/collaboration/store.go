@@ -25,6 +25,13 @@ type Store struct {
 	mu   sync.Mutex
 }
 
+type legacyTierBudgets struct {
+	Economy   int `json:"economy"`
+	Focused   int `json:"focused"`
+	Assurance int `json:"assurance"`
+	Critical  int `json:"critical"`
+}
+
 type policyV1RoleModels struct {
 	Coordinator string `json:"coordinator"`
 	Evidence    string `json:"evidence"`
@@ -38,7 +45,7 @@ type policyV1 struct {
 	Models           policyV1RoleModels `json:"models"`
 	ReasoningEffort  string             `json:"reasoning_effort"`
 	DefaultTier      string             `json:"default_tier"`
-	Budgets          TierBudgets        `json:"budgets"`
+	Budgets          legacyTierBudgets  `json:"budgets"`
 	MaxParallel      int                `json:"max_parallel"`
 	RetryLimit       int                `json:"retry_limit"`
 	ArtifactScope    string             `json:"artifact_scope"`
@@ -64,7 +71,7 @@ type policyV2 struct {
 	ProviderID       string                  `json:"provider_id"`
 	Roles            policyV2RoleAssignments `json:"roles"`
 	DefaultTier      string                  `json:"default_tier"`
-	Budgets          TierBudgets             `json:"budgets"`
+	Budgets          legacyTierBudgets       `json:"budgets"`
 	MaxParallel      int                     `json:"max_parallel"`
 	RetryLimit       int                     `json:"retry_limit"`
 	ArtifactScope    string                  `json:"artifact_scope"`
@@ -89,12 +96,28 @@ type policyV3 struct {
 	ProviderID       string                  `json:"provider_id"`
 	Roles            policyV3RoleAssignments `json:"roles"`
 	DefaultTier      string                  `json:"default_tier"`
-	Budgets          TierBudgets             `json:"budgets"`
+	Budgets          legacyTierBudgets       `json:"budgets"`
 	MaxParallel      int                     `json:"max_parallel"`
 	RetryLimit       int                     `json:"retry_limit"`
 	ArtifactScope    string                  `json:"artifact_scope"`
 	ManagedArtifacts []ManagedArtifact       `json:"managed_artifacts"`
 	UpdatedAt        time.Time               `json:"updated_at"`
+}
+
+type policyV4 struct {
+	Version           int                `json:"version"`
+	Enabled           bool               `json:"enabled"`
+	Mode              string             `json:"mode"`
+	ProviderID        string             `json:"provider_id"`
+	FederationConsent *FederationConsent `json:"federation_consent,omitempty"`
+	Roles             RoleAssignments    `json:"roles"`
+	DefaultTier       string             `json:"default_tier"`
+	Budgets           legacyTierBudgets  `json:"budgets"`
+	MaxParallel       int                `json:"max_parallel"`
+	RetryLimit        int                `json:"retry_limit"`
+	ArtifactScope     string             `json:"artifact_scope"`
+	ManagedArtifacts  []ManagedArtifact  `json:"managed_artifacts"`
+	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
 func NewStore(path string) *Store {
@@ -163,10 +186,16 @@ func (s *Store) readLocked() (Policy, error) {
 		if err := decodeStrictPolicy(data, &legacy); err != nil {
 			return Policy{}, err
 		}
+		if err := validateLegacyExecutionControls(legacy.Budgets, legacy.MaxParallel, legacy.RetryLimit); err != nil {
+			return Policy{}, err
+		}
 		policy = migratePolicyV1(legacy)
 	case 2:
 		var legacy policyV2
 		if err := decodeStrictPolicy(data, &legacy); err != nil {
+			return Policy{}, err
+		}
+		if err := validateLegacyExecutionControls(legacy.Budgets, legacy.MaxParallel, legacy.RetryLimit); err != nil {
 			return Policy{}, err
 		}
 		policy = migratePolicyV2(legacy)
@@ -175,7 +204,19 @@ func (s *Store) readLocked() (Policy, error) {
 		if err := decodeStrictPolicy(data, &legacy); err != nil {
 			return Policy{}, err
 		}
+		if err := validateLegacyExecutionControls(legacy.Budgets, legacy.MaxParallel, legacy.RetryLimit); err != nil {
+			return Policy{}, err
+		}
 		policy = migratePolicyV3(legacy)
+	case 4:
+		var legacy policyV4
+		if err := decodeStrictPolicy(data, &legacy); err != nil {
+			return Policy{}, err
+		}
+		if err := validateLegacyExecutionControls(legacy.Budgets, legacy.MaxParallel, legacy.RetryLimit); err != nil {
+			return Policy{}, err
+		}
+		policy = migratePolicyV4(legacy)
 	case CurrentVersion:
 		if err := decodeStrictPolicy(data, &policy); err != nil {
 			return Policy{}, err
@@ -206,13 +247,27 @@ func decodeStrictPolicy(data []byte, target any) error {
 	return nil
 }
 
+func validateLegacyExecutionControls(budgets legacyTierBudgets, maxParallel, retryLimit int) error {
+	legacyBudgets := legacyTierBudgets{Economy: 1, Focused: 2, Assurance: 3, Critical: 4}
+	if budgets != legacyBudgets {
+		return fmt.Errorf("validate collaboration policy: legacy budgets must be economy=1, focused=2, assurance=3, critical=4")
+	}
+	if maxParallel != 1 {
+		return fmt.Errorf("validate collaboration policy: legacy max_parallel must be 1")
+	}
+	if retryLimit != 1 {
+		return fmt.Errorf("validate collaboration policy: legacy retry_limit must be 1")
+	}
+	return nil
+}
+
 func migratePolicyV1(legacy policyV1) Policy {
 	policy := DisabledPolicy()
 	policy.Enabled = legacy.Enabled
 	policy.ProviderID = strings.TrimSpace(legacy.ProviderID)
 	policy.DefaultTier = legacy.DefaultTier
-	policy.Budgets = legacy.Budgets
-	policy.MaxParallel = legacy.MaxParallel
+	policy.Budgets = DefaultTierBudgets()
+	policy.MaxParallel = MainImplementationAgentLimit
 	policy.RetryLimit = legacy.RetryLimit
 	policy.ArtifactScope = legacy.ArtifactScope
 	policy.ManagedArtifacts = append([]ManagedArtifact(nil), legacy.ManagedArtifacts...)
@@ -234,8 +289,8 @@ func migratePolicyV2(legacy policyV2) Policy {
 	policy.Enabled = legacy.Enabled
 	policy.ProviderID = strings.TrimSpace(legacy.ProviderID)
 	policy.DefaultTier = legacy.DefaultTier
-	policy.Budgets = legacy.Budgets
-	policy.MaxParallel = legacy.MaxParallel
+	policy.Budgets = DefaultTierBudgets()
+	policy.MaxParallel = MainImplementationAgentLimit
 	policy.RetryLimit = legacy.RetryLimit
 	policy.ArtifactScope = legacy.ArtifactScope
 	policy.ManagedArtifacts = append([]ManagedArtifact(nil), legacy.ManagedArtifacts...)
@@ -266,8 +321,8 @@ func migratePolicyV3(legacy policyV3) Policy {
 	p.Enabled = legacy.Enabled
 	p.ProviderID = strings.TrimSpace(legacy.ProviderID)
 	p.DefaultTier = legacy.DefaultTier
-	p.Budgets = legacy.Budgets
-	p.MaxParallel = legacy.MaxParallel
+	p.Budgets = DefaultTierBudgets()
+	p.MaxParallel = MainImplementationAgentLimit
 	p.RetryLimit = legacy.RetryLimit
 	p.ArtifactScope = legacy.ArtifactScope
 	p.ManagedArtifacts = append([]ManagedArtifact(nil), legacy.ManagedArtifacts...)
@@ -279,6 +334,24 @@ func migratePolicyV3(legacy policyV3) Policy {
 		DifficultImplementationReview: RoleAssignment{ProviderID: p.ProviderID, Model: legacy.Roles.DifficultImplementationReview.Model, SpeedTier: legacy.Roles.DifficultImplementationReview.SpeedTier, ReasoningEffort: legacy.Roles.DifficultImplementationReview.ReasoningEffort, DataScope: DataScopePriorWork},
 	})
 	return p
+}
+
+func migratePolicyV4(legacy policyV4) Policy {
+	return Policy{
+		Version:           CurrentVersion,
+		Enabled:           legacy.Enabled,
+		Mode:              legacy.Mode,
+		ProviderID:        legacy.ProviderID,
+		FederationConsent: legacy.FederationConsent,
+		Roles:             legacy.Roles,
+		DefaultTier:       legacy.DefaultTier,
+		Budgets:           DefaultTierBudgets(),
+		MaxParallel:       MainImplementationAgentLimit,
+		RetryLimit:        legacy.RetryLimit,
+		ArtifactScope:     legacy.ArtifactScope,
+		ManagedArtifacts:  append([]ManagedArtifact(nil), legacy.ManagedArtifacts...),
+		UpdatedAt:         legacy.UpdatedAt,
+	}
 }
 
 func normalizedManifest(manifest []ManagedArtifact) []ManagedArtifact {

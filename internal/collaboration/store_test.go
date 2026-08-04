@@ -201,12 +201,12 @@ func TestStoreSnapshotMigratesV2InMemoryWithoutRewriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(v3Bytes), `"version": 4`) || strings.Count(string(v3Bytes), `"speed_tier": "standard"`) != 4 {
-		t.Fatalf("explicit Replace did not persist v4 speeds: %s", v3Bytes)
+	if !strings.Contains(string(v3Bytes), `"version": 5`) || strings.Count(string(v3Bytes), `"speed_tier": "standard"`) != 4 {
+		t.Fatalf("explicit Replace did not persist v5 speeds: %s", v3Bytes)
 	}
 }
 
-func TestStoreSnapshotMigratesV3ToV4WithoutFederationConsent(t *testing.T) {
+func TestStoreSnapshotMigratesV3ToV5WithoutFederationConsent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "collaboration.json")
 	raw := []byte(`{
   "version": 3,
@@ -241,6 +241,115 @@ func TestStoreSnapshotMigratesV3ToV4WithoutFederationConsent(t *testing.T) {
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(raw) {
 		t.Fatalf("Snapshot rewrote v3 bytes: err=%v", err)
+	}
+}
+
+func TestStoreSnapshotMigratesV4BudgetsAndParallelismWithoutRewriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "collaboration.json")
+	raw := []byte(`{
+  "version": 4,
+  "enabled": false,
+  "mode": "single_provider",
+  "provider_id": "",
+  "roles": {
+    "main_coordinator":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "task_decomposition":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "main_implementation":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "difficult_implementation_review":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""}
+  },
+  "default_tier": "adaptive",
+  "budgets": {"economy":1,"focused":2,"assurance":3,"critical":4},
+  "max_parallel": 1,
+  "retry_limit": 1,
+  "artifact_scope": "user",
+  "managed_artifacts": []
+}
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := NewStore(path).Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Version != CurrentVersion || migrated.Budgets != DefaultTierBudgets() || migrated.MaxParallel != MainImplementationAgentLimit {
+		t.Fatalf("migrated v4 controls = %#v", migrated)
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(raw) {
+		t.Fatalf("Snapshot rewrote v4 bytes: err=%v", err)
+	}
+}
+
+func TestStoreSnapshotRejectsV5OnlyBudgetFieldsInV4(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "collaboration.json")
+	raw := []byte(`{
+  "version": 4,
+  "enabled": false,
+  "mode": "single_provider",
+  "provider_id": "",
+  "roles": {
+    "main_coordinator":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "task_decomposition":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "main_implementation":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "difficult_implementation_review":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""}
+  },
+  "default_tier": "adaptive",
+  "budgets": {"economy":1,"focused":2,"focused_evidence":0,"focused_build":0,"assurance":3,"critical":4},
+  "max_parallel": 1,
+  "retry_limit": 1,
+  "artifact_scope": "user",
+  "managed_artifacts": []
+}
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewStore(path).Snapshot()
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Snapshot() error=%v, want strict v4 unknown-field rejection", err)
+	}
+}
+
+func TestStoreSnapshotRejectsInvalidLegacyExecutionControls(t *testing.T) {
+	base := `{
+  "version": 4,
+  "enabled": false,
+  "mode": "single_provider",
+  "provider_id": "",
+  "roles": {
+    "main_coordinator":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "task_decomposition":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "main_implementation":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""},
+    "difficult_implementation_review":{"provider_id":"","model":"","speed_tier":"","reasoning_effort":"","data_scope":""}
+  },
+  "default_tier": "adaptive",
+  "budgets": {"economy":1,"focused":2,"assurance":3,"critical":4},
+  "max_parallel": 1,
+  "retry_limit": 1,
+  "artifact_scope": "user",
+  "managed_artifacts": []
+}`
+	for _, test := range []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "budget", old: `"focused":2`, new: `"focused":9`, want: "legacy budgets"},
+		{name: "parallel", old: `"max_parallel": 1`, new: `"max_parallel": 2`, want: "legacy max_parallel"},
+		{name: "retry", old: `"retry_limit": 1`, new: `"retry_limit": 2`, want: "legacy retry_limit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "collaboration.json")
+			raw := []byte(strings.Replace(base, test.old, test.new, 1))
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := NewStore(path).Snapshot()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Snapshot() error=%v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

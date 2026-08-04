@@ -66,7 +66,7 @@ type collaborationSpecDTO struct {
 	WorkflowPaths              []collaboration.WorkflowPath `json:"workflow_paths"`
 }
 
-const collaborationSpecSchemaVersion = 1
+const collaborationSpecSchemaVersion = 2
 
 const federatedStructuralBlocker = "federated mode is structurally blocked: current Grok config activation serializes only the active provider, so non-active provider routes cannot be referenced safely without credential/config merging"
 
@@ -263,15 +263,17 @@ func (s *Server) handleCollaborationStatus(w http.ResponseWriter) {
 }
 
 // collaborationArtifactStatus validates both the manifest boundary and the
-// current file objects. The preset owns exactly five canonical Grok Home paths;
+// current file objects. The preset owns exactly nine canonical Grok Home paths;
 // accepting an empty, partial, relocated, symlinked, or non-regular manifest
 // would make a configured policy appear healthy without proving its artifacts.
+// The exact legacy five-file set remains accepted only as an upgrade source.
 // Disabled policies retain ownership, so their files remain observable for
 // drift even though routing/config checks are intentionally skipped.
 func (s *Server) collaborationArtifactStatus(policy collaboration.Policy) ([]string, bool) {
 	// A never-enabled disabled policy may legitimately have no ownership yet.
 	// Once a policy is enabled or retains role/provider state or a manifest, the
-	// complete five-file boundary is mandatory and remains observable.
+	// complete canonical boundary (or exact legacy upgrade boundary) is mandatory
+	// and remains observable.
 	requiresManifest := policy.Enabled || strings.TrimSpace(policy.ProviderID) != "" || policy.Roles != (collaboration.RoleAssignments{}) || len(policy.ManagedArtifacts) > 0
 	if !requiresManifest {
 		return nil, false
@@ -348,10 +350,10 @@ func (s *Server) prepareCollaborationLocked(request collaborationRequest) (colla
 		policy = collaboration.NewPolicy(request.ProviderID, request.Roles)
 		policy.Mode = request.Mode
 		policy.FederationConsent = request.FederationConsent
-		// v4 requests must carry every role provider and the workflow-derived canonical data scope explicitly; constructor defaults are only for internal compatibility.
+		// Current requests must carry every role provider and the workflow-derived canonical data scope explicitly; constructor defaults are only for internal compatibility.
 		for name, assignment := range map[string]collaboration.RoleAssignment{"main coordinator": request.Roles.MainCoordinator, "task decomposition": request.Roles.TaskDecomposition, "main implementation": request.Roles.MainImplementation, "difficult implementation/review": request.Roles.DifficultImplementationReview} {
 			if strings.TrimSpace(assignment.ProviderID) == "" || strings.TrimSpace(assignment.DataScope) == "" {
-				return collaborationPrepared{}, fmt.Errorf("%s provider_id and data_scope are required in v4 requests", name)
+				return collaborationPrepared{}, fmt.Errorf("%s provider_id and data_scope are required in v%d requests", name, collaboration.CurrentVersion)
 			}
 		}
 		if strings.TrimSpace(request.DefaultTier) != "" {
@@ -360,7 +362,7 @@ func (s *Server) prepareCollaborationLocked(request collaborationRequest) (colla
 	} else {
 		policy = collaboration.DisabledPolicy()
 		if request.Version != collaboration.CurrentVersion || request.Mode != "" || strings.TrimSpace(request.ProviderID) != "" || request.FederationConsent != nil || request.Roles != (collaboration.RoleAssignments{}) || strings.TrimSpace(request.DefaultTier) != "" {
-			return collaborationPrepared{}, fmt.Errorf("disable 请求只能包含 version=4 与 enabled=false")
+			return collaborationPrepared{}, fmt.Errorf("disable 请求只能包含 version=%d 与 enabled=false", collaboration.CurrentVersion)
 		}
 	}
 	if previousPolicyErr == nil {
@@ -465,7 +467,7 @@ func (s *Server) prepareCollaborationLocked(request collaborationRequest) (colla
 		currentProviderPolicy := nextState.ProviderPolicies[policy.ProviderID]
 		currentProviderPolicy.Default = resolvedRoles.MainCoordinator.Route.ID
 		currentProviderPolicy.DefaultReasoningEffort = resolvedRoles.MainCoordinator.ReasoningEffort
-		// Collaboration policy schema v4 owns its four user-level role files. Generic
+		// Collaboration policy schema v5 owns its four user-level role files. Generic
 		// explore/plan routing remains under the ordinary routing controls and is
 		// preserved rather than overloaded with unrelated semantic roles.
 		nextState.ProviderPolicies[policy.ProviderID] = currentProviderPolicy
@@ -518,7 +520,7 @@ func (s *Server) prepareCollaborationLocked(request collaborationRequest) (colla
 			"四个角色分别保存 Standard 模型锚点，并独立选择速度档与推理强度；多个角色可以复用同一模型。",
 			"Standard 不注入 priority；Fast 只解析到 exact-registry 可信别名，缺失或不可信时直接失败，不会静默回退。",
 			"只有 resolved Standard/Fast 路由由 declared 或 probe 明确支持所选 effort 时才能应用；速度档与推理强度彼此独立。",
-			"生成 workflow 严格串行并拒绝默认 128 预算；必须由 workflow tool 传入 tier 对应的 1/2/3/4。",
+			"生成 workflow 按阶段执行并拒绝默认 128 预算；必须由 workflow tool 传入 tier 对应的 1/2/11/12/13，由 workflow 顶层启动 10 个主实现 agent。",
 			"Collaboration 不接管普通 explore/plan 路由；Switch 只生成配置，不启动 agent，也不保存消息或 transcript。",
 		},
 	}

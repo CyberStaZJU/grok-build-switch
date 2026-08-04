@@ -176,8 +176,8 @@ func TestMaxCollaborationUIContract(t *testing.T) {
 		"只将 default 和默认推理强度对齐到主协调", "不覆盖 web_search、explore 或 plan",
 		"主协调", "任务拆解", "主实现", "困难实现 / 复核", "角色名称不绑定 Terra、Luna 或 Sol",
 		"Standard/Fast 速度档", "Fast 请求 priority", "更多订阅 credits", "缺失时不会回退",
-		"Switch 只预览并生成用户级 role/workflow", "budget 1", "budget 2", "budget 3", "budget 4",
-		"停用（保留文件）", "Critical Reviewed Build · 4 agents（显式选择）", "all_workflow_tiers_v1", "跨供应商数据流确认", "适用于全部五条可执行路径", "Adaptive 仅是默认提示，不缩小本次授权", "我已核对并同意以上跨供应商数据流", "Prompt 约束不是硬 DLP 边界", "在 Grok Build 中启动", "直接 slash 启动固定使用默认 budget 128", "复制精确代理指令", "请调用 workflow 工具运行 named workflow gbs-max-collab", "agent_budget=1", "请不要启动并说明原因", "数据范围（workflow 固定）",
+		"Switch 只预览并生成用户级 role/workflow", "budget 1", "budget 2", "budget 11", "budget 12", "budget 13",
+		"停用（保留文件）", "Critical Reviewed Build · budget 13（10 implementation agents，显式选择）", "all_workflow_tiers_v1", "跨供应商数据流确认", "适用于全部五条可执行路径", "Adaptive 仅是默认提示，不缩小本次授权", "我已核对并同意以上跨供应商数据流", "Prompt 约束不是硬 DLP 边界", "在 Grok Build 中启动", "直接 slash 启动固定使用默认 budget 128", "复制精确代理指令", "请调用 workflow 工具运行 named workflow gbs-max-collab", "agent_budget=1", "请不要启动并说明原因", "数据范围（workflow 固定）",
 	} {
 		if !bytes.Contains(htmlData, []byte(fragment)) {
 			t.Fatalf("collaboration guidance is missing %q", fragment)
