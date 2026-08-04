@@ -309,15 +309,15 @@
         </div>
         <section class="collaborationLaunchCard" aria-labelledby="collaborationLaunchTitle">
           <div class="rowBetween">
-            <div><strong id="collaborationLaunchTitle">在 Grok Build 中启动</strong><p>命名 workflow 的直接 slash 启动固定使用默认 budget 128，会被安全门槛拒绝。请复制下面这句自然语言指令，让 Grok 以所选 tier 的精确 agent budget 启动。</p></div>
+            <div><strong id="collaborationLaunchTitle">在 Grok Build 中启动</strong><p>命名 workflow 的直接 slash 启动固定使用默认 budget 128，会被安全门槛拒绝。请复制下方精确代理指令，让 Grok 通过 workflow 工具传入规范化 tier、JSON args 和匹配的 agent_budget。</p></div>
             <span id="collaborationLaunchBudget" class="badge">budget 1</span>
           </div>
           <label class="field">任务目标<textarea id="collaborationLaunchObjective" rows="3" placeholder="例如：执行最小只读 smoke，确认 workflow 可启动且不修改文件。"></textarea></label>
           <div class="collaborationLaunchCopyRow">
-            <code id="collaborationLaunchInstruction">使用 Economy 运行 gbs-max-collab，目标是：&lt;填写任务目标&gt;</code>
-            <button type="button" id="copyCollaborationLaunchBtn" class="btn primary">复制启动指令</button>
+            <code id="collaborationLaunchInstruction">请调用 workflow 工具运行 named workflow gbs-max-collab，设置 name=&quot;gbs-max-collab&quot;、args={&quot;objective&quot;:&quot;&lt;填写任务目标&gt;&quot;,&quot;tier&quot;:&quot;economy&quot;}，并精确设置 agent_budget=1。不要使用 /gbs-max-collab 或 /workflow slash 启动；如果不能精确设置 agent_budget=1，请不要启动并说明原因。</code>
+            <button type="button" id="copyCollaborationLaunchBtn" class="btn primary">复制精确代理指令</button>
           </div>
-          <p class="muted tiny">粘贴到 Grok Build 对话中即可。不要直接输入 <code>/gbs-max-collab</code>；当前 Grok 的 named slash launch 无法携带自定义 <code>agent_budget</code>。</p>
+          <p class="muted tiny">粘贴到 Grok Build 对话中即可。这不是 slash 命令；若 Grok 无法以匹配预算调用 workflow 工具，指令要求其 fail closed，不启动 workflow。</p>
         </section>
         <details id="collaborationPreview" class="fold collaborationPreview" hidden>
           <summary>预览详情</summary>

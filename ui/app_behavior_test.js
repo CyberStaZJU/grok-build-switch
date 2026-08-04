@@ -530,7 +530,7 @@ test("direct collaboration spec helper deterministically supersedes an in-flight
   assert.equal(app.getCollaborationSpecIssue(), "");
 });
 
-test("collaboration launch guide maps UI tiers to copyable exact-budget instructions", () => {
+test("collaboration launch guide maps UI tiers to exact fail-closed workflow tool instructions", () => {
   const elements = {
     collaborationTier: { value: "adaptive" },
     collaborationLaunchObjective: { value: "执行最小只读 smoke" },
@@ -540,14 +540,21 @@ test("collaboration launch guide maps UI tiers to copyable exact-budget instruct
   };
   const app = loadApp(async () => response(500), elements);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(app.collaborationLaunchParameters())), {
-    tier: "economy", label: "Economy", budget: 1,
-    objective: "执行最小只读 smoke",
-    instruction: "使用 Economy 运行 gbs-max-collab，目标是：执行最小只读 smoke",
-  });
+  const economy = app.collaborationLaunchParameters();
+  assert.equal(economy.tier, "economy");
+  assert.equal(economy.label, "Economy");
+  assert.equal(economy.budget, 1);
+  assert.equal(economy.objective, "执行最小只读 smoke");
+  assert.match(economy.instruction, /^请调用 workflow 工具运行 named workflow gbs-max-collab/);
+  assert.match(economy.instruction, /name="gbs-max-collab"/);
+  assert.match(economy.instruction, /args=\{"objective":"执行最小只读 smoke","tier":"economy"\}/);
+  assert.match(economy.instruction, /精确设置 agent_budget=1/);
+  assert.match(economy.instruction, /不要使用 \/gbs-max-collab 或 \/workflow slash 启动/);
+  assert.match(economy.instruction, /如果不能精确设置 agent_budget=1，请不要启动并说明原因/);
+
   app.updateCollaborationLaunchGuide();
   assert.equal(elements.collaborationLaunchBudget.textContent, "budget 1");
-  assert.equal(elements.collaborationLaunchInstruction.textContent, "使用 Economy 运行 gbs-max-collab，目标是：执行最小只读 smoke");
+  assert.equal(elements.collaborationLaunchInstruction.textContent, economy.instruction);
 
   for (const [tier, label, budget] of [
     ["focused-evidence", "Focused Evidence", 2],
@@ -559,14 +566,28 @@ test("collaboration launch guide maps UI tiers to copyable exact-budget instruct
     const launch = app.collaborationLaunchParameters();
     assert.equal(launch.label, label);
     assert.equal(launch.budget, budget);
-    assert.match(launch.instruction, new RegExp(`^使用 ${label} 运行 gbs-max-collab`));
+    assert.match(launch.instruction, new RegExp(`"tier":"${tier}"`));
+    assert.match(launch.instruction, new RegExp(`agent_budget=${budget}`));
+    assert.match(launch.instruction, /workflow 工具/);
+    assert.match(launch.instruction, /不要使用 \/gbs-max-collab 或 \/workflow slash 启动/);
+    assert.match(launch.instruction, /请不要启动并说明原因/);
   }
+
+  elements.collaborationTier.value = "focused-evidence";
+  elements.collaborationLaunchObjective.value = "检查 \\\"quoted\\\"\npath\\to\\file";
+  const special = app.collaborationLaunchParameters();
+  const encodedArgs = JSON.stringify({ objective: '检查 \\"quoted\\"\npath\\to\\file', tier: "focused-evidence" });
+  assert.equal(special.objective, '检查 \\"quoted\\"\npath\\to\\file');
+  assert.ok(special.instruction.includes(`args=${encodedArgs}`));
+  assert.match(special.instruction, /agent_budget=2/);
 
   elements.collaborationTier.value = "critical";
   elements.collaborationLaunchObjective.value = "   ";
   const empty = app.collaborationLaunchParameters();
   assert.equal(empty.objective, "");
-  assert.match(empty.instruction, /<填写任务目标>/);
+  assert.match(empty.instruction, /"objective":"<填写任务目标>"/);
+  assert.match(empty.instruction, /"tier":"critical"/);
+  assert.match(empty.instruction, /agent_budget=4/);
 });
 
 test("federated collaboration requires explicit consent and emits canonical provider set and edges", () => {
