@@ -19,7 +19,7 @@
 - 验证 Grok CLI 官方登录由官方流程完成，登录后官方路由可正常应用。
 - 验证普通 Profile 的创建、编辑、删除和模型选择；协议格式由显式 `upstream_format` 选择，类型模板不再提供。
 - 验证 default、web_search、explore、plan 的统一路由事务和失败回滚。
-- 验证 Max Collaboration schema v4 的同一可信 Codex provider 四角色 Standard 锚点/Standard-Fast 速度档/effort 独立校验、严格 v1/v2/v3→v4 迁移（旧 policy consent 为空、data scope 固定映射）、Fast fail-closed、preview/fingerprint、九个 canonical artifact（四个 agent definition、四个 role、一个 workflow）的清单/类型/hash/写前竞态保护、跨文件回滚、只对齐 routing default 的保存语义、policy-only disable 和 1/2/3/4 workflow 精确预算。
+- 验证 Max Collaboration schema v5 的同一可信 Codex provider 四角色 Standard 锚点/Standard-Fast 速度档/effort 独立校验、严格 v1/v2/v3/v4→v5 迁移（旧 policy consent 为空、data scope 固定映射）、Fast fail-closed、preview/fingerprint、九个 canonical artifact（四个 agent definition、四个 role、一个 workflow）的清单/类型/hash/写前竞态保护、跨文件回滚、只对齐 routing default 的保存语义、policy-only disable、10 个顶层主实现 agent 和 1/2/11/12/13 workflow 精确预算。
 - 验证 CLIProxy 完整 YAML 所有权合并、canonical ledger/认证 marker、二次 GET rebase、write-ahead recovery journal、跨进程 operation lock、受管 alias 出现/消失的稳定目录收敛、只读状态与显式 reconciliation 分离、精确 Fast `service_tier: priority` 注入、Standard 无 priority、严格一次性旧 ownership 迁移和失败不覆盖用户配置。
 - 验证用量面板聚合 completion/reasoning token，且缺失字段和 reasoning-only 事件处理正确。
 - 验证订阅代理生命周期、账号状态与代理路由，不改变其凭据。
@@ -111,10 +111,10 @@
 | stale preview 覆盖用户编辑 | fingerprint + 精确 canonical manifest + hash/文件类型 + 每个受管文件写前复核；冲突 fail closed |
 | Fast 被错误推断或静默降级 | 只信任 exact registry + 显式同供应商 Standard anchor；缺失/歧义/伪造直接失败，不按后缀推断 |
 | Fast credit 消耗被低估 | UI/preview 明确警告；速度与 effort 分离；不声称固定倍率，live 试点需单独授权 |
-| 默认 workflow budget 误触发大量 agent | 生成脚本要求 tier 对应精确 1/2/3/4；拒绝默认 128 |
+| 默认 workflow budget 误触发大量 agent | 生成脚本要求 tier 对应精确 1/2/11/12/13；拒绝默认 128，主实现阶段固定使用 10 个顶层 agent |
 | token 面板被误解为美元节省 | 只报告原始 token/turn，并明确真实成本与质量需试点 |
 | 非原生搜索路由被误认为可用 | 只暴露实际可执行能力 |
 | 多入口行为不一致 | 对菜单栏、Wails 和浏览器管理页执行同一 smoke 矩阵 |
 
 
-> Collaboration schema v4 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.

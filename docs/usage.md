@@ -58,7 +58,7 @@ Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent ru
 
 如果已保存的 Standard 锚点暂时不在当前 provider catalog 中、所选 Fast partner 消失，或已保存 effort 不再受具体 route 支持 / capability 来源不再可信，界面会把原选择保留为禁用项，不会静默替换或降级；请显式选择新的有效值后重新预览。
 
-旧 schema v1/v2 policy 在读取时保留 Standard 速度语义，schema v3 保留已保存的 Standard/Fast 选择；三者都只在内存迁移为 v4，读取不改写原文件，下一次显式保存才持久化 v4。v1/v2 不会自动把带 `-fast` 的旧具体 route ID 推断成 Fast；无法作为可信 Standard 锚点解析时会 fail closed，需用户显式选择锚点与速度档，以避免迁移时意外提高 credit 档。
+旧 schema v1/v2 policy 在读取时保留 Standard 速度语义，schema v3 保留已保存的 Standard/Fast 选择，schema v4 还会把旧预算和并发控制迁移为新默认；四者都只在内存迁移为 v5，读取不改写原文件，下一次显式保存才持久化 v5。v1/v2 不会自动把带 `-fast` 的旧具体 route ID 推断成 Fast；无法作为可信 Standard 锚点解析时会 fail closed，需用户显式选择锚点与速度档，以避免迁移时意外提高 credit 档。
 
 层级与真实 workflow 预算：
 
@@ -66,9 +66,9 @@ Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent ru
 |:---|:---|---:|
 | Economy | 主协调 | 1 |
 | Focused Evidence | 任务拆解 → 主协调 | 2 |
-| Focused Build | 主实现 → 主协调 | 2 |
-| Assurance | 任务拆解 → 主实现 → 主协调 | 3 |
-| Critical | 任务拆解 → 主实现 → 困难实现 / 复核 → 主协调 | 4 |
+| Focused Build | 10 个主实现 agent → 主协调 | 11 |
+| Assurance | 任务拆解 → 10 个主实现 agent → 主协调 | 12 |
+| Critical | 任务拆解 → 10 个主实现 agent → 困难实现 / 复核 → 主协调 | 13 |
 
 当前 workflow 不使用 `resume_from`。`Adaptive` 只是 Economy-first 的配置提示，Switch 不会自动运行 workflow。Grok Build 的命名 slash 启动当前固定使用默认 `agent_budget=128`，所以直接输入 `/gbs-max-collab` 会被生产 workflow 的精确预算门槛有意拒绝，也不会弹出参数选择器。
 
@@ -78,7 +78,7 @@ Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent ru
 使用 Assurance 运行 gbs-max-collab，目标是：审查当前改动并运行最小相关测试
 ```
 
-将该指令粘贴到 Grok Build 对话中，由 Grok 通过 workflow tool 传入 `args.objective`、`args.tier="assurance"` 和 `agent_budget=3`。其他 tier 会复制各自精确预算提示：Economy=1、Focused Evidence/Build=2、Critical=4。不要直接使用 slash autocomplete 启动该命名 workflow。
+将该指令粘贴到 Grok Build 对话中，由 Grok 通过 workflow tool 传入 `args.objective`、`args.tier="assurance"` 和 `agent_budget=12`。其他 tier 会复制各自精确预算提示：Economy=1、Focused Evidence=2、Focused Build=11、Critical=13。包含主实现的 tier 由 workflow 顶层启动 10 个主实现 agent。不要直接使用 slash autocomplete 启动该命名 workflow。
 
 每个角色使用其 role 文件中已选择并校验的推理强度；节省假设来自少调用、默认串行、复用结果包和限制重试，而不是强制固定档位。
 
@@ -125,4 +125,4 @@ Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent ru
 本教程第 3 至第 11 节覆盖当前完整产品范围。其他旧扩展已移除，不再提供现行操作入口。Max Collaboration 仅恢复配置控制面，不恢复 chat、session graph、transcript 或 `/api/agent/*`。
 
 
-> Collaboration schema v4 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.

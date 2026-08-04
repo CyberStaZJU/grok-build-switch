@@ -286,15 +286,15 @@ const COLLABORATION_ROLE_DEFS = [
   { key: "MainImplementation", requestKey: "main_implementation", preferredRoutingKey: "default", dataScope: "repository_plus_minimized_prior_work_products" },
   { key: "DifficultReview", requestKey: "difficult_implementation_review", preferredRoutingKey: "", dataScope: "repository_plus_minimized_prior_work_products" },
 ];
-const COLLABORATION_SPEC_SCHEMA_VERSION = 1;
-const COLLABORATION_POLICY_VERSION = 4;
+const COLLABORATION_SPEC_SCHEMA_VERSION = 2;
+const COLLABORATION_POLICY_VERSION = 5;
 const COLLABORATION_SPEC_UNAVAILABLE = "Collaboration workflow data-flow contract is unavailable; federated mode is disabled";
 const COLLABORATION_WORKFLOW_PATHS_V1 = [
   { tier: "economy", budget: 1, roles: ["main_coordinator"], data_flows: [] },
   { tier: "focused-evidence", budget: 2, roles: ["task_decomposition", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_coordinator" }] },
-  { tier: "focused-build", budget: 2, roles: ["main_implementation", "main_coordinator"], data_flows: [{ from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "assurance", budget: 3, roles: ["task_decomposition", "main_implementation", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "critical", budget: 4, roles: ["task_decomposition", "main_implementation", "difficult_implementation_review", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "difficult_implementation_review" }, { from: "main_implementation", to: "difficult_implementation_review" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }, { from: "difficult_implementation_review", to: "main_coordinator" }] },
+  { tier: "focused-build", budget: 11, roles: ["main_implementation", "main_coordinator"], data_flows: [{ from: "main_implementation", to: "main_coordinator" }] },
+  { tier: "assurance", budget: 12, roles: ["task_decomposition", "main_implementation", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }] },
+  { tier: "critical", budget: 13, roles: ["task_decomposition", "main_implementation", "difficult_implementation_review", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "difficult_implementation_review" }, { from: "main_implementation", to: "difficult_implementation_review" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }, { from: "difficult_implementation_review", to: "main_coordinator" }] },
 ];
 
 function plainJSONObject(value) {
@@ -485,7 +485,7 @@ function collaborationRequestFromValues(snapshot = {}, values = {}) {
     const prefix = definition.key[0].toLowerCase() + definition.key.slice(1);
     return [definition.requestKey, role(prefix, definition.dataScope)];
   }));
-  const request = { version: 4, enabled: true, mode, provider_id: coordinatorProvider, roles, default_tier: values.defaultTier || "adaptive" };
+  const request = { version: COLLABORATION_POLICY_VERSION, enabled: true, mode, provider_id: coordinatorProvider, roles, default_tier: values.defaultTier || "adaptive" };
   if (mode === "federated" && values.federationConsent === true) request.federation_consent = collaborationFederationConsent(roles);
   return request;
 }
@@ -646,9 +646,9 @@ const COLLABORATION_LAUNCH_TIERS = {
   adaptive: { tier: "economy", label: "Economy", budget: 1 },
   economy: { tier: "economy", label: "Economy", budget: 1 },
   "focused-evidence": { tier: "focused-evidence", label: "Focused Evidence", budget: 2 },
-  "focused-build": { tier: "focused-build", label: "Focused Build", budget: 2 },
-  assurance: { tier: "assurance", label: "Assurance", budget: 3 },
-  critical: { tier: "critical", label: "Critical", budget: 4 },
+  "focused-build": { tier: "focused-build", label: "Focused Build", budget: 11 },
+  assurance: { tier: "assurance", label: "Assurance", budget: 12 },
+  critical: { tier: "critical", label: "Critical", budget: 13 },
 };
 
 function collaborationLaunchParameters(selectedTier = $("collaborationTier")?.value || "adaptive", objective = $("collaborationLaunchObjective")?.value || "") {
@@ -673,7 +673,7 @@ function updateCollaborationTierHint() {
   const hint = $("collaborationTierHint");
   if (hint) {
     hint.textContent = tier === "critical"
-      ? "Critical 仍不会由 Switch 自动运行；请使用下方复制式启动指令，由 Grok 以 agent_budget=4 调用 workflow。"
+      ? "Critical 仍不会由 Switch 自动运行；请使用下方复制式启动指令，由 Grok 以 agent_budget=13 调用 workflow。workflow 顶层会启动 10 个主实现 agent。"
       : "Adaptive 映射为 Economy-first 启动建议；请使用下方复制式指令，让 Grok 传入精确 agent_budget。";
   }
   updateCollaborationLaunchGuide();
@@ -872,7 +872,7 @@ function collaborationArtifactHTML(artifact = {}) {
 }
 
 function renderCollaborationPreview(preview, mode = "enable", request = null) {
-  state.collaborationPreview = { preview, mode, request: request || (mode === "enable" ? currentCollaborationRequest() : { version: 4, enabled: false }) };
+  state.collaborationPreview = { preview, mode, request: request || (mode === "enable" ? currentCollaborationRequest() : { version: COLLABORATION_POLICY_VERSION, enabled: false }) };
   const details = $("collaborationPreview");
   if (details) {
     details.hidden = false;
@@ -919,8 +919,8 @@ async function applyCollaborationPreview() {
   const fastCount = Object.values(current.roles || {}).filter((assignment) => assignment.speed_tier === COLLABORATION_SPEED_FAST).length;
   const fastNotice = fastCount ? ` 当前有 ${fastCount} 个角色使用 Fast priority，通常会消耗更多订阅 credits，且缺失时不会回退到 Standard。` : "";
   const message = critical
-    ? `将把默认层级设为 Critical，并按预览写入 config.toml、routing policy、4 个角色文件和 1 个串行 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 本身不会启动 agent；以后运行该 workflow 仍必须显式选择 Critical 并传入 agent_budget=4。确认应用当前预览？`
-    : `将按当前预览更新 config.toml、routing policy，并写入 4 个角色文件和 1 个串行 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 不会启动 agent，也不会保存消息或 transcript。确认应用？`;
+    ? `将把默认层级设为 Critical，并按预览写入 config.toml、routing policy、4 个 agent definition、4 个角色文件和 1 个分阶段 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 本身不会启动 agent；以后运行该 workflow 仍必须显式选择 Critical 并传入 agent_budget=13，workflow 顶层会启动 10 个主实现 agent。确认应用当前预览？`
+    : `将按当前预览更新 config.toml、routing policy，并写入 4 个 agent definition、4 个角色文件和 1 个分阶段 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 不会启动 agent，也不会保存消息或 transcript。确认应用？`;
   if (!(await customConfirm(message, { okLabel: "确认应用" }))) return false;
   const result = await api("/api/collaboration", {
     method: "PUT",
@@ -932,7 +932,7 @@ async function applyCollaborationPreview() {
 }
 
 async function disableCollaboration() {
-  const request = { version: 4, enabled: false };
+  const request = { version: COLLABORATION_POLICY_VERSION, enabled: false };
   const preview = await previewCollaboration(request, "disable");
   const message = "停用只会停止使用 Max Collaboration policy；不会删除已生成的 role/workflow，也不会改写当前 config.toml 或 routing。确认按预览停用？";
   if (!(await customConfirm(message, { okLabel: "确认停用", danger: true }))) return false;

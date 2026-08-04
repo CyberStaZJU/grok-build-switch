@@ -9,7 +9,7 @@ Grok Build Switch 是面向 macOS 的本地菜单栏/桌面工具，用于管理
 - **官方 Grok CLI**：使用 Grok CLI 官方登录流程，并在登录后应用官方模型路由
 - **普通 Profile**：管理供应商名称、Base URL、API Key、上游格式和模型
 - **单一启用供应商路由**：官方或自定义供应商互斥启用；每个供应商记忆自己的 `default`、`web_search`、`subagents.explore` 与 `subagents.plan`，自定义切换保留组合模型目录以兼容旧会话别名
-- **Max Collaboration 控制面**：为主协调、任务拆解、主实现、困难实现 / 复核四个角色分别选择同一可信 Codex 订阅供应商内的 Standard 模型锚点、独立 Standard/Fast 速度档与推理强度，预览后生成用户级 Grok Build role/workflow，并以串行 1/2/3/4 精确预算门控调用
+- **Max Collaboration 控制面**：为主协调、任务拆解、主实现、困难实现 / 复核四个角色分别选择同一可信 Codex 订阅供应商内的 Standard 模型锚点、独立 Standard/Fast 速度档与推理强度，预览后生成用户级 Grok Build role/workflow，并以 1/2/11/12/13 精确预算门控调用；由 workflow 顶层启动 10 个主实现 agent
 - **用量观察**：只读聚合近期 prompt、cached prompt、completion 与 reasoning token 及缓存命中率；不把订阅用量虚构为美元成本
 - **订阅代理**：通过内嵌 CLIProxyAPI 接入和管理受支持的第三方订阅；Switch 以 canonical ownership ledger、认证 marker、跨进程锁和 recovery journal 合并完整 YAML，仅对 exact-registry Fast aliases 注入 priority；未知并发状态 fail closed，不覆盖无关用户配置
 - **配置编辑**：查看、校验并编辑 `~/.grok/config.toml`
@@ -71,12 +71,12 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 
 ## Max Collaboration 使用边界
 
-- Collaboration schema v4 为四个角色各自保存 **Standard route anchor**、显式 `speed_tier`（`standard` / `fast`）与 `reasoning_effort`；同一模型可以复用，速度档与推理强度彼此独立。
+- Collaboration schema v5 为四个角色各自保存 **Standard route anchor**、显式 `speed_tier`（`standard` / `fast`）与 `reasoning_effort`；同一模型可以复用，速度档与推理强度彼此独立。
 - Standard 沿用现有逻辑身份且不注入 priority。Fast 仅在 exact-registry 可信 Terra/Sol/Luna Standard↔Fast 关系完整时解析为 `subscription/codex/<model>-fast`，由 CLIProxy 对该精确别名注入 `service_tier: priority`；缺失、歧义或伪造关系直接失败，不按名称/后缀推断，也不静默回退 Standard。
 - 推理强度在解析后的具体 Standard/Fast route 上校验，必须由 `declared` 或 `probe` 明确支持。Fast 通常更快但会消耗更多订阅 credits；项目不声称固定倍率。
 - v1/v2 policy 读取时只在内存迁移为 Standard，且不改写旧文件；旧 policy 若把具体 `-fast` ID 当作 model，因无法安全推断锚点而 fail closed，需用户显式修复，避免迁移意外提高 credit 档。
 - 应用只把普通路由的 `default` 具体模型和默认推理强度对齐到主协调；`web_search`、`explore` 与 `plan` 仍由普通路由管理，浏览器/搜索能力与 Collaboration 正交。
-- 独立 workflow 层级为 Economy=1、Focused Evidence/Build=2、Assurance=3、Critical=4。Grok Build 的 named slash launch 当前固定使用默认 budget 128 且不提供参数选择，因此不要直接输入 `/gbs-max-collab`。应用会按所选 tier 和任务目标生成可复制的自然语言启动指令，由 Grok 通过 workflow tool 传入完全匹配的 `agent_budget`。
+- 独立 workflow 层级为 Economy=1、Focused Evidence=2、Focused Build=11、Assurance=12、Critical=13；后三条路径由 workflow 顶层启动 10 个主实现 agent。Grok Build 的 named slash launch 当前固定使用默认 budget 128 且不提供参数选择，因此不要直接输入 `/gbs-max-collab`。应用会按所选 tier 和任务目标生成可复制的自然语言启动指令，由 Grok 通过 workflow tool 传入完全匹配的 `agent_budget`。
 - `Adaptive` 是 Economy-first 配置提示，不会自动运行 workflow；`Critical` 必须显式选择。
 - 当前实现和本地测试不等于真实订阅成本结论。只有在经授权的 live 试点证明质量不下降且总用量更低后，才能宣称实际节省。
 
@@ -85,4 +85,4 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 [MIT](./LICENSE)
 
 
-> Collaboration schema v4 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.

@@ -23,7 +23,7 @@ func TestNewPolicyValidatesFourRolesWithIndependentSpeedsAndEfforts(t *testing.T
 	if policy.Version != CurrentVersion || !policy.Enabled {
 		t.Fatalf("policy defaults = %#v", policy)
 	}
-	if policy.DefaultTier != DefaultTierAdaptive || policy.MaxParallel != 1 || policy.RetryLimit != 1 {
+	if policy.DefaultTier != DefaultTierAdaptive || policy.MaxParallel != MainImplementationAgentLimit || policy.RetryLimit != 1 {
 		t.Fatalf("policy controls = %#v", policy)
 	}
 	if policy.Budgets != DefaultTierBudgets() {
@@ -402,9 +402,9 @@ func TestWorkflowPathsDefineExactExecutionAndDataFlows(t *testing.T) {
 	want := []WorkflowPath{
 		{Tier: TierEconomy, Budget: 1, Roles: []string{RoleMainCoordinator}, DataFlows: []HandoffEdge{}},
 		{Tier: TierFocusedEvidence, Budget: 2, Roles: []string{RoleTaskDecomposition, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleTaskDecomposition, To: RoleMainCoordinator}}},
-		{Tier: TierFocusedBuild, Budget: 2, Roles: []string{RoleMainImplementation, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleMainImplementation, To: RoleMainCoordinator}}},
-		{Tier: TierAssurance, Budget: 3, Roles: []string{RoleTaskDecomposition, RoleMainImplementation, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleTaskDecomposition, To: RoleMainImplementation}, {From: RoleTaskDecomposition, To: RoleMainCoordinator}, {From: RoleMainImplementation, To: RoleMainCoordinator}}},
-		{Tier: TierCritical, Budget: 4, Roles: []string{RoleTaskDecomposition, RoleMainImplementation, RoleDifficultImplementationReview, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleTaskDecomposition, To: RoleMainImplementation}, {From: RoleTaskDecomposition, To: RoleDifficultImplementationReview}, {From: RoleMainImplementation, To: RoleDifficultImplementationReview}, {From: RoleTaskDecomposition, To: RoleMainCoordinator}, {From: RoleMainImplementation, To: RoleMainCoordinator}, {From: RoleDifficultImplementationReview, To: RoleMainCoordinator}}},
+		{Tier: TierFocusedBuild, Budget: 11, Roles: []string{RoleMainImplementation, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleMainImplementation, To: RoleMainCoordinator}}},
+		{Tier: TierAssurance, Budget: 12, Roles: []string{RoleTaskDecomposition, RoleMainImplementation, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleTaskDecomposition, To: RoleMainImplementation}, {From: RoleTaskDecomposition, To: RoleMainCoordinator}, {From: RoleMainImplementation, To: RoleMainCoordinator}}},
+		{Tier: TierCritical, Budget: 13, Roles: []string{RoleTaskDecomposition, RoleMainImplementation, RoleDifficultImplementationReview, RoleMainCoordinator}, DataFlows: []HandoffEdge{{From: RoleTaskDecomposition, To: RoleMainImplementation}, {From: RoleTaskDecomposition, To: RoleDifficultImplementationReview}, {From: RoleMainImplementation, To: RoleDifficultImplementationReview}, {From: RoleTaskDecomposition, To: RoleMainCoordinator}, {From: RoleMainImplementation, To: RoleMainCoordinator}, {From: RoleDifficultImplementationReview, To: RoleMainCoordinator}}},
 	}
 	got := WorkflowPaths()
 	if fmt.Sprintf("%#v", got) != fmt.Sprintf("%#v", want) {
@@ -427,7 +427,7 @@ func TestFederationConsentCoversAllExecutablePathsAndIgnoresDefaultTier(t *testi
 		t.Fatalf("tier edge map count = %d, want 5", len(want))
 	}
 	for i, path := range WorkflowPaths() {
-		if want[i].Tier != path.Tier || path.Budget != []int{1, 2, 2, 3, 4}[i] {
+		if want[i].Tier != path.Tier || path.Budget != []int{1, 2, 11, 12, 13}[i] {
 			t.Fatalf("path %d mismatch: workflow=%#v consent=%#v", i, path, want[i])
 		}
 	}

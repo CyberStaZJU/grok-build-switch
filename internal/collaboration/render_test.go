@@ -65,6 +65,9 @@ func TestRenderArtifactsDeterministicWithResolvedStandardFastModelsAndEfforts(t 
 		`Do not launch this named workflow directly from slash autocomplete`,
 		`Ask Grok in natural language`,
 		`args.objective, args.tier, and the matching agent_budget`,
+		`up to 10 workflow-level implementation agents`,
+		`implementation agent 10 of 10`,
+		`prefer unclaimed/disjoint files`,
 		`focused-evidence`,
 		`focused-build`,
 		`assurance`,
@@ -99,9 +102,9 @@ func TestRenderedWorkflowTierPathsUseExpectedRolesAndBudgets(t *testing.T) {
 	for _, want := range []string{
 		`if tier == "economy" { expected_budget = 1; }`,
 		`else if tier == "focused-evidence" { expected_budget = 2; }`,
-		`else if tier == "focused-build" { expected_budget = 2; }`,
-		`else if tier == "assurance" { expected_budget = 3; }`,
-		`else if tier == "critical" { expected_budget = 4; }`,
+		`else if tier == "focused-build" { expected_budget = 11; }`,
+		`else if tier == "assurance" { expected_budget = 12; }`,
+		`else if tier == "critical" { expected_budget = 13; }`,
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("workflow missing budget guard %q:\n%s", want, workflow)
@@ -121,6 +124,9 @@ func TestRenderedWorkflowTierPathsUseExpectedRolesAndBudgets(t *testing.T) {
 
 	assertWorkflowSectionAgents(t, decomposeBlock, []string{TaskDecompositionRoleName})
 	assertWorkflowSectionAgents(t, implementBlock, []string{MainImplementationRoleName})
+	if got := strings.Count(implementBlock, `agent_type: "`+MainImplementationRoleName+`"`); got != MainImplementationAgentLimit {
+		t.Fatalf("implementation agent count=%d, want %d:\n%s", got, MainImplementationAgentLimit, implementBlock)
+	}
 	assertWorkflowSectionAgents(t, reviewBlock, []string{DifficultReviewRoleName})
 	assertWorkflowSectionAgents(t, coordinateBlock, []string{MainCoordinatorRoleName})
 }

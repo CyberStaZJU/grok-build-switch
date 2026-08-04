@@ -286,18 +286,19 @@
               <option value="adaptive">Adaptive / Economy-first</option>
               <option value="economy">Economy · 主协调 · 1 agent</option>
               <option value="focused-evidence">Focused Decomposition · 2 agents</option>
-              <option value="focused-build">Focused Implementation · 2 agents</option>
-              <option value="assurance">Assurance · 3 agents</option>
-              <option value="critical">Critical Reviewed Build · 4 agents（显式选择）</option>
+              <option value="focused-build">Focused Implementation · budget 11（10 implementation agents）</option>
+              <option value="assurance">Assurance · budget 12（10 implementation agents）</option>
+              <option value="critical">Critical Reviewed Build · budget 13（10 implementation agents，显式选择）</option>
             </select>
             <span id="collaborationTierHint" class="muted tiny">Adaptive 是策略提示；运行 workflow 时仍须显式选择 tier 与精确 agent_budget。</span>
           </label>
         </div>
         <div class="collaborationBudgetGrid" aria-label="协作层级预算">
           <div><strong>Economy</strong><span>主协调 · budget 1</span></div>
-          <div><strong>Focused</strong><span>任务拆解或主实现 → 主协调 · budget 2</span></div>
-          <div><strong>Assurance</strong><span>任务拆解 → 主实现 → 主协调 · budget 3</span></div>
-          <div><strong>Critical</strong><span>再加入困难实现 / 复核 · budget 4</span></div>
+          <div><strong>Focused Evidence</strong><span>任务拆解 → 主协调 · budget 2</span></div>
+          <div><strong>Focused Build</strong><span>10 个主实现 agent → 主协调 · budget 11</span></div>
+          <div><strong>Assurance</strong><span>任务拆解 → 10 个主实现 agent → 主协调 · budget 12</span></div>
+          <div><strong>Critical</strong><span>再加入困难实现 / 复核 · budget 13</span></div>
         </div>
         <div id="collaborationFederationWarning" class="alert warn" hidden></div>
         <div id="collaborationCreditWarning" class="alert warn collaborationCreditWarning" hidden></div>

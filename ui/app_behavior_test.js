@@ -343,7 +343,7 @@ test("collaboration request stores four independent provider-local role assignme
     defaultTier: "assurance",
   });
   assert.deepEqual(JSON.parse(JSON.stringify(request)), {
-    version: 4, enabled: true, mode: "single_provider", provider_id: "provider-1",
+    version: 5, enabled: true, mode: "single_provider", provider_id: "provider-1",
     roles: {
       main_coordinator: { provider_id: "provider-1", model: "provider-1:terra", speed_tier: "standard", reasoning_effort: "high", data_scope: "repository_plus_minimized_prior_work_products" },
       task_decomposition: { provider_id: "provider-1", model: "provider-1:luna", speed_tier: "fast", reasoning_effort: "medium", data_scope: "repository_only" },
@@ -368,12 +368,12 @@ test("collaboration request ignores tampered disabled data-scope controls and em
   assert.equal(request.roles.difficult_implementation_review.data_scope, "repository_plus_minimized_prior_work_products");
 });
 
-const collaborationWorkflowSpec = { schema_version: 1, collaboration_policy_version: 4, workflow_paths: [
+const collaborationWorkflowSpec = { schema_version: 2, collaboration_policy_version: 5, workflow_paths: [
   { tier: "economy", budget: 1, roles: ["main_coordinator"], data_flows: [] },
   { tier: "focused-evidence", budget: 2, roles: ["task_decomposition", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_coordinator" }] },
-  { tier: "focused-build", budget: 2, roles: ["main_implementation", "main_coordinator"], data_flows: [{ from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "assurance", budget: 3, roles: ["task_decomposition", "main_implementation", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "critical", budget: 4, roles: ["task_decomposition", "main_implementation", "difficult_implementation_review", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "difficult_implementation_review" }, { from: "main_implementation", to: "difficult_implementation_review" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }, { from: "difficult_implementation_review", to: "main_coordinator" }] },
+  { tier: "focused-build", budget: 11, roles: ["main_implementation", "main_coordinator"], data_flows: [{ from: "main_implementation", to: "main_coordinator" }] },
+  { tier: "assurance", budget: 12, roles: ["task_decomposition", "main_implementation", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }] },
+  { tier: "critical", budget: 13, roles: ["task_decomposition", "main_implementation", "difficult_implementation_review", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "difficult_implementation_review" }, { from: "main_implementation", to: "difficult_implementation_review" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }, { from: "difficult_implementation_review", to: "main_coordinator" }] },
 ] };
 
 function cloneCollaborationWorkflowSpec() {
@@ -390,8 +390,8 @@ test("collaboration spec validator accepts only the exact versioned canonical co
     (spec) => { spec.workflow_paths[2].budget = 3; },
     (spec) => { spec.workflow_paths.splice(2, 1); },
     (spec) => { spec.workflow_paths.push({ ...spec.workflow_paths[4] }); },
-    (spec) => { spec.schema_version = 2; },
-    (spec) => { spec.collaboration_policy_version = 5; },
+    (spec) => { spec.schema_version = 1; },
+    (spec) => { spec.collaboration_policy_version = 4; },
     (spec) => { spec.extra = true; },
     (spec) => { spec.workflow_paths[0].extra = true; },
     (spec) => { spec.workflow_paths[1].data_flows[0].extra = true; },
@@ -558,9 +558,9 @@ test("collaboration launch guide maps UI tiers to exact fail-closed workflow too
 
   for (const [tier, label, budget] of [
     ["focused-evidence", "Focused Evidence", 2],
-    ["focused-build", "Focused Build", 2],
-    ["assurance", "Assurance", 3],
-    ["critical", "Critical", 4],
+    ["focused-build", "Focused Build", 11],
+    ["assurance", "Assurance", 12],
+    ["critical", "Critical", 13],
   ]) {
     elements.collaborationTier.value = tier;
     const launch = app.collaborationLaunchParameters();
@@ -587,7 +587,7 @@ test("collaboration launch guide maps UI tiers to exact fail-closed workflow too
   assert.equal(empty.objective, "");
   assert.match(empty.instruction, /"objective":"<填写任务目标>"/);
   assert.match(empty.instruction, /"tier":"critical"/);
-  assert.match(empty.instruction, /agent_budget=4/);
+  assert.match(empty.instruction, /agent_budget=13/);
 });
 
 test("federated collaboration requires explicit consent and emits canonical provider set and edges", () => {

@@ -114,21 +114,21 @@ subagents.plan
 - **主实现**：完成有边界的代码修改和聚焦验证；
 - **困难实现 / 复核**：处理高难实现、调试、对抗性复核与关键修复。
 
-Collaboration schema v4 为每个角色分别保存同一可信 Codex 订阅供应商中的 **Standard route anchor**、显式 `speed_tier` 和推理强度；允许多个角色复用同一锚点。Standard 使用原有逻辑模型身份，不注入 priority。Fast 解析为同一物理模型的精确 `subscription/codex/<model>-fast` 别名，由 CLIProxy 注入 `service_tier: priority`；它通常更快，但会消耗更多订阅 credits，且没有可可靠声称的固定倍率。
+Collaboration schema v5 为每个角色分别保存同一可信 Codex 订阅供应商中的 **Standard route anchor**、显式 `speed_tier` 和推理强度；允许多个角色复用同一锚点。Standard 使用原有逻辑模型身份，不注入 priority。Fast 解析为同一物理模型的精确 `subscription/codex/<model>-fast` 别名，由 CLIProxy 注入 `service_tier: priority`；它通常更快，但会消耗更多订阅 credits，且没有可可靠声称的固定倍率。
 
 Standard/Fast 关系只信任 Switch exact registry 中 Terra/Sol/Luna 的显式同供应商元数据，不从后缀、显示名、provider 名或 GPT 名称推断。Fast partner 缺失、歧义或伪造时直接失败，不静默回退。推理强度在解析后的具体 Standard/Fast route 上校验；只有该 route 明确声明或经用户授权 probe 证明支持所选 effort 时才可应用。未知 capability 会 fail closed。
 
-schema v1/v2 读取时保留其 Standard 速度语义，schema v3 保留已保存的 Standard/Fast 选择；三者都只在内存迁移为 v4，读取不会重写旧字节，下一次显式保存才持久化 v4。若 v1/v2 旧记录本身保存了具体 `-fast` route ID，它不会被自动推断为 Fast；无法解析成可信 Standard 锚点时要求用户显式修复，以避免迁移意外提高 credit 档。
+schema v1/v2 读取时保留其 Standard 速度语义，schema v3 保留已保存的 Standard/Fast 选择，schema v4 迁移旧预算与并发控制；四者都只在内存迁移为 v5，读取不会重写旧字节，下一次显式保存才持久化 v5。若 v1/v2 旧记录本身保存了具体 `-fast` route ID，它不会被自动推断为 Fast；无法解析成可信 Standard 锚点时要求用户显式修复，以避免迁移意外提高 credit 档。
 
-独立 workflow 严格串行：
+独立 workflow 顶层阶段串行；由 workflow 顶层启动 10 个主实现 agent：
 
 | Tier | 顺序 | 精确 `agent_budget` |
 |:---|:---|---:|
 | Economy | 主协调 | 1 |
 | Focused Evidence | 任务拆解 → 主协调 | 2 |
-| Focused Build | 主实现 → 主协调 | 2 |
-| Assurance | 任务拆解 → 主实现 → 主协调 | 3 |
-| Critical | 任务拆解 → 主实现 → 困难实现 / 复核 → 主协调 | 4 |
+| Focused Build | 10 个主实现 agent → 主协调 | 11 |
+| Assurance | 任务拆解 → 10 个主实现 agent → 主协调 | 12 |
+| Critical | 任务拆解 → 10 个主实现 agent → 困难实现 / 复核 → 主协调 | 13 |
 
 当前 workflow 不使用 `resume_from`。生成脚本会拒绝 Grok Build workflow 的默认 128 预算；调用方必须显式选择 tier，并通过 workflow tool 传入完全匹配的预算。`Adaptive` 只是控制面提示，不会自动启动 workflow；Critical 也不会自动进入。
 
@@ -252,7 +252,7 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 
 - 普通 Profile 与统一路由；
 - Grok CLI 官方登录和官方路由；
-- Max Collaboration schema v4 的 exact Standard/Fast 解析、具体 route effort fail-closed、preview/fingerprint、canonical manifest/文件类型/hash 漂移、事务回滚、policy-only disable 和 tier 精确预算；
+- Max Collaboration schema v5 的 exact Standard/Fast 解析、具体 route effort fail-closed、preview/fingerprint、canonical manifest/文件类型/hash 漂移、事务回滚、policy-only disable 和 tier 精确预算；
 - CLIProxy 完整 YAML ownership merge 与仅精确 Fast alias 的 `service_tier: priority` 整形；
 - 用量聚合中的 prompt/cached/completion/reasoning token；
 - 订阅代理；
@@ -291,4 +291,4 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 可以。用户已授权清理已移除能力的应用自有旧记录，但必须保留 Grok CLI 官方认证和订阅代理凭据，并保留无法确认归属的数据。
 
 
-> Collaboration schema v4 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
