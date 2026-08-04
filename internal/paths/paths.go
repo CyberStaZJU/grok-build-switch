@@ -11,16 +11,17 @@ import (
 const migrationMarker = ".migrated-from-dot-grok-switch"
 
 type Paths struct {
-	GrokConfig       string
-	GrokHome         string
-	DataDir          string
-	ProfilesFile     string
-	RoutingFile      string
-	SettingsFile     string
-	RemoteAccessFile string
-	LogFile          string
-	legacyDataDir    string
-	migrateLegacy    bool
+	GrokConfig        string
+	GrokHome          string
+	DataDir           string
+	ProfilesFile      string
+	RoutingFile       string
+	CollaborationFile string
+	SettingsFile      string
+	RemoteAccessFile  string
+	LogFile           string
+	legacyDataDir     string
+	migrateLegacy     bool
 }
 
 func Resolve() (Paths, error) {
@@ -47,16 +48,17 @@ func Resolve() (Paths, error) {
 		}
 	}
 	return Paths{
-		GrokConfig:       grokConfig,
-		GrokHome:         grokHome,
-		DataDir:          dataDir,
-		ProfilesFile:     filepath.Join(dataDir, "profiles.json"),
-		RoutingFile:      filepath.Join(dataDir, "routing.json"),
-		SettingsFile:     filepath.Join(dataDir, "settings.json"),
-		RemoteAccessFile: filepath.Join(dataDir, "remote_access.json"),
-		LogFile:          filepath.Join(dataDir, "grok_switch.log"),
-		legacyDataDir:    legacyDataDir,
-		migrateLegacy:    migrateLegacy,
+		GrokConfig:        grokConfig,
+		GrokHome:          grokHome,
+		DataDir:           dataDir,
+		ProfilesFile:      filepath.Join(dataDir, "profiles.json"),
+		RoutingFile:       filepath.Join(dataDir, "routing.json"),
+		CollaborationFile: filepath.Join(dataDir, "collaboration.json"),
+		SettingsFile:      filepath.Join(dataDir, "settings.json"),
+		RemoteAccessFile:  filepath.Join(dataDir, "remote_access.json"),
+		LogFile:           filepath.Join(dataDir, "grok_switch.log"),
+		legacyDataDir:     legacyDataDir,
+		migrateLegacy:     migrateLegacy,
 	}, nil
 }
 

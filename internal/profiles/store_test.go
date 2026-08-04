@@ -373,3 +373,94 @@ func readBytes(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+func TestSpeedVariantMetadataRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	store := NewStore(path)
+	standard := "subscription/codex/gpt-5.6-terra"
+	fast := standard + "-fast"
+	created, err := store.Create(Profile{
+		Name: "trusted variants", DefaultModel: standard,
+		Models: []ModelDef{
+			{Name: standard, Model: standard, SpeedTier: SpeedTierStandard, StandardAnchor: standard},
+			{Name: fast, Model: fast, SpeedTier: SpeedTierFast, StandardAnchor: standard},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Models[0].SpeedTier != SpeedTierStandard || got.Models[0].StandardAnchor != standard || got.Models[1].SpeedTier != SpeedTierFast || got.Models[1].StandardAnchor != standard {
+		t.Fatalf("variant metadata = %#v", got.Models)
+	}
+
+	before := readBytes(t, path)
+	for _, test := range []struct {
+		name   string
+		models []ModelDef
+		want   string
+	}{
+		{name: "partial tier", models: []ModelDef{{Name: standard, Model: standard, SpeedTier: SpeedTierStandard}}, want: "both be present"},
+		{name: "partial anchor", models: []ModelDef{{Name: standard, Model: standard, StandardAnchor: standard}}, want: "both be present"},
+		{name: "invalid tier", models: []ModelDef{{Name: standard, Model: standard, SpeedTier: "turbo", StandardAnchor: standard}}, want: "speed tier"},
+		{name: "standard not self anchored", models: []ModelDef{{Name: standard, Model: standard, SpeedTier: SpeedTierStandard, StandardAnchor: "other"}}, want: "self-anchor"},
+		{name: "fast missing standard", models: []ModelDef{{Name: fast, Model: fast, SpeedTier: SpeedTierFast, StandardAnchor: standard}}, want: "missing standard anchor"},
+		{name: "fast anchors fast", models: []ModelDef{{Name: standard, Model: standard, SpeedTier: SpeedTierFast, StandardAnchor: standard}}, want: "standard anchor"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.Update(created.ID, Profile{Name: test.name, DefaultModel: modelKey(test.models[0]), Models: test.models})
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.want)) {
+				t.Fatalf("Update() error = %v, want %q", err, test.want)
+			}
+			if after := readBytes(t, path); !bytes.Equal(after, before) {
+				t.Fatalf("rejected variant update changed bytes\nbefore=%s\nafter=%s", before, after)
+			}
+		})
+	}
+}
+
+func TestProfileMatchesIgnoresSwitchOnlySpeedMetadata(t *testing.T) {
+	base := Profile{
+		BaseURL:      "https://example.test/v1",
+		APIKey:       "secret",
+		DefaultModel: "model",
+		Models: []ModelDef{{
+			Name: "model", Model: "model", BaseURL: "https://example.test/v1", APIKey: "secret",
+		}},
+	}
+	withTier := base
+	withTier.Models = append([]ModelDef(nil), base.Models...)
+	withTier.Models[0].SpeedTier = SpeedTierStandard
+	withTier.Models[0].StandardAnchor = "model"
+	if !base.Matches(withTier) || !withTier.Matches(base) {
+		t.Fatal("config.toml projection comparison must ignore Switch-only speed metadata")
+	}
+
+	withDifferentAnchor := withTier
+	withDifferentAnchor.Models = append([]ModelDef(nil), withTier.Models...)
+	withDifferentAnchor.Models[0].StandardAnchor = "other"
+	if !withTier.Matches(withDifferentAnchor) {
+		t.Fatal("projection comparison must not treat non-projectable standard_anchor as TOML drift")
+	}
+}
+
+func TestNormalizeDoesNotFabricateSpeedClassification(t *testing.T) {
+	profile := Normalize(Profile{Models: []ModelDef{{Name: "model-fast", Model: "model-fast"}}})
+	if profile.Models[0].SpeedTier != "" || profile.Models[0].StandardAnchor != "" {
+		t.Fatalf("Normalize fabricated speed metadata: %#v", profile.Models[0])
+	}
+}
+
+func TestStoreQuarantinesInvalidPersistedSpeedRelationship(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+	original := []byte(`[{"id":"forged","name":"forged","default_model":"fast","models":[{"name":"fast","model":"fast","speed_tier":"fast","standard_anchor":"missing"}]}]` + "\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := NewStore(path).List()
+	assertIdentityQuarantine(t, path, original, items, err, "missing standard anchor")
+}

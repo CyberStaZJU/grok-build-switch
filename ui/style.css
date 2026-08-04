@@ -557,6 +557,77 @@ code, kbd, pre, .mono {
 .routingUnavailable { padding: 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); text-align: center; background: var(--surface-2); }
 .routingUnavailable p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 
+/* Collaboration control plane */
+.collaborationRelationship { padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--line)); border-radius: var(--radius-sm); background: var(--primary-soft); }
+.collaborationRelationship strong { font-size: 13px; }
+.collaborationRelationship p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: var(--leading-relaxed); }
+.collaborationGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.collaborationRole { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .8fr) minmax(0, .9fr); gap: 10px; }
+.collaborationRoleHead { grid-column: 1 / -1; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.collaborationRoleHead strong { font-size: 13px; }
+.collaborationRoleHead span { color: var(--muted); font-size: 11px; text-align: right; }
+.collaborationRole > .tiny { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.collaborationRole > .tiny.ok { color: var(--success); }
+.collaborationRole > .tiny.warn { color: var(--warn); }
+.collaborationTierField { grid-column: 1 / -1; }
+.collaborationBudgetGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.collaborationBudgetGrid > div { min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); display: grid; gap: 3px; }
+.collaborationBudgetGrid strong { font-size: 12px; }
+.collaborationBudgetGrid span { color: var(--muted); font-size: 11px; line-height: var(--leading-normal); }
+.collaborationBoundary { margin: 0 !important; }
+.collaborationLaunchCard { padding: 14px 15px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line)); border-radius: var(--radius); background: linear-gradient(145deg, var(--primary-soft), var(--surface) 58%); display: grid; gap: 12px; }
+.collaborationLaunchCard .rowBetween { align-items: flex-start; }
+.collaborationLaunchCard .rowBetween > div { min-width: 0; }
+.collaborationLaunchCard strong { color: var(--text); font-size: 13px; }
+.collaborationLaunchCard p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: var(--leading-relaxed); }
+.collaborationLaunchCard .field { gap: 5px; }
+.collaborationLaunchCard textarea { resize: vertical; background: var(--surface); }
+.collaborationLaunchCopyRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.collaborationLaunchCopyRow code { min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); overflow-wrap: anywhere; }
+.collaborationFederationCard { grid-column: 1 / -1; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line)); border-radius: var(--radius); background: linear-gradient(145deg, color-mix(in srgb, var(--warn-soft) 72%, var(--surface)) 0%, var(--surface) 58%); box-shadow: 0 8px 28px color-mix(in srgb, var(--warn) 10%, transparent); }
+.collaborationFederationCard[hidden], .collaborationConsent[hidden] { display: none !important; }
+.collaborationFederationHead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 14px 15px 10px; }
+.collaborationFederationIcon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--warn-soft); color: var(--warn); font-size: 17px; font-weight: 700; }
+.collaborationFederationHead > div { min-width: 0; display: grid; gap: 2px; }
+.collaborationFederationHead strong { color: var(--text); font-size: 13px; }
+.collaborationFederationHead span { color: var(--muted); font-size: 11px; }
+.collaborationFederationHead code { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 10px; }
+.collaborationFederationCard > p { margin: 0; padding: 0 15px 11px 55px; color: var(--muted); font-size: 12px; line-height: var(--leading-relaxed); }
+.collaborationFederationMap { margin: 0 15px 12px; padding: 11px 12px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--surface-2) 88%, transparent); color: var(--text); font: 11px/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.collaborationFederationBoundary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin: 0 15px 12px; padding: 9px 11px; border-left: 3px solid var(--warn); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--warn-soft); font-size: 11px; line-height: var(--leading-relaxed); }
+.collaborationFederationBoundary strong { color: var(--warn); }
+.collaborationFederationBoundary span { color: var(--muted); }
+.collaborationConsent { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: flex-start; gap: 11px; padding: 13px 15px; border-top: 1px solid color-mix(in srgb, var(--warn) 28%, var(--line)); background: color-mix(in srgb, var(--surface) 82%, var(--warn-soft)); cursor: pointer; }
+.collaborationConsent:hover { background: color-mix(in srgb, var(--surface) 68%, var(--warn-soft)); }
+.collaborationConsent input { appearance: none; width: 19px; height: 19px; margin: 1px 0 0; border: 1.5px solid var(--line-strong); border-radius: 6px; background: var(--surface); display: grid; place-content: center; cursor: pointer; }
+.collaborationConsent input::before { content: ""; width: 9px; height: 5px; border-left: 2px solid white; border-bottom: 2px solid white; transform: rotate(-45deg) scale(0); transition: transform .12s ease; }
+.collaborationConsent input:checked { border-color: var(--primary); background: var(--primary); }
+.collaborationConsent input:checked::before { transform: rotate(-45deg) scale(1); }
+.collaborationConsent input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.collaborationConsent input:disabled { cursor: not-allowed; opacity: .55; }
+.collaborationConsent > span { min-width: 0; display: grid; gap: 3px; }
+.collaborationConsent strong { color: var(--text); font-size: 12px; }
+.collaborationConsent small { color: var(--muted); font-size: 11px; line-height: var(--leading-relaxed); }
+.collaborationCreditWarning[hidden] { display: none !important; }
+.collaborationCreditWarning { align-items: flex-start; }
+.collaborationIssues[hidden], .collaborationPreview[hidden] { display: none !important; }
+.collaborationIssues { align-items: flex-start; }
+.collaborationPreview { margin-top: 2px; }
+.collaborationPreviewSection { display: grid; gap: 8px; }
+.collaborationPreviewSection + .collaborationPreviewSection { margin-top: 14px; }
+.collaborationWarnings { display: grid; gap: 6px; }
+.collaborationWarnings p { margin: 0; padding: 9px 11px; border: 1px solid var(--warn-border); border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: var(--leading-relaxed); }
+.collaborationDiffGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.collaborationDiffGrid textarea { resize: vertical; white-space: pre; overflow: auto; font-size: 11px; line-height: 1.45; }
+.collaborationArtifacts { display: grid; gap: 8px; }
+.collaborationArtifact { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
+.collaborationArtifact summary { cursor: pointer; list-style: none; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--surface); }
+.collaborationArtifact summary::-webkit-details-marker { display: none; }
+.collaborationArtifact summary > span:first-child { min-width: 0; display: grid; gap: 3px; }
+.collaborationArtifact summary code { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.collaborationArtifactBody { padding: 0 12px 12px; }
+.collaborationArtifactBody > p { overflow-wrap: anywhere; }
+
 /* New routing catalog classes */
 .routingCatalogGroup { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .routingCatalogHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
@@ -622,8 +693,27 @@ code, kbd, pre, .mono {
 .promptDialog input { width: 100%; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font: inherit; }
 .promptDialog input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .promptActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 900px) {
+  .collaborationRole { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .collaborationRole > .field:first-of-type { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .collaborationBudgetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .collaborationDiffGrid { grid-template-columns: 1fr; }
+  .collaborationRole { grid-template-columns: 1fr; }
+  .collaborationRole > .field:first-of-type { grid-column: auto; }
+  .collaborationRoleHead, .collaborationRole > .tiny { grid-column: auto; }
+  .collaborationRoleHead { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .collaborationRoleHead span { text-align: left; }
+}
 @media (max-width: 600px) {
-  .routingPolicyGrid { grid-template-columns: 1fr; }
+  .routingPolicyGrid, .collaborationGrid { grid-template-columns: 1fr; }
+  .collaborationFederationHead { grid-template-columns: auto minmax(0, 1fr); }
+  .collaborationFederationHead code { grid-column: 2; justify-self: start; }
+  .collaborationFederationCard > p { padding-left: 15px; }
+  .collaborationFederationBoundary { grid-template-columns: 1fr; gap: 3px; }
+  .collaborationLaunchCopyRow { grid-template-columns: 1fr; }
+  .collaborationLaunchCopyRow .btn { width: 100%; }
   .routingModelRow { grid-template-columns: 1fr; gap: 4px; }
   .routingBackend { justify-self: start; }
   .subscriptionLoginGrid, .subscriptionProviderGrid, .subscriptionConnection { grid-template-columns: 1fr; }
@@ -1036,7 +1126,7 @@ textarea {
 
 .cacheStatsSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 12px 0 8px;
 }

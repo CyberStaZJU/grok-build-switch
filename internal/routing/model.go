@@ -25,10 +25,12 @@ type Provider struct {
 }
 
 type ModelRoute struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	ProviderID   string `json:"provider_id"`
-	ProfileModel string `json:"profile_model"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ProviderID     string `json:"provider_id"`
+	ProfileModel   string `json:"profile_model"`
+	SpeedTier      string `json:"speed_tier,omitempty"`
+	StandardAnchor string `json:"standard_anchor,omitempty"`
 
 	Model                   string            `json:"-"`
 	APIBackend              string            `json:"-"`
@@ -88,6 +90,15 @@ func (s Snapshot) Provider(id string) (Provider, bool) {
 func (s Snapshot) Route(ref string) (ModelRoute, bool) {
 	for _, route := range s.ModelRoutes {
 		if route.ID == ref || route.Name == ref {
+			return route, true
+		}
+	}
+	return ModelRoute{}, false
+}
+
+func routeByExactID(s Snapshot, id string) (ModelRoute, bool) {
+	for _, route := range s.ModelRoutes {
+		if route.ID == id {
 			return route, true
 		}
 	}
@@ -178,7 +189,42 @@ func (s Snapshot) Validate() error {
 	if s.ActiveProviderID != "" && s.ActiveProviderID != OfficialProviderID && !providers[s.ActiveProviderID] {
 		return fmt.Errorf("active provider %q is unavailable", s.ActiveProviderID)
 	}
+	for _, route := range s.ModelRoutes {
+		tier := strings.TrimSpace(route.SpeedTier)
+		anchorID := strings.TrimSpace(route.StandardAnchor)
+		if (tier == "") != (anchorID == "") {
+			return fmt.Errorf("routing model %q speed_tier and standard_anchor must both be present or both be absent", route.ID)
+		}
+		if tier == "" {
+			continue
+		}
+		if route.SpeedTier != tier || route.StandardAnchor != anchorID {
+			return fmt.Errorf("routing model %q speed metadata must not contain surrounding whitespace", route.ID)
+		}
+		switch tier {
+		case profiles.SpeedTierStandard:
+			if anchorID != route.ID {
+				return fmt.Errorf("standard routing model %q must self-anchor", route.ID)
+			}
+		case profiles.SpeedTierFast:
+			anchor, ok := routes[anchorID]
+			if !ok {
+				return fmt.Errorf("fast routing model %q references unknown standard anchor %q", route.ID, anchorID)
+			}
+			if anchor.ProviderID != route.ProviderID {
+				return fmt.Errorf("fast routing model %q and standard anchor %q must use the same provider", route.ID, anchorID)
+			}
+			if anchor.SpeedTier != profiles.SpeedTierStandard || anchor.StandardAnchor != anchor.ID {
+				return fmt.Errorf("fast routing model %q anchor %q is not an explicit standard route", route.ID, anchorID)
+			}
+		default:
+			return fmt.Errorf("routing model %q has invalid speed tier %q", route.ID, tier)
+		}
+	}
 	for providerID, policy := range s.ProviderPolicies {
+		if providerID == "" {
+			return fmt.Errorf("policy references empty provider")
+		}
 		if providerID != OfficialProviderID && !providers[providerID] {
 			return fmt.Errorf("policy references unknown provider %q", providerID)
 		}
@@ -230,6 +276,8 @@ func Project(source []profiles.Profile) Snapshot {
 		}
 		provider := Provider{ID: providerID, Name: providerNames[i], ProfileID: profile.ID, Source: profile.Source}
 		snapshot.Providers = append(snapshot.Providers, provider)
+		aliasRouteIDs := make(map[string]string, len(profile.Models))
+		start := len(snapshot.ModelRoutes)
 		for modelIndex, model := range profile.Models {
 			localName := modelName(model)
 			if localName == "" {
@@ -243,12 +291,22 @@ func Project(source []profiles.Profile) Snapshot {
 			if usedRouteNames[routeName] > 1 {
 				routeName = fmt.Sprintf("%s (%d)", routeName, usedRouteNames[routeName])
 			}
+			routeID := providerID + ":" + localName
+			aliasRouteIDs[localName] = routeID
 			snapshot.ModelRoutes = append(snapshot.ModelRoutes, ModelRoute{
-				ID: providerID + ":" + localName, Name: routeName, ProviderID: providerID, ProfileModel: localName,
+				ID: routeID, Name: routeName, ProviderID: providerID, ProfileModel: localName,
+				SpeedTier:             model.SpeedTier,
 				SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
 				ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
 				ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
 			})
+		}
+		for routeIndex, model := range profile.Models {
+			anchor := strings.TrimSpace(model.StandardAnchor)
+			if anchor == "" {
+				continue
+			}
+			snapshot.ModelRoutes[start+routeIndex].StandardAnchor = aliasRouteIDs[anchor]
 		}
 		policy := defaultPolicyForProvider(snapshot, providerID, profile.DefaultModel, profile.DefaultReasoningEffort)
 		snapshot.ProviderPolicies[providerID] = policy
@@ -383,7 +441,9 @@ func ProjectWithSnapshot(source []profiles.Profile, previous Snapshot) (Snapshot
 	hydrated.Policy.Official = hydrated.IsOfficial()
 	policy := hydrated.ActivePolicy()
 	policy.WebSearchCapable = hydrated.WebSearchCapable()
-	hydrated.ProviderPolicies[hydrated.ActiveProviderID] = policy
+	if hydrated.ActiveProviderID != "" {
+		hydrated.ProviderPolicies[hydrated.ActiveProviderID] = policy
+	}
 	hydrated.Policy = policy
 	hydrated.Policy.Official = hydrated.IsOfficial()
 	return hydrated, nil
@@ -473,6 +533,19 @@ func Hydrate(snapshot Snapshot, source []profiles.Profile) (Snapshot, error) {
 		route.SupportsBackendSearch, route.SupportsReasoningEffort = model.SupportsBackendSearch, model.SupportsReasoningEffort
 		route.ReasoningEfforts, route.ReasoningEffortsSource = append([]string(nil), model.ReasoningEfforts...), model.ReasoningEffortsSource
 		route.ContextWindow, route.MaxCompletionTokens = model.ContextWindow, model.MaxCompletionTokens
+		if route.SpeedTier != model.SpeedTier {
+			return Snapshot{}, fmt.Errorf("routing model %q speed tier no longer matches profile metadata", route.Name)
+		}
+		if model.StandardAnchor == "" {
+			if route.StandardAnchor != "" {
+				return Snapshot{}, fmt.Errorf("routing model %q standard anchor no longer matches profile metadata", route.Name)
+			}
+		} else {
+			anchorRoute, ok := routeForProfileModel(out, route.ProviderID, model.StandardAnchor)
+			if !ok || route.StandardAnchor != anchorRoute.ID {
+				return Snapshot{}, fmt.Errorf("routing model %q standard anchor no longer matches profile metadata", route.Name)
+			}
+		}
 	}
 	out.Hydrated = true
 	return out, nil
@@ -485,6 +558,15 @@ func profileModel(profile profiles.Profile, name string) (profiles.ModelDef, boo
 		}
 	}
 	return profiles.ModelDef{}, false
+}
+
+func routeForProfileModel(snapshot Snapshot, providerID, profileModel string) (ModelRoute, bool) {
+	for _, route := range snapshot.ModelRoutes {
+		if route.ProviderID == providerID && route.ProfileModel == profileModel {
+			return route, true
+		}
+	}
+	return ModelRoute{}, false
 }
 
 func policyEmpty(policy RoutingPolicy) bool {

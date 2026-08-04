@@ -21,7 +21,12 @@ theme:
 
 nav:
   - 首页: index.md
+  - 产品说明: product.md
   - 使用教程: usage.md
+  - 当前状态: status.md
+  - 维护者说明: agent.md
+  - 设计:
+      - Max Collaboration: design/max-collaboration.md
   - 博客: blog/index.md
   - 联系方式: contact.md
 

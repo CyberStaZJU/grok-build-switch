@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +26,20 @@ func NewStore(path string) *Store {
 
 func (s *Store) Path() string {
 	return s.path
+}
+
+// RestoreBytes is the compensation half of a larger local transaction. The
+// caller must supply bytes previously read from this store's own path.
+func (s *Store) RestoreBytes(content []byte, existed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !existed {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return atomicWrite(s.path, content)
 }
 
 // Initialize creates routing.json from the legacy profile store exactly once.
@@ -149,6 +162,10 @@ func (s *Store) Replace(snapshot Snapshot) (Snapshot, error) {
 func (s *Store) replaceLocked(snapshot Snapshot) (Snapshot, error) {
 	snapshot.Version = CurrentVersion
 	snapshot.UpdatedAt = time.Now().UTC()
+	if snapshot.ProviderPolicies == nil {
+		snapshot.ProviderPolicies = map[string]RoutingPolicy{}
+	}
+	delete(snapshot.ProviderPolicies, "")
 	if !policyEmpty(snapshot.Policy) || snapshot.Policy.Official {
 		providerID := snapshot.ActiveProviderID
 		if snapshot.Policy.Official {
@@ -275,6 +292,8 @@ func (s *Store) writeLocked(snapshot Snapshot) error {
 	return atomicWrite(s.path, append(data, '\n'))
 }
 
+var atomicWriteRename = os.Rename
+
 func atomicWrite(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -300,19 +319,10 @@ func atomicWrite(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		if runtime.GOOS == "windows" {
-			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-				return err
-			}
-			if err := os.Rename(tmpName, path); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
-	}
-	return os.Chmod(path, 0o600)
+	// On supported macOS, rename atomically replaces an existing destination.
+	// The temporary file already has its final mode, so a successful rename is
+	// the commit point and must not be followed by another fallible operation.
+	return atomicWriteRename(tmpName, path)
 }
 
 func sanitizedSnapshot(snapshot Snapshot) Snapshot {

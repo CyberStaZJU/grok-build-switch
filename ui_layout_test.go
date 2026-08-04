@@ -71,8 +71,9 @@ func TestRoutingDriftUIUsesUnifiedRouting(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"配置与当前模型路由不一致",
-		"config.toml 内容与当前模型路由不匹配",
-		"用当前模型路由覆盖文件",
+		"路由托管字段与当前模型路由不匹配",
+		"确认并重新应用路由",
+		"保留无关 TOML 设置",
 	} {
 		if !bytes.Contains(htmlData, []byte(fragment)) {
 			t.Fatalf("routing drift copy is missing %q", fragment)
@@ -80,6 +81,8 @@ func TestRoutingDriftUIUsesUnifiedRouting(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		`state.status?.config_matches_routing === false`,
+		`state.status?.active_routing?.repair_required === true`,
+		`customConfirm("将重新生成 Switch 托管的模型定义`,
 		`api("/api/routing/reapply", { method: "POST" })`,
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
@@ -141,6 +144,70 @@ func TestSSHFileDeleteIncludesConnectionID(t *testing.T) {
 	}
 }
 
+func TestMaxCollaborationUIContract(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleData, err := assets.ReadFile("ui/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{
+		"collaborationCard", "collaborationBadge", "collaborationRelationship", "collaborationIssues", "collaborationMode", "collaborationFederationDisclosure", "collaborationFederationMap", "collaborationFederationConsent", "collaborationFederationWarning",
+		"collaborationMainCoordinatorProvider", "collaborationMainCoordinatorDataScope", "collaborationMainCoordinatorModel", "collaborationMainCoordinatorSpeed", "collaborationMainCoordinatorEffort", "collaborationMainCoordinatorCapability",
+		"collaborationTaskDecompositionProvider", "collaborationTaskDecompositionDataScope", "collaborationTaskDecompositionModel", "collaborationTaskDecompositionSpeed", "collaborationTaskDecompositionEffort", "collaborationTaskDecompositionCapability",
+		"collaborationMainImplementationProvider", "collaborationMainImplementationDataScope", "collaborationMainImplementationModel", "collaborationMainImplementationSpeed", "collaborationMainImplementationEffort", "collaborationMainImplementationCapability",
+		"collaborationDifficultReviewProvider", "collaborationDifficultReviewDataScope", "collaborationDifficultReviewModel", "collaborationDifficultReviewSpeed", "collaborationDifficultReviewEffort", "collaborationDifficultReviewCapability",
+		"collaborationTier", "collaborationTierHint", "collaborationCreditWarning", "collaborationLaunchTitle", "collaborationLaunchBudget", "collaborationLaunchObjective", "collaborationLaunchInstruction", "copyCollaborationLaunchBtn", "previewCollaborationBtn", "applyCollaborationBtn",
+		"disableCollaborationBtn", "collaborationPreview", "collaborationConfigBefore", "collaborationConfigAfter",
+		"collaborationArtifacts", "collaborationFingerprint",
+	} {
+		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
+			t.Fatalf("collaboration control %q is missing", id)
+		}
+	}
+	for _, fragment := range []string{
+		"与路由策略的关系", "路由策略管理普通主会话的 default、web_search、explore 和 plan",
+		"只将 default 和默认推理强度对齐到主协调", "不覆盖 web_search、explore 或 plan",
+		"主协调", "任务拆解", "主实现", "困难实现 / 复核", "角色名称不绑定 Terra、Luna 或 Sol",
+		"Standard/Fast 速度档", "Fast 请求 priority", "更多订阅 credits", "缺失时不会回退",
+		"Switch 只预览并生成用户级 role/workflow", "budget 1", "budget 2", "budget 3", "budget 4",
+		"停用（保留文件）", "Critical Reviewed Build · 4 agents（显式选择）", "all_workflow_tiers_v1", "跨供应商数据流确认", "适用于全部五条可执行路径", "Adaptive 仅是默认提示，不缩小本次授权", "我已核对并同意以上跨供应商数据流", "Prompt 约束不是硬 DLP 边界", "在 Grok Build 中启动", "named slash launch 无法携带自定义", "复制启动指令", "使用 Economy 运行 gbs-max-collab", "数据范围（workflow 固定）",
+	} {
+		if !bytes.Contains(htmlData, []byte(fragment)) {
+			t.Fatalf("collaboration guidance is missing %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		"function trustedCollaborationEfforts", "function collaborationRouteSupportsEffort", "function collaborationRouteSupportsMax",
+		"function collaborationStandardRoutes", "function resolveCollaborationRoute", "function populateCollaborationSpeedOptions", "function collaborationLaunchParameters", "function updateCollaborationLaunchGuide",
+		`source !== "declared" && source !== "probe"`, "speed_tier", "const roles =", "main_coordinator", "task_decomposition",
+		"main_implementation", "difficult_implementation_review", `api("/api/collaboration/preview"`,
+		`api("/api/collaboration"`, "confirmed: true", "fingerprint: pending.preview.fingerprint",
+		"async function disableCollaboration()", "路由 default 会对齐主协调解析后的具体 Standard/Fast 路由", "web_search、explore 和 plan 保持不变",
+		"更多订阅 credits", "不会回退到 Standard", "Switch 本身不会启动 agent", "不会删除已生成的 role/workflow",
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("collaboration client contract is missing %q", fragment)
+		}
+	}
+	for _, selector := range []string{".collaborationRelationship", ".collaborationGrid", ".collaborationRole", ".collaborationRoleHead", ".collaborationLaunchCard", ".collaborationLaunchCopyRow", ".collaborationFederationCard", ".collaborationFederationHead", ".collaborationFederationMap", ".collaborationFederationBoundary", ".collaborationConsent", ".collaborationCreditWarning", ".collaborationTierField", ".collaborationBudgetGrid", ".collaborationDiffGrid", ".collaborationArtifact"} {
+		if !bytes.Contains(styleData, []byte(selector)) {
+			t.Fatalf("collaboration style %q is missing", selector)
+		}
+	}
+	for _, forbidden := range []string{`/api/agent/`, `id="viewChat"`, `id="viewSessionGraph"`} {
+		if bytes.Contains(append(append(append([]byte{}, htmlData...), appData...), styleData...), []byte(forbidden)) {
+			t.Fatalf("collaboration UI restored forbidden runtime surface %q", forbidden)
+		}
+	}
+}
+
 func TestCacheStatisticsUIContract(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
@@ -156,7 +223,8 @@ func TestCacheStatisticsUIContract(t *testing.T) {
 	}
 	for _, id := range []string{
 		"cacheStatsHours", "refreshCacheStatsBtn", "cacheHitRate", "cacheTurns",
-		"cachePromptTokens", "cacheCachedTokens", "cacheStatsHint", "cacheByModel", "cacheRecent",
+		"cachePromptTokens", "cacheCachedTokens", "cacheCompletionTokens", "cacheReasoningTokens",
+		"cacheStatsHint", "cacheByModel", "cacheRecent",
 	} {
 		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
 			t.Fatalf("cache statistics control %q is missing", id)
@@ -164,7 +232,8 @@ func TestCacheStatisticsUIContract(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"async function loadCacheStats()", "/api/cache-stats?hours=", "const overall = data.overall || {}",
-		`$("cacheHitRate").textContent`, `$("cacheByModel").innerHTML`, `$("cacheRecent").innerHTML`,
+		`$("cacheHitRate").textContent`, `$("cacheCompletionTokens").textContent`, `$("cacheReasoningTokens").textContent`,
+		`$("cacheByModel").innerHTML`, `$("cacheRecent").innerHTML`, `"Completion", "Reasoning"`,
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("cache statistics renderer is missing %q", fragment)

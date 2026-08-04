@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"grok_switch/internal/httpjson"
+	"grok_switch/internal/modelvariants"
 	"grok_switch/internal/profiles"
 )
 
@@ -83,6 +86,10 @@ type BrowserOpener interface {
 type subscriptionModelSelectionStore interface {
 	SelectedModels() ([]SubscriptionProxyModel, error)
 	SetSelectedModels([]SubscriptionProxyModel) error
+}
+
+type subscriptionModelReconciler interface {
+	ReconcileModels(context.Context) ([]SubscriptionProxyModel, error)
 }
 
 type subscriptionProxySelection struct {
@@ -297,9 +304,15 @@ func (s *Server) handleSubscriptionProxyAccount(w http.ResponseWriter, r *http.R
 	if !subscriptionLoopback(w, r) || s.requireSubscriptionProxy(w) == nil {
 		return
 	}
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/subscription-proxy/accounts/"), "/")
-	if id == "" || strings.Contains(id, "/") {
+	escapedTail := strings.TrimPrefix(r.URL.EscapedPath(), "/api/subscription-proxy/accounts/")
+	lowerEscapedTail := strings.ToLower(escapedTail)
+	if strings.Contains(lowerEscapedTail, "%2f") || strings.Contains(lowerEscapedTail, "%5c") || strings.Contains(lowerEscapedTail, "%00") {
 		subscriptionProxyError(w, fmt.Errorf("无效账号"), http.StatusBadRequest)
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/subscription-proxy/accounts/"), "/")
+	if err := validateSubscriptionAccountID(id); err != nil {
+		subscriptionProxyError(w, err, http.StatusBadRequest)
 		return
 	}
 	switch r.Method {
@@ -328,6 +341,20 @@ func (s *Server) handleSubscriptionProxyAccount(w http.ResponseWriter, r *http.R
 	}
 }
 
+func validateSubscriptionAccountID(id string) error {
+	if id == "" || id == "." || id == ".." || strings.ContainsRune(id, '\x00') || strings.ContainsAny(id, `/\\`) || filepath.Base(id) != id || filepath.Clean(id) != id || filepath.IsAbs(id) || filepath.VolumeName(id) != "" {
+		return fmt.Errorf("无效账号")
+	}
+	return nil
+}
+
+func reconcileSubscriptionModels(ctx context.Context, proxy SubscriptionProxy) ([]SubscriptionProxyModel, error) {
+	if reconciler, ok := proxy.(subscriptionModelReconciler); ok {
+		return reconciler.ReconcileModels(ctx)
+	}
+	return proxy.Models(ctx)
+}
+
 func (s *Server) handleSubscriptionProxyModels(w http.ResponseWriter, r *http.Request) {
 	if !subscriptionMutation(w, r) || s.requireSubscriptionProxy(w) == nil {
 		return
@@ -338,7 +365,7 @@ func (s *Server) handleSubscriptionProxyModels(w http.ResponseWriter, r *http.Re
 	if !decodeSubscriptionJSON(w, r, &req) {
 		return
 	}
-	available, err := s.SubscriptionProxy.Models(r.Context())
+	available, err := reconcileSubscriptionModels(r.Context(), s.SubscriptionProxy)
 	if err != nil {
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
@@ -403,7 +430,7 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
 	}
-	models, err := s.SubscriptionProxy.Models(r.Context())
+	models, err := reconcileSubscriptionModels(r.Context(), s.SubscriptionProxy)
 	if err != nil {
 		subscriptionProxyError(w, err, http.StatusBadGateway)
 		return
@@ -442,12 +469,10 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 			subscriptionProxyError(w, fmt.Errorf("请先添加并启用 %s 订阅账号，然后保存至少一个该类型的模型", subscriptionProviderLabel(provider)), http.StatusBadRequest)
 			return
 		}
-		var stored *profiles.Profile
-		for i := range list {
-			if list[i].Source == "subscription-proxy:"+def.provider {
-				stored = &list[i]
-				break
-			}
+		stored, findErr := findSubscriptionProfile(list, def.provider, def.name, baseURL)
+		if findErr != nil {
+			subscriptionProxyError(w, findErr, http.StatusConflict)
+			return
 		}
 		if stored == nil {
 			profile, err = s.Profiles.Create(profile)
@@ -462,16 +487,16 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 			}
 		}
 		if err != nil {
-			rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
-			subscriptionProxyError(w, err, http.StatusInternalServerError)
+			rollbackErr := rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
+			subscriptionProxyError(w, transactionRollbackError(err, rollbackErr), http.StatusInternalServerError)
 			return
 		}
 		created = append(created, profile)
 	}
 	if s.Routing != nil {
 		if err := s.applyCurrentRoutingLocked(); err != nil {
-			rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
-			subscriptionProxyError(w, err, http.StatusInternalServerError)
+			rollbackErr := rollbackSubscriptionProfiles(s.Profiles, createdNew, updatedPrevious)
+			subscriptionProxyError(w, transactionRollbackError(err, rollbackErr), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -479,14 +504,70 @@ func (s *Server) handleSubscriptionProxyProviders(w http.ResponseWriter, r *http
 	writeJSON(w, map[string]any{"providers": created})
 }
 
-func rollbackSubscriptionProfiles(store *profiles.Store, createdIDs []string, updatedPrevious []profiles.Profile) {
+func rollbackSubscriptionProfiles(store *profiles.Store, createdIDs []string, updatedPrevious []profiles.Profile) error {
+	var rollbackErrs []error
 	for i := len(createdIDs) - 1; i >= 0; i-- {
-		_ = store.Delete(createdIDs[i])
+		if err := store.Delete(createdIDs[i]); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("删除新建订阅配置 %q 失败: %w", createdIDs[i], err))
+		}
 	}
 	for i := len(updatedPrevious) - 1; i >= 0; i-- {
 		previous := updatedPrevious[i]
-		_, _ = store.Update(previous.ID, previous)
+		if err := store.Restore(previous); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复订阅配置 %q 失败: %w", previous.ID, err))
+		}
 	}
+	return errors.Join(rollbackErrs...)
+}
+
+func transactionRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("回滚未完整完成: %w", rollbackErr))
+}
+
+// findSubscriptionProfile first prefers the current server-owned identity. For
+// upgrades from builds that predate Profile.Source, it may adopt one exact,
+// unambiguous legacy subscription profile instead of creating a duplicate.
+// Multiple legacy matches fail closed so ordinary user Profiles are never
+// silently claimed by the subscription proxy.
+func findSubscriptionProfile(list []profiles.Profile, provider, name, baseURL string) (*profiles.Profile, error) {
+	provider = canonicalProvider(provider)
+	source := "subscription-proxy:" + provider
+	for i := range list {
+		if list[i].Source == source {
+			return &list[i], nil
+		}
+	}
+	var legacy *profiles.Profile
+	for i := range list {
+		if !isLegacySubscriptionProfile(list[i], provider, name, baseURL) {
+			continue
+		}
+		if legacy != nil {
+			return nil, fmt.Errorf("检测到多个未标记的旧 %s 订阅供应商；请先人工确认", subscriptionProviderLabel(provider))
+		}
+		legacy = &list[i]
+	}
+	return legacy, nil
+}
+
+func isLegacySubscriptionProfile(profile profiles.Profile, provider, name, baseURL string) bool {
+	if profile.Source != "" || profile.Name != name || strings.TrimRight(profile.BaseURL, "/") != strings.TrimRight(baseURL, "/") || len(profile.Models) == 0 {
+		return false
+	}
+	prefix := "subscription/" + canonicalProvider(provider) + "/"
+	for _, model := range profile.Models {
+		alias := strings.TrimSpace(model.Name)
+		if alias == "" {
+			alias = strings.TrimSpace(model.Model)
+		}
+		if !strings.HasPrefix(alias, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 func subscriptionProviderLabel(provider string) string {
@@ -503,7 +584,11 @@ func subscriptionProviderLabel(provider string) string {
 }
 
 func subscriptionProfile(provider, name, key string, accounts []SubscriptionProxyAccount, models []SubscriptionProxyModel, baseURL string) profiles.Profile {
-	p := profiles.Profile{Name: name, Source: "subscription-proxy:" + provider, UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: key, DefaultReasoningEffort: "low"}
+	provider = canonicalProvider(provider)
+	p := profiles.Profile{
+		Name: name, Source: "subscription-proxy:" + provider, UpstreamFormat: "openai_chat",
+		BaseURL: baseURL, APIKey: key, DefaultReasoningEffort: "none",
+	}
 	hasAccount := false
 	for _, account := range accounts {
 		if canonicalProvider(account.Provider) == provider && !account.Disabled && !account.Unavailable {
@@ -514,14 +599,57 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 	if !hasAccount {
 		return p
 	}
+	seen := map[string]bool{}
 	for _, model := range models {
 		if canonicalProvider(model.Provider) != provider {
 			continue
 		}
-		p.AvailableModels = append(p.AvailableModels, model.ID)
-		p.Models = append(p.Models, profiles.ModelDef{Name: model.Label, Model: model.ID, BaseURL: baseURL, APIKey: key, APIBackend: "chat_completions", ReasoningEffortsSource: "default"})
+		alias := strings.TrimSpace(model.ID)
+		if alias == "" || seen[alias] {
+			continue
+		}
+		if provider == "codex" {
+			if _, generated := modelvariants.TrustedCodexPhysicalFromFastAlias(alias); generated {
+				// Fast aliases are generated by Switch from their exact Standard
+				// anchor. They are not selectable physical catalog entries.
+				continue
+			}
+			if physicalID, trusted := modelvariants.TrustedCodexPhysicalFromStandardAlias(alias); trusted {
+				standard, _ := modelvariants.CodexStandardAlias(physicalID)
+				fast, _ := modelvariants.CodexFastAlias(physicalID)
+				efforts := modelvariants.TrustedCodexReasoningEfforts()
+				p.AvailableModels = append(p.AvailableModels, standard, fast)
+				p.Models = append(p.Models,
+					trustedSubscriptionModel(standard, standard, baseURL, key, profiles.SpeedTierStandard, standard, efforts),
+					trustedSubscriptionModel(fast, fast, baseURL, key, profiles.SpeedTierFast, standard, efforts),
+				)
+				seen[standard], seen[fast] = true, true
+				if p.DefaultModel == "" {
+					p.DefaultModel = standard
+					p.DefaultReasoningEffort = "low"
+				}
+				continue
+			}
+		}
+		seen[alias] = true
+		p.AvailableModels = append(p.AvailableModels, alias)
+		p.Models = append(p.Models, profiles.ModelDef{
+			Name: alias, Model: alias, BaseURL: baseURL, APIKey: key,
+			APIBackend: "chat_completions", ReasoningEffortsSource: "default",
+		})
+		if p.DefaultModel == "" {
+			p.DefaultModel = alias
+		}
 	}
 	return p
+}
+
+func trustedSubscriptionModel(name, model, baseURL, key, tier, anchor string, efforts []string) profiles.ModelDef {
+	return profiles.ModelDef{
+		Name: name, Model: model, BaseURL: baseURL, APIKey: key, APIBackend: "chat_completions",
+		SupportsReasoningEffort: true, ReasoningEfforts: append([]string(nil), efforts...), ReasoningEffortsSource: "declared",
+		SpeedTier: tier, StandardAnchor: anchor,
+	}
 }
 
 func (s *Server) handleSubscriptionProxyDiagnostics(w http.ResponseWriter, r *http.Request) {
@@ -610,6 +738,9 @@ func redactDiagnostic(message string) string {
 
 func subscriptionProxyError(w http.ResponseWriter, err error, status int) {
 	message := "订阅代理操作失败"
+	if status >= 500 && err != nil {
+		log.Printf("subscription proxy request failed (status=%d): %v", status, err)
+	}
 	if status >= 400 && status < 500 && err != nil {
 		message = err.Error()
 	} else if errors.Is(err, os.ErrNotExist) {

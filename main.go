@@ -15,6 +15,7 @@ import (
 	"grok_switch/internal/autostart"
 	"grok_switch/internal/browseruse"
 	"grok_switch/internal/cliproxy"
+	"grok_switch/internal/collaboration"
 	"grok_switch/internal/crash"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
@@ -94,6 +95,7 @@ func main() {
 		crash.Logf("default profile import skipped: %v", err)
 	}
 	routingStore := routing.NewStore(resolved.RoutingFile)
+	collaborationStore := collaboration.NewStore(resolved.CollaborationFile)
 	routingSnapshot, err := routingStore.Initialize(profileStore)
 	if err != nil {
 		fatal(err)
@@ -130,6 +132,7 @@ func main() {
 		Paths:             resolved,
 		Profiles:          profileStore,
 		Routing:           routingStore,
+		Collaboration:     collaborationStore,
 		Settings:          settingsStore,
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		Switcher:          sw,

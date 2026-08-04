@@ -24,6 +24,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"grok_switch/internal/autostart"
+	"grok_switch/internal/collaboration"
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/httpjson"
 	"grok_switch/internal/paths"
@@ -39,6 +40,7 @@ type Server struct {
 	Paths                      paths.Paths
 	Profiles                   *profiles.Store
 	Routing                    *routing.Store
+	Collaboration              *collaboration.Store
 	Settings                   *settings.Store
 	RemoteAccess               *remoteaccess.Store
 	Switcher                   *switcher.Switcher
@@ -59,6 +61,7 @@ type Server struct {
 	subscriptionProxyState     *subscriptionProxySelection
 	subscriptionProxyStateOnce sync.Once
 	routingMu                  sync.Mutex
+	collaborationMu            sync.Mutex
 	csrfMu                     sync.Mutex
 	csrfSecret                 string
 	reconfigureLAN             func(bool) error
@@ -66,6 +69,7 @@ type Server struct {
 	resetRemoteSessions        func() error
 	restoreRemoteSessions      func(remoteaccess.Snapshot) error
 	updateSettings             func(settings.Settings) (settings.Settings, error)
+	persistCollaboration       func(collaboration.Policy) (collaboration.Policy, error)
 }
 
 func (s *Server) SetOnChanged(fn func()) {
@@ -186,6 +190,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/routing", s.handleRouting)
 	mux.HandleFunc("/api/routing/policy", s.handleRoutingPolicy)
 	mux.HandleFunc("/api/routing/reapply", s.handleRoutingReapply)
+	mux.HandleFunc("/api/collaboration", s.handleCollaboration)
+	mux.HandleFunc("/api/collaboration/spec", s.handleCollaborationSpec)
+	mux.HandleFunc("/api/collaboration/preview", s.handleCollaborationPreview)
 	mux.HandleFunc("/api/cache-stats", s.handleCacheStats)
 	mux.HandleFunc("/api/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/profiles/", s.handleProfileByID)
@@ -411,6 +418,38 @@ type profilePublicDTO struct {
 	UpdatedAt              time.Time               `json:"updated_at"`
 }
 
+type profileMutationModelDTO struct {
+	Name                    string            `json:"name"`
+	Model                   string            `json:"model"`
+	BaseURL                 string            `json:"base_url"`
+	APIKey                  string            `json:"api_key"`
+	APIBackend              string            `json:"api_backend"`
+	ExtraHeaders            map[string]string `json:"extra_headers"`
+	SupportsBackendSearch   bool              `json:"supports_backend_search"`
+	SupportsReasoningEffort bool              `json:"supports_reasoning_effort"`
+	ReasoningEfforts        []string          `json:"reasoning_efforts"`
+	ReasoningEffortsSource  string            `json:"reasoning_efforts_source,omitempty"`
+	ContextWindow           int64             `json:"context_window"`
+	MaxCompletionTokens     int64             `json:"max_completion_tokens"`
+}
+
+type profileMutationDTO struct {
+	ID                     string                    `json:"id,omitempty"`
+	Name                   string                    `json:"name"`
+	UpstreamFormat         string                    `json:"upstream_format"`
+	BaseURL                string                    `json:"base_url"`
+	APIKey                 string                    `json:"api_key"`
+	AvailableModels        []string                  `json:"available_models"`
+	DefaultModel           string                    `json:"default_model"`
+	DefaultReasoningEffort string                    `json:"default_reasoning_effort"`
+	Models                 []profileMutationModelDTO `json:"models"`
+}
+
+type profileLocalDTO struct {
+	profileMutationDTO
+	IsActive bool `json:"is_active"`
+}
+
 func publicProfile(profile profiles.Profile) profilePublicDTO {
 	out := profilePublicDTO{
 		ID: profile.ID, Name: profile.Name, Source: profile.Source,
@@ -428,6 +467,60 @@ func publicProfile(profile profiles.Profile) profilePublicDTO {
 			ReasoningEfforts:        append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
 			ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
 		}
+	}
+	return out
+}
+
+func editableProfile(profile profiles.Profile, active bool) profileLocalDTO {
+	out := profileLocalDTO{profileMutationDTO: profileMutationFromProfile(profile), IsActive: active}
+	return out
+}
+
+func profileMutationFromProfile(profile profiles.Profile) profileMutationDTO {
+	out := profileMutationDTO{
+		ID: profile.ID, Name: profile.Name, UpstreamFormat: profile.UpstreamFormat,
+		BaseURL: profile.BaseURL, APIKey: profile.APIKey,
+		AvailableModels: append([]string(nil), profile.AvailableModels...), DefaultModel: profile.DefaultModel,
+		DefaultReasoningEffort: profile.DefaultReasoningEffort,
+		Models:                 make([]profileMutationModelDTO, len(profile.Models)),
+	}
+	for i, model := range profile.Models {
+		out.Models[i] = profileMutationModelDTO{
+			Name: model.Name, Model: model.Model, BaseURL: model.BaseURL, APIKey: model.APIKey,
+			APIBackend: model.APIBackend, ExtraHeaders: cloneStringMap(model.ExtraHeaders),
+			SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
+			ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
+			ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+		}
+	}
+	return out
+}
+
+func (dto profileMutationDTO) profile() profiles.Profile {
+	profile := profiles.Profile{
+		ID: dto.ID, Name: dto.Name, UpstreamFormat: dto.UpstreamFormat, BaseURL: dto.BaseURL, APIKey: dto.APIKey,
+		AvailableModels: append([]string(nil), dto.AvailableModels...), DefaultModel: dto.DefaultModel,
+		DefaultReasoningEffort: dto.DefaultReasoningEffort, Models: make([]profiles.ModelDef, len(dto.Models)),
+	}
+	for i, model := range dto.Models {
+		profile.Models[i] = profiles.ModelDef{
+			Name: model.Name, Model: model.Model, BaseURL: model.BaseURL, APIKey: model.APIKey,
+			APIBackend: model.APIBackend, ExtraHeaders: cloneStringMap(model.ExtraHeaders),
+			SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
+			ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
+			ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+		}
+	}
+	return profile
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]string, len(source))
+	for key, value := range source {
+		out[key] = value
 	}
 	return out
 }
@@ -470,21 +563,18 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, public)
 			return
 		}
-		local := make([]map[string]any, len(list))
+		local := make([]profileLocalDTO, len(list))
 		for i, profile := range list {
-			raw, _ := json.Marshal(profile)
-			var item map[string]any
-			_ = json.Unmarshal(raw, &item)
-			item["is_active"] = profile.ID == activeProfileID
-			local[i] = item
+			local[i] = editableProfile(profile, profile.ID == activeProfileID)
 		}
 		writeJSON(w, local)
 	case http.MethodPost:
-		var profile profiles.Profile
-		if err := decodeManagementJSON(w, r, &profile); err != nil {
+		var request profileMutationDTO
+		if err := decodeManagementJSON(w, r, &request); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
+		profile := request.profile()
 		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
@@ -525,17 +615,23 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPut:
-		var profile profiles.Profile
-		if err := decodeManagementJSON(w, r, &profile); err != nil {
+		var request profileMutationDTO
+		if err := decodeManagementJSON(w, r, &request); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
+		profile := request.profile()
 		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
 		s.routingMu.Lock()
 		previous, previousErr := s.Profiles.Get(id)
+		if previousErr == nil && strings.HasPrefix(previous.Source, "subscription-proxy:") {
+			s.routingMu.Unlock()
+			writeError(w, fmt.Errorf("订阅代理供应商只能通过订阅代理页面更新"), http.StatusConflict)
+			return
+		}
 		updated, err := s.Profiles.Update(id, profile)
 		if err == nil && s.Routing != nil {
 			err = s.applyCurrentRoutingLocked()
@@ -1095,7 +1191,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
-		if err := s.Switcher.WriteConfig([]byte(req.Content)); err != nil {
+		s.collaborationMu.Lock()
+		s.routingMu.Lock()
+		err := s.Switcher.WriteConfig([]byte(req.Content))
+		s.routingMu.Unlock()
+		s.collaborationMu.Unlock()
+		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -1144,7 +1245,12 @@ func (s *Server) handleConfigPrivacy(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if err := s.Switcher.ApplyPrivacyProtection(); err != nil {
+	s.collaborationMu.Lock()
+	s.routingMu.Lock()
+	err := s.Switcher.ApplyPrivacyProtection()
+	s.routingMu.Unlock()
+	s.collaborationMu.Unlock()
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}

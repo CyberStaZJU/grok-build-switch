@@ -286,3 +286,69 @@ func TestLoopbackWriteCSRFProtection(t *testing.T) {
 		t.Fatalf("native token status = %d", got)
 	}
 }
+
+func TestCollaborationFullStackBlocksLANAndEnforcesCSRF(t *testing.T) {
+	s, requestBody := newCollaborationTestServer(t)
+	settingsStore := settings.NewStore(filepath.Join(s.Paths.DataDir, "settings.json"))
+	current := settings.Default()
+	current.LANAccessEnabled = true
+	if _, err := settingsStore.Update(current); err != nil {
+		t.Fatal(err)
+	}
+	remoteStore := remoteaccess.NewStore(filepath.Join(s.Paths.DataDir, "remote-access.json"))
+	snapshot, err := remoteStore.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Settings = settingsStore
+	s.RemoteAccess = remoteStore
+	mux := http.NewServeMux()
+	s.routes(mux)
+	handler := s.withAccess(mux)
+
+	remote := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:17878/api/collaboration", nil)
+	remote.RemoteAddr = "192.168.1.20:43000"
+	remote.Host = "192.168.1.10:17878"
+	remote.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
+	remoteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(remoteResponse, remote)
+	if remoteResponse.Code != http.StatusForbidden {
+		t.Fatalf("paired LAN collaboration status=%d body=%s", remoteResponse.Code, remoteResponse.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name   string
+		origin string
+		token  string
+	}{
+		{name: "missing token", origin: "http://127.0.0.1:17878"},
+		{name: "malicious origin", origin: "http://attacker.example", token: mustCSRFToken(t, s)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17878/api/collaboration/preview", strings.NewReader(requestBody))
+			req.RemoteAddr = "127.0.0.1:43001"
+			req.Host = "127.0.0.1:17878"
+			req.Header.Set("Content-Type", "application/json")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.token != "" {
+				req.Header.Set(csrfHeader, tc.token)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "csrf_token_invalid") {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func mustCSRFToken(t *testing.T, s *Server) string {
+	t.Helper()
+	token, err := s.csrfToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}

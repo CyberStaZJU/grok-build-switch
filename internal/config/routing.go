@@ -46,6 +46,8 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 			SupportsReasoningEffort: route.SupportsReasoningEffort,
 			ReasoningEfforts:        append([]string(nil), route.ReasoningEfforts...),
 			ReasoningEffortsSource:  route.ReasoningEffortsSource,
+			SpeedTier:               route.SpeedTier,
+			StandardAnchor:          profileAnchorAlias(snapshot, route),
 			ContextWindow:           route.ContextWindow,
 			MaxCompletionTokens:     route.MaxCompletionTokens,
 		})
@@ -225,6 +227,18 @@ func SnippetForRouting(snapshot routing.Snapshot) (string, error) {
 }
 
 func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error) {
+	return currentMatchesRouting(path, snapshot, false)
+}
+
+// CurrentMatchesRoutingStrictDefaults is used by Collaboration status, where
+// the coordinator's default route and reasoning effort are transaction-owned
+// and any on-disk drift must be reported. Ordinary routing status continues to
+// tolerate Grok persisting a conversation's reasoning effort.
+func CurrentMatchesRoutingStrictDefaults(path string, snapshot routing.Snapshot) (bool, error) {
+	return currentMatchesRouting(path, snapshot, true)
+}
+
+func currentMatchesRouting(path string, snapshot routing.Snapshot, strictDefaults bool) (bool, error) {
 	if snapshot.IsOfficial() {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -250,9 +264,11 @@ func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error)
 	// fields; per-model keys, endpoints, headers, backends, and capabilities are
 	// still compared strictly below.
 	current.APIKey = profile.APIKey
-	// Grok may persist a conversation's reasoning effort back to config.toml.
-	// Treat it as a runtime preference, consistent with CurrentMatches.
-	current.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	if !strictDefaults {
+		// Grok may persist a conversation's reasoning effort back to config.toml.
+		// Ordinary routing status treats it as a runtime preference.
+		current.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	}
 	matches := profiles.Normalize(profile).Matches(profiles.Normalize(current))
 	if !matches {
 		return false, nil
@@ -298,6 +314,16 @@ func policyWithConfigAliases(snapshot routing.Snapshot) routing.RoutingPolicy {
 	policy.Subagents.Explore = alias(policy.Subagents.Explore)
 	policy.Subagents.Plan = alias(policy.Subagents.Plan)
 	return policy
+}
+
+func profileAnchorAlias(snapshot routing.Snapshot, route routing.ModelRoute) string {
+	if route.StandardAnchor == "" {
+		return ""
+	}
+	if anchor, ok := snapshot.Route(route.StandardAnchor); ok {
+		return anchor.Name
+	}
+	return ""
 }
 
 func firstNonEmptyRouting(values ...string) string {

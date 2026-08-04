@@ -1,6 +1,7 @@
 package cliproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -44,7 +44,11 @@ type Paths struct {
 
 func NewPaths(dataDir string) Paths {
 	r := filepath.Join(dataDir, "cliproxy")
-	return Paths{r, filepath.Join(r, "bin"), filepath.Join(r, "bin", "CLIProxyAPI"), filepath.Join(r, "config.yaml"), filepath.Join(r, "auth"), filepath.Join(r, "logs"), filepath.Join(r, "backup"), filepath.Join(r, "logs", "stdout.log"), filepath.Join(r, "logs", "stderr.log")}
+	return Paths{
+		Root: r, BinDir: filepath.Join(r, "bin"), Binary: filepath.Join(r, "bin", "CLIProxyAPI"),
+		Config: filepath.Join(r, "config.yaml"), AuthDir: filepath.Join(r, "auth"), LogsDir: filepath.Join(r, "logs"),
+		BackupDir: filepath.Join(r, "backup"), Stdout: filepath.Join(r, "logs", "stdout.log"), Stderr: filepath.Join(r, "logs", "stderr.log"),
+	}
 }
 
 func (p Paths) Ensure() error {
@@ -190,48 +194,6 @@ func saveModelAliases(p Paths, aliases oauthModelAliases) error {
 	return atomicWrite(modelAliasesPath(p), raw, 0o600)
 }
 
-func loadModelAliases(p Paths) oauthModelAliases {
-	raw, err := os.ReadFile(modelAliasesPath(p))
-	if err != nil {
-		return nil
-	}
-	var aliases oauthModelAliases
-	if json.Unmarshal(raw, &aliases) != nil {
-		return nil
-	}
-	return aliases
-}
-
-func modelAliasesYAML(aliases oauthModelAliases) string {
-	if len(aliases) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("oauth-model-alias:\n")
-	channels := make([]string, 0, len(aliases))
-	for channel := range aliases {
-		channels = append(channels, channel)
-	}
-	sort.Strings(channels)
-	for _, channel := range channels {
-		entries := aliases[channel]
-		if len(entries) == 0 {
-			continue
-		}
-		fmt.Fprintf(&b, "  %s:\n", channel)
-		for _, entry := range entries {
-			fmt.Fprintf(&b, "    - name: %q\n      alias: %q\n      fork: %t\n", entry.Name, entry.Alias, entry.Fork)
-			if entry.DisplayName != "" {
-				fmt.Fprintf(&b, "      display-name: %q\n", entry.DisplayName)
-			}
-			if entry.ForceMapping {
-				b.WriteString("      force-mapping: true\n")
-			}
-		}
-	}
-	return b.String()
-}
-
 func localProxyURL() string {
 	if proxyURL := strings.TrimSpace(os.Getenv("HTTPS_PROXY")); proxyURL != "" {
 		return proxyURL
@@ -262,25 +224,45 @@ func WriteConfig(p Paths, keys Keys) error {
 	if err := p.Ensure(); err != nil {
 		return err
 	}
-	// Prefer an explicit proxy so OAuth token exchange reaches OpenAI even when
-	// the process is launched without a shell-level proxy environment.
-	proxyURL := localProxyURL()
-	data := fmt.Sprintf(`host: 127.0.0.1
-port: %d
-remote-management:
-  allow-remote: false
-  secret-key: %q
-  disable-control-panel: true
-auth-dir: %q
-api-keys:
-  - %q
-proxy-url: %q
-debug: false
-commercial-mode: true
-logging-to-file: false
-usage-statistics: false
-%s`, DefaultPort, keys.Management, p.AuthDir, keys.Inference, proxyURL, modelAliasesYAML(loadModelAliases(p)))
-	return atomicWrite(p.Config, []byte(data), 0o600)
+	if err := recoverLocalConfigTransaction(p); err != nil {
+		return err
+	}
+	raw, configExists, err := readFileForTransaction(p.Config)
+	if err != nil {
+		return err
+	}
+	ownershipState, err := previousConfigOwnershipState(p)
+	if err != nil {
+		return err
+	}
+	ownership := ownershipState.Ownership
+	// Startup must work while CLIProxyAPI is stopped, so it uses the same YAML
+	// merger locally. Existing aliases owned by Switch remain available across a
+	// restart; unrelated settings, aliases, rules, comments, and key order are
+	// preserved where yaml.Node permits.
+	desired := managedConfigFromOwnership(ownership)
+	if len(bytes.TrimSpace(raw)) == 0 {
+		// The old sidecar is a complete mixed snapshot. Seed it as unmarked YAML,
+		// then let the normal ownership merge replace only the strict historical
+		// subset. User and unknown-channel entries never receive ownership markers.
+		raw, err = legacyAliasSeed(ownershipState.LegacyAliases)
+		if err != nil {
+			return err
+		}
+	}
+	base := &managedBaseConfig{
+		Host:             "127.0.0.1",
+		Port:             DefaultPort,
+		ManagementSecret: keys.Management,
+		AuthDir:          p.AuthDir,
+		InferenceKey:     keys.Inference,
+		ProxyURL:         localProxyURL(),
+	}
+	merged, nextOwnership, err := mergeManagedConfig(raw, desired, ownership, base)
+	if err != nil {
+		return err
+	}
+	return commitConfigAndOwnership(p, raw, configExists, merged, nextOwnership, localConfigReader(p), localConfigWriter(p))
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
@@ -309,7 +291,19 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err = os.Rename(name, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, mode)
+	if err = os.Chmod(path, mode); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func Healthy(ctx context.Context, client *http.Client) bool {

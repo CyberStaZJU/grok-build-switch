@@ -100,6 +100,22 @@ func TestSubscriptionProxyAccountDeleteAcceptsEncodedFilename(t *testing.T) {
 	}
 }
 
+func TestSubscriptionProxyAccountRejectsUnsafeIDs(t *testing.T) {
+	for _, id := range []string{"..", ".", `..\\escape.json`, `nested\\escape.json`, "%2Fescape.json", "%00escape.json"} {
+		t.Run(id, func(t *testing.T) {
+			proxy := &serviceActionProxy{}
+			s := &Server{SubscriptionProxy: proxy}
+			req := httptest.NewRequest(http.MethodDelete, "http://127.0.0.1/api/subscription-proxy/accounts/"+id, nil)
+			req.RemoteAddr = "127.0.0.1:12345"
+			rec := httptest.NewRecorder()
+			s.handleSubscriptionProxyAccount(rec, req)
+			if rec.Code != http.StatusBadRequest || proxy.deletedID != "" {
+				t.Fatalf("id=%q status=%d deleted=%q body=%s", id, rec.Code, proxy.deletedID, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestSubscriptionProxyServiceRejectsMalformedJSONBeforeFacade(t *testing.T) {
 	proxy := &serviceActionProxy{}
 	s := &Server{SubscriptionProxy: proxy}

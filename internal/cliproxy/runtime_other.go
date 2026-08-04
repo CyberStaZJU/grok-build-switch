@@ -22,7 +22,7 @@ type Runtime struct {
 }
 type Status struct {
 	Running, Healthy, PortConflict bool
-	PID                           int
+	PID                            int
 }
 
 func (Runtime) Start(context.Context) error   { return fmt.Errorf("LaunchAgent 仅支持 macOS") }

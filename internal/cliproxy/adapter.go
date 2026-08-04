@@ -3,6 +3,8 @@ package cliproxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +15,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"grok_switch/internal/modelvariants"
 	"grok_switch/internal/server"
 )
 
@@ -27,6 +31,7 @@ type Manager struct {
 	BuiltinBinary string
 	BuiltinHash   string
 	HTTPClient    *http.Client
+	opMu          sync.Mutex
 }
 
 func NewManager(dataDir, home, builtin string, store KeyStore) *Manager {
@@ -100,6 +105,14 @@ func maskKey(key string) string {
 }
 
 func (m *Manager) ServiceAction(ctx context.Context, action string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	unlock, err := acquireConfigOperationLock(m.Paths)
+	if err != nil {
+		return sanitize(err)
+	}
+	defer unlock()
+
 	switch action {
 	case "start":
 		if err := m.prepare(); err != nil {
@@ -156,28 +169,43 @@ func (m *Manager) keys() (Keys, error) {
 }
 
 func (m *Manager) request(ctx context.Context, management bool, method, endpoint string, body any, out any) error {
-	keys, err := m.keys()
+	var rawBody []byte
+	if body != nil {
+		var err error
+		rawBody, err = json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("请求编码失败")
+		}
+	}
+	raw, err := m.requestRaw(ctx, management, method, endpoint, "application/json", rawBody, 1<<20)
 	if err != nil {
 		return err
 	}
-	var payload io.Reader
-	if body != nil {
-		raw, e := json.Marshal(body)
-		if e != nil {
-			return fmt.Errorf("请求编码失败")
-		}
-		payload = bytes.NewReader(raw)
+	if out != nil && len(bytes.TrimSpace(raw)) > 0 && json.Unmarshal(raw, out) != nil {
+		return fmt.Errorf("CLIProxyAPI 响应格式无效")
+	}
+	return nil
+}
+
+func (m *Manager) requestRaw(ctx context.Context, management bool, method, endpoint, contentType string, body []byte, responseLimit int64) ([]byte, error) {
+	keys, err := m.keys()
+	if err != nil {
+		return nil, err
 	}
 	base := managementBaseURL
 	if !management {
 		base = "http://127.0.0.1:8317"
 	}
+	var payload io.Reader
+	if body != nil {
+		payload = bytes.NewReader(body)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, base+endpoint, payload)
 	if err != nil {
-		return fmt.Errorf("创建请求失败")
+		return nil, fmt.Errorf("创建请求失败")
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if body != nil && contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if management {
 		req.Header.Set("Authorization", "Bearer "+keys.Management)
@@ -190,20 +218,33 @@ func (m *Manager) request(ctx context.Context, management bool, method, endpoint
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("CLIProxyAPI 请求失败")
+		return nil, fmt.Errorf("CLIProxyAPI 请求失败")
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if responseLimit <= 0 {
+		responseLimit = 1 << 20
+	}
+	limited := io.LimitReader(resp.Body, responseLimit+1)
+	raw, err := io.ReadAll(limited)
 	if err != nil {
-		return fmt.Errorf("读取 CLIProxyAPI 响应失败")
+		return nil, fmt.Errorf("读取 CLIProxyAPI 响应失败")
+	}
+	if int64(len(raw)) > responseLimit {
+		return nil, fmt.Errorf("CLIProxyAPI 响应过大")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("CLIProxyAPI 返回 %s", resp.Status)
+		return nil, fmt.Errorf("CLIProxyAPI 返回 %s", resp.Status)
 	}
-	if out != nil && len(bytes.TrimSpace(raw)) > 0 && json.Unmarshal(raw, out) != nil {
-		return fmt.Errorf("CLIProxyAPI 响应格式无效")
-	}
-	return nil
+	return raw, nil
+}
+
+func (m *Manager) getFullConfigYAML(ctx context.Context) ([]byte, error) {
+	return m.requestRaw(ctx, true, http.MethodGet, "/config.yaml", "", nil, 16<<20)
+}
+
+func (m *Manager) putFullConfigYAML(ctx context.Context, raw []byte) error {
+	_, err := m.requestRaw(ctx, true, http.MethodPut, "/config.yaml", "application/yaml", raw, 1<<20)
+	return err
 }
 
 var oauthEndpoints = map[string]string{"codex": "/codex-auth-url", "antigravity": "/antigravity-auth-url", "xai": "/xai-auth-url"}
@@ -320,23 +361,27 @@ func (m *Manager) Accounts(ctx context.Context) ([]server.SubscriptionProxyAccou
 	out := make([]server.SubscriptionProxyAccount, 0, len(raw.Files))
 	for _, f := range raw.Files {
 		id := stringField(f, "name", "id", "file")
-		provider := canonical(stringField(f, "provider", "type"), id)
+		if _, err := accountFilePath(m.Paths.AuthDir, id); err != nil {
+			return nil, fmt.Errorf("CLIProxyAPI 返回无效账号标识")
+		}
+		provider, _ := trustedCatalogProvider(stringField(f, "provider", "type"))
 		out = append(out, server.SubscriptionProxyAccount{ID: id, Name: id, Provider: provider, Label: stringField(f, "label"), Email: stringField(f, "email"), Status: valueOr(stringField(f, "status"), "ready"), StatusMessage: stringField(f, "message"), Disabled: boolField(f, "disabled"), Unavailable: boolField(f, "unavailable")})
 	}
 	return out, nil
 }
 func (m *Manager) UpdateAccount(ctx context.Context, id, label string, disabled bool) (server.SubscriptionProxyAccount, error) {
 	// CLIProxyAPI 的管理 API 不支持 PATCH，直接修改 auth 文件中的 disabled 字段。
+	targetPath, err := accountFilePath(m.Paths.AuthDir, id)
+	if err != nil {
+		return server.SubscriptionProxyAccount{}, err
+	}
 	accounts, err := m.Accounts(ctx)
 	if err != nil {
 		return server.SubscriptionProxyAccount{}, err
 	}
-	var targetPath string
 	var targetAccount *server.SubscriptionProxyAccount
 	for i := range accounts {
 		if accounts[i].ID == id {
-			// 从 management API 返回的数据中没有文件路径，需要重新读取
-			targetPath = filepath.Join(m.Paths.AuthDir, id)
 			acc := accounts[i]
 			targetAccount = &acc
 			break
@@ -409,8 +454,26 @@ func updateAuthFileLabel(path, label string) error {
 	return nil
 }
 func (m *Manager) DeleteAccount(ctx context.Context, id string) error {
-	// 直接删除 auth 文件，避免 CLIProxyAPI 对查询参数中 + 号等字符的处理不一致
-	path := filepath.Join(m.Paths.AuthDir, id)
+	// 直接删除 auth 文件，避免 CLIProxyAPI 对查询参数中 + 号等字符的处理不一致。
+	// 删除前必须由当前可信账号目录确认该 ID，不能把调用者输入直接解释为路径。
+	path, err := accountFilePath(m.Paths.AuthDir, id)
+	if err != nil {
+		return err
+	}
+	accounts, err := m.Accounts(ctx)
+	if err != nil {
+		return err
+	}
+	known := false
+	for _, account := range accounts {
+		if account.ID == id {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return os.ErrNotExist
+	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -418,6 +481,28 @@ func (m *Manager) DeleteAccount(ctx context.Context, id string) error {
 		return fmt.Errorf("删除 auth 文件失败: %w", err)
 	}
 	return nil
+}
+
+func accountFilePath(authDir, id string) (string, error) {
+	if id == "" || id == "." || id == ".." || strings.ContainsRune(id, '\x00') || strings.ContainsAny(id, `/\\`) || filepath.Base(id) != id || filepath.Clean(id) != id || filepath.IsAbs(id) || filepath.VolumeName(id) != "" {
+		return "", fmt.Errorf("无效账号标识")
+	}
+	root, err := filepath.Abs(authDir)
+	if err != nil {
+		return "", fmt.Errorf("解析账号目录失败: %w", err)
+	}
+	path := filepath.Join(root, id)
+	if filepath.Dir(path) != root {
+		return "", fmt.Errorf("账号路径超出受管目录")
+	}
+	info, err := os.Lstat(path)
+	if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return "", fmt.Errorf("账号文件不是普通文件")
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("检查账号文件失败: %w", err)
+	}
+	return path, nil
 }
 
 type upstreamModel struct {
@@ -435,10 +520,6 @@ type oauthModelAlias struct {
 
 type oauthModelAliases map[string][]oauthModelAlias
 
-type oauthModelAliasesResponse struct {
-	Aliases oauthModelAliases `json:"oauth-model-alias"`
-}
-
 var aliasChannels = map[string]string{
 	"codex":  "codex",
 	"gemini": "antigravity",
@@ -455,58 +536,114 @@ func (m *Manager) getModels(ctx context.Context) ([]upstreamModel, error) {
 	return raw.Data, nil
 }
 
-// syncModelAliases merges the aliases owned by this application into
-// CLIProxyAPI without disturbing aliases managed by users or other clients.
+// syncModelAliases performs one full-config YAML update so aliases and the Fast
+// service-tier rule become visible together. The caller must hold opMu across
+// catalog discovery and this commit so an older snapshot cannot be serialized
+// after a newer one. CLIProxyAPI 7.2.94 still has no ETag/CAS; the second GET
+// narrows but cannot eliminate races with unrelated external writers.
 func (m *Manager) syncModelAliases(ctx context.Context, models []upstreamModel) (oauthModelAliases, error) {
-	generated := generatedAliases(models)
-	var response oauthModelAliasesResponse
-	if err := m.request(ctx, true, http.MethodGet, "/oauth-model-alias", nil, &response); err != nil {
-		return nil, err
-	}
-	current := response.Aliases
-	if current == nil {
-		current = oauthModelAliases{}
-	}
-	for _, channel := range aliasChannels {
-		kept := make([]oauthModelAlias, 0, len(current[channel])+len(generated[channel]))
-		for _, alias := range current[channel] {
-			if !strings.HasPrefix(alias.Alias, "subscription/") {
-				kept = append(kept, alias)
-			}
-		}
-		kept = append(kept, generated[channel]...)
-		current[channel] = kept
-	}
-	if err := m.request(ctx, true, http.MethodPut, "/oauth-model-alias", current, nil); err != nil {
-		return nil, err
-	}
-	if err := saveModelAliases(m.Paths, current); err != nil {
+	previous, err := previousConfigOwnership(m.Paths)
+	if err != nil {
 		return nil, sanitize(err)
 	}
-	return generated, nil
+	return m.syncModelAliasesFromOwnership(ctx, models, previous)
 }
 
-func generatedAliases(models []upstreamModel) oauthModelAliases {
-	out := oauthModelAliases{}
+func (m *Manager) syncModelAliasesFromOwnership(ctx context.Context, models []upstreamModel, previous configOwnership) (oauthModelAliases, error) {
+	desired := generatedManagedConfig(models)
+	current, err := m.getFullConfigYAML(ctx)
+	if err != nil {
+		return nil, err
+	}
+	merged, nextOwnership, err := mergeManagedConfig(current, desired, previous, nil)
+	if err != nil {
+		return nil, sanitize(err)
+	}
+
+	// CLIProxyAPI has no revision/ETag. Re-read once immediately before PUT and
+	// rebase if another editor changed the document during the first merge.
+	latest, err := m.getFullConfigYAML(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(current, latest) {
+		current = latest
+		merged, nextOwnership, err = mergeManagedConfig(current, desired, previous, nil)
+		if err != nil {
+			return nil, sanitize(err)
+		}
+	}
+	readConfig := func() ([]byte, bool, error) {
+		raw, err := m.getFullConfigYAML(ctx)
+		return raw, err == nil, err
+	}
+	writeConfig := func(raw []byte, exists bool) error {
+		if !exists {
+			return fmt.Errorf("CLIProxyAPI 远程配置不能删除")
+		}
+		return m.putFullConfigYAML(ctx, raw)
+	}
+	if err := commitConfigAndOwnership(m.Paths, current, true, merged, nextOwnership, readConfig, writeConfig); err != nil {
+		return nil, sanitize(err)
+	}
+	verified, err := m.getFullConfigYAML(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyManagedConfig(verified, desired); err != nil {
+		return nil, sanitize(err)
+	}
+	return desired.Aliases, nil
+}
+
+func generatedManagedConfig(models []upstreamModel) managedConfig {
+	out := managedConfig{Aliases: oauthModelAliases{}}
 	seen := map[string]bool{}
+	fastSeen := map[string]bool{}
 	for _, model := range models {
 		id := strings.TrimSpace(model.ID)
 		if id == "" || strings.HasPrefix(id, "subscription/") {
 			continue
 		}
-		provider := canonical(model.OwnedBy, id)
+		provider, trusted := trustedCatalogProvider(model.OwnedBy)
+		if !trusted {
+			continue
+		}
+		if provider == "codex" {
+			if _, generatedFastLeaf := modelvariants.TrustedCodexPhysicalFromFastLeaf(id); generatedFastLeaf || isRecursiveTrustedCodexFastLeaf(id) {
+				continue
+			}
+		}
 		channel, ok := aliasChannels[provider]
 		if !ok || seen[provider+"\x00"+id] {
 			continue
 		}
 		seen[provider+"\x00"+id] = true
-		alias := "subscription/" + provider + "/" + id
-		out[channel] = append(out[channel], oauthModelAlias{Name: id, Alias: alias, Fork: true, DisplayName: id})
+		standard := "subscription/" + provider + "/" + id
+		out.Aliases[channel] = append(out.Aliases[channel], oauthModelAlias{Name: id, Alias: standard, Fork: true, DisplayName: id})
+		if provider == "codex" && modelvariants.IsTrustedCodexPhysicalModel(id) {
+			fast, _ := modelvariants.CodexFastAlias(id)
+			out.Aliases[channel] = append(out.Aliases[channel], oauthModelAlias{Name: id, Alias: fast, Fork: true, DisplayName: id})
+			if !fastSeen[fast] {
+				fastSeen[fast] = true
+				out.FastAliases = append(out.FastAliases, fast)
+			}
+		}
 	}
-	for channel := range out {
-		sort.Slice(out[channel], func(i, j int) bool { return out[channel][i].Alias < out[channel][j].Alias })
+	for channel := range out.Aliases {
+		sort.Slice(out.Aliases[channel], func(i, j int) bool { return out.Aliases[channel][i].Alias < out.Aliases[channel][j].Alias })
 	}
+	sort.Strings(out.FastAliases)
 	return out
+}
+
+func isRecursiveTrustedCodexFastLeaf(id string) bool {
+	const suffix = "-fast"
+	if !strings.HasSuffix(id, suffix) {
+		return false
+	}
+	_, ok := modelvariants.TrustedCodexPhysicalFromFastLeaf(strings.TrimSuffix(id, suffix))
+	return ok
 }
 
 func subscriptionModels(models []upstreamModel) []server.SubscriptionProxyModel {
@@ -514,11 +651,29 @@ func subscriptionModels(models []upstreamModel) []server.SubscriptionProxyModel 
 	out := []server.SubscriptionProxyModel{}
 	for _, model := range models {
 		id := strings.TrimSpace(model.ID)
-		provider := canonical(model.OwnedBy, id)
+		provider, trusted := trustedCatalogProvider(model.OwnedBy)
+		if !trusted {
+			continue
+		}
 		if strings.HasPrefix(id, "subscription/") {
 			parts := strings.SplitN(id, "/", 3)
-			if len(parts) == 3 {
-				provider, id = parts[1], parts[2]
+			if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" || parts[1] != provider {
+				continue
+			}
+			id = parts[2]
+			if provider == "codex" {
+				if _, generatedFast := modelvariants.TrustedCodexPhysicalFromFastAlias("subscription/codex/" + id); generatedFast || isRecursiveTrustedCodexFastLeaf(id) {
+					continue
+				}
+			}
+		} else {
+			if !trusted {
+				continue
+			}
+			if provider == "codex" {
+				if _, generatedFastLeaf := modelvariants.TrustedCodexPhysicalFromFastLeaf(id); generatedFastLeaf || isRecursiveTrustedCodexFastLeaf(id) {
+					continue
+				}
 			}
 		}
 		if id == "" {
@@ -536,21 +691,138 @@ func subscriptionModels(models []upstreamModel) []server.SubscriptionProxyModel 
 }
 
 func (m *Manager) Models(ctx context.Context) ([]server.SubscriptionProxyModel, error) {
+	models, err := m.getModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return subscriptionModels(models), nil
+}
+
+// ReconcileModels is the explicit mutating catalog operation. Status and other
+// GET paths call Models, which is read-only. Catalog acquisition is covered by
+// opMu so an older snapshot cannot be committed after a newer one.
+func (m *Manager) ReconcileModels(ctx context.Context) ([]server.SubscriptionProxyModel, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	unlock, err := acquireConfigOperationLock(m.Paths)
+	if err != nil {
+		return nil, sanitize(err)
+	}
+	defer unlock()
+
 	initial, err := m.getModels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(generatedAliases(initial)) == 0 {
+	previous, err := previousConfigOwnership(m.Paths)
+	if err != nil {
+		return nil, sanitize(err)
+	}
+	desired := generatedManagedConfig(initial)
+	if len(desired.Aliases) == 0 && len(previous.Aliases) == 0 && previous.FastRuleFingerprint == "" {
 		return subscriptionModels(initial), nil
 	}
-	if _, err = m.syncModelAliases(ctx, initial); err != nil {
+	if _, err = m.syncModelAliasesFromOwnership(ctx, initial, previous); err != nil {
 		return nil, err
 	}
-	refreshed, err := m.getModels(ctx)
+	refreshed, err := m.waitForManagedModelConvergence(ctx, initial, previous)
 	if err != nil {
-		return subscriptionModels(initial), nil
+		return nil, err
 	}
 	return subscriptionModels(refreshed), nil
+}
+
+func (m *Manager) waitForManagedModelConvergence(ctx context.Context, source []upstreamModel, previous configOwnership) ([]upstreamModel, error) {
+	desired := generatedManagedConfig(source)
+	if len(desired.Aliases) == 0 && len(previous.Aliases) == 0 {
+		return source, nil
+	}
+	var previousFingerprint string
+	stable := 0
+	for attempt := 0; attempt < 20; attempt++ {
+		models, err := m.getModels(ctx)
+		if err == nil && rawModelCatalogMatchesOwnership(models, desired, previous) {
+			fingerprint := rawModelCatalogFingerprint(models)
+			if fingerprint == previousFingerprint {
+				stable++
+			} else {
+				previousFingerprint = fingerprint
+				stable = 1
+			}
+			if stable >= 2 {
+				return models, nil
+			}
+		} else {
+			previousFingerprint = ""
+			stable = 0
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("CLIProxyAPI 模型目录收敛超时")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return nil, fmt.Errorf("CLIProxyAPI 模型目录未收敛到受管别名")
+}
+
+func rawModelCatalogSatisfies(models []upstreamModel, desired managedConfig) bool {
+	present := map[string]bool{}
+	for _, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" || isRecursiveTrustedCodexFastLeaf(id) {
+			continue
+		}
+		present[id] = true
+	}
+	for _, entries := range desired.Aliases {
+		for _, alias := range entries {
+			if !present[alias.Alias] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func rawModelCatalogMatchesOwnership(models []upstreamModel, desired managedConfig, previous configOwnership) bool {
+	if !rawModelCatalogSatisfies(models, desired) {
+		return false
+	}
+	present := map[string]bool{}
+	for _, model := range models {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			present[id] = true
+		}
+	}
+	desiredAliases := map[string]bool{}
+	for _, entries := range desired.Aliases {
+		for _, alias := range entries {
+			desiredAliases[alias.Alias] = true
+		}
+	}
+	for _, identity := range previous.Aliases {
+		if !desiredAliases[identity.Alias] && present[identity.Alias] {
+			return false
+		}
+	}
+	return true
+}
+
+func rawModelCatalogFingerprint(models []upstreamModel) string {
+	values := make([]string, 0, len(models))
+	for _, model := range models {
+		id := strings.TrimSpace(model.ID)
+		owner := strings.ToLower(strings.TrimSpace(model.OwnedBy))
+		if id != "" {
+			values = append(values, owner+"\x00"+id)
+		}
+	}
+	sort.Strings(values)
+	hash := sha256.New()
+	for _, value := range values {
+		_, _ = io.WriteString(hash, value+"\n")
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 func (m *Manager) InferenceKey(context.Context) (string, error) {
 	keys, err := m.keys()
@@ -621,15 +893,15 @@ func passFail(v bool) string {
 	}
 	return "fail"
 }
-func canonical(provider, hint string) string {
-	s := strings.ToLower(provider + " " + hint)
-	switch {
-	case strings.Contains(s, "codex") || strings.Contains(s, "openai"):
-		return "codex"
-	case strings.Contains(s, "antigravity") || strings.Contains(s, "gemini") || strings.Contains(s, "google"):
-		return "gemini"
-	case strings.Contains(s, "xai") || strings.Contains(s, "grok"):
-		return "grok"
+func trustedCatalogProvider(provider string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "codex":
+		return "codex", true
+	case "antigravity":
+		return "gemini", true
+	case "xai":
+		return "grok", true
+	default:
+		return "", false
 	}
-	return provider
 }

@@ -13,16 +13,16 @@ import (
 
 // Stats is an aggregated cache hit summary.
 type Stats struct {
-	Turns               int     `json:"turns"`
-	PromptTokens        int64   `json:"prompt_tokens"`
-	CachedPromptTokens  int64   `json:"cached_prompt_tokens"`
-	CompletionTokens    int64   `json:"completion_tokens"`
-	ReasoningTokens     int64   `json:"reasoning_tokens"`
-	HitRate             *float64 `json:"hit_rate"` // cached / prompt, null if no prompt tokens
+	Turns              int      `json:"turns"`
+	PromptTokens       int64    `json:"prompt_tokens"`
+	CachedPromptTokens int64    `json:"cached_prompt_tokens"`
+	CompletionTokens   int64    `json:"completion_tokens"`
+	ReasoningTokens    int64    `json:"reasoning_tokens"`
+	HitRate            *float64 `json:"hit_rate"` // cached / prompt, null if no prompt tokens
 }
 
 func (s *Stats) add(prompt, cached, completion, reasoning int64) {
-	if prompt <= 0 && cached <= 0 && completion <= 0 {
+	if prompt <= 0 && cached <= 0 && completion <= 0 && reasoning <= 0 {
 		return
 	}
 	s.Turns++
@@ -68,6 +68,7 @@ type Turn struct {
 	PromptTokens       int64     `json:"prompt_tokens"`
 	CachedPromptTokens int64     `json:"cached_prompt_tokens"`
 	CompletionTokens   int64     `json:"completion_tokens"`
+	ReasoningTokens    int64     `json:"reasoning_tokens"`
 	HitRate            *float64  `json:"hit_rate"`
 }
 
@@ -107,10 +108,10 @@ func Collect(grokHome string, hours int, sessionID string) (Report, error) {
 	}
 	logPath := filepath.Join(grokHome, "logs", "unified.jsonl")
 	report := Report{
-		Hours:   hours,
-		LogPath: logPath,
-		Recent:  []Turn{},
-		ByModel: []ModelStats{},
+		Hours:     hours,
+		LogPath:   logPath,
+		Recent:    []Turn{},
+		ByModel:   []ModelStats{},
 		BySession: []SessionStats{},
 	}
 	info, err := os.Stat(logPath)
@@ -213,6 +214,7 @@ func Collect(grokHome string, hours int, sessionID string) (Report, error) {
 			PromptTokens:       prompt,
 			CachedPromptTokens: cached,
 			CompletionTokens:   completion,
+			ReasoningTokens:    reasoning,
 		}
 		if prompt > 0 {
 			rate := float64(cached) / float64(prompt)

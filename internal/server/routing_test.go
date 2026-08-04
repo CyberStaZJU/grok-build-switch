@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -250,6 +251,105 @@ func TestRoutingGETReturnsSafeMultiProviderCatalog(t *testing.T) {
 	}
 	if backends["upstream-one"] != "openai" || backends["upstream-two"] != "anthropic" {
 		t.Fatalf("safe upstream metadata = %#v", backends)
+	}
+}
+
+func TestRoutingGETIncludesInactiveOrdinaryProfileForCollaborationWithoutCredentials(t *testing.T) {
+	s := newRoutingTestServer(t)
+	profile, err := s.Profiles.Create(profiles.Profile{Name: "Inactive ordinary", BaseURL: "https://inactive-private.example/v1", APIKey: "inactive-api-secret", DefaultModel: "inactive-model", Models: []profiles.ModelDef{{Name: "inactive-model", Model: "inactive-upstream", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: "inactive-model", SupportsReasoningEffort: true, ReasoningEfforts: []string{"high"}, ReasoningEffortsSource: "declared"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyCurrentRouting(); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ActiveProviderID == profile.ID {
+		t.Fatal("fixture provider unexpectedly active")
+	}
+	response := httptest.NewRecorder()
+	s.handleRouting(response, loopbackRequest(http.MethodGet, "/api/routing", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, secret := range []string{"inactive-api-secret", "https://inactive-private.example/v1"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("inactive profile secret leaked %q: %s", secret, body)
+		}
+	}
+	var snapshot routingSnapshotDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	foundProvider, foundRoute := false, false
+	for _, provider := range snapshot.Providers {
+		if provider.ID == profile.ID {
+			foundProvider = true
+		}
+	}
+	for _, route := range snapshot.ModelRoutes {
+		if route.ProviderID == profile.ID && route.ProfileModel == "inactive-model" {
+			foundRoute = true
+		}
+	}
+	if !foundProvider || !foundRoute {
+		t.Fatalf("inactive ordinary Profile absent from safe routing catalog: providers=%#v routes=%#v", snapshot.Providers, snapshot.ModelRoutes)
+	}
+}
+
+func TestRoutingGETExposesExplicitSpeedRelationships(t *testing.T) {
+	s := newRoutingTestServer(t)
+	standard := "subscription/codex/gpt-5.6-terra"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted Codex", Source: "subscription-proxy:codex", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1",
+		DefaultModel: standard, DefaultReasoningEffort: "low",
+		Models: []profiles.ModelDef{
+			{Name: standard, Model: standard, SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard, SupportsReasoningEffort: true, ReasoningEfforts: []string{"low"}, ReasoningEffortsSource: "declared"},
+			{Name: standard + "-fast", Model: standard + "-fast", SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard, SupportsReasoningEffort: true, ReasoningEfforts: []string{"low"}, ReasoningEffortsSource: "declared"},
+			{Name: "plain", Model: "plain"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyCurrentRouting(); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleRouting(response, loopbackRequest(http.MethodGet, "/api/routing", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var snapshot routingSnapshotDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	byProfileModel := map[string]routingModelDTO{}
+	for _, route := range snapshot.ModelRoutes {
+		if route.ProviderID == profile.ID {
+			byProfileModel[route.ProfileModel] = route
+		}
+	}
+	standardRoute := byProfileModel[standard]
+	fastRoute := byProfileModel[standard+"-fast"]
+	plainRoute := byProfileModel["plain"]
+	if standardRoute.SpeedTier != profiles.SpeedTierStandard || standardRoute.StandardAnchor != standardRoute.ID {
+		t.Fatalf("standard route metadata = %#v", standardRoute)
+	}
+	if fastRoute.SpeedTier != profiles.SpeedTierFast || fastRoute.StandardAnchor != standardRoute.ID {
+		t.Fatalf("fast route metadata = %#v, standard=%#v", fastRoute, standardRoute)
+	}
+	if plainRoute.SpeedTier != "" || plainRoute.StandardAnchor != "" {
+		t.Fatalf("unclassified route exposed speed metadata: %#v", plainRoute)
+	}
+	for _, secret := range []string{"trusted", "X-Test", "http://127.0.0.1:17878/subscription-proxy/v1"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("routing response leaked %q: %s", secret, response.Body.String())
+		}
 	}
 }
 
@@ -693,6 +793,112 @@ func TestRoutingPolicyPUTRejectsInvalidPolicyWithoutChangingState(t *testing.T) 
 	if string(afterStore) != string(beforeStore) || string(afterConfig) != string(beforeConfig) {
 		t.Fatal("invalid policy changed routing store or config")
 	}
+}
+
+func TestRoutingPolicyPUTRestoresRoutingAndConfigWhenReplaceReturnsPostCommitError(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := os.ReadFile(s.Routing.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, _, err := s.currentRouting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.ModelRoutes) < 2 {
+		t.Fatal("expected multiple routes")
+	}
+	var target routingModelDTO
+	for _, candidate := range catalog.ModelRoutes {
+		if candidate.ProviderID != catalog.ActiveProviderID {
+			target = candidate
+			break
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("target provider route not found")
+	}
+
+	injected := errors.New("injected post-commit routing failure")
+	oldReplace := replaceRoutingSnapshot
+	replaceRoutingSnapshot = func(store *routing.Store, snapshot routing.Snapshot) (routing.Snapshot, error) {
+		stored, err := store.Replace(snapshot)
+		if err != nil {
+			return routing.Snapshot{}, err
+		}
+		return stored, injected
+	}
+	defer func() { replaceRoutingSnapshot = oldReplace }()
+
+	payload, err := json.Marshal(map[string]any{
+		"active_provider_id": target.ProviderID,
+		"default":            target.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, loopbackRequest(http.MethodPut, "/api/routing/policy", string(payload)))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), injected.Error()) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+	assertFileBytesEqual(t, s.Routing.Path(), beforeRouting)
+}
+
+func TestApplyRoutingSnapshotTransactionRestoresRoutingAndConfigWhenReplaceReturnsPostCommitError(t *testing.T) {
+	s := newRoutingTestServer(t)
+	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := os.ReadFile(s.Routing.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileList := mustProfiles(t, s)
+	catalog := routing.Project(profileList)
+	if len(catalog.ModelRoutes) < 2 {
+		t.Fatal("expected multiple routes")
+	}
+	state, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target routing.ModelRoute
+	for _, candidate := range catalog.ModelRoutes {
+		if candidate.ProviderID != state.ActiveProviderID {
+			target = candidate
+			break
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("target provider route not found")
+	}
+	state.ActiveProviderID = target.ProviderID
+	state.Policy = routing.RoutingPolicy{}
+	state.ProviderPolicies[target.ProviderID] = routing.RoutingPolicy{Default: target.ID}
+
+	injected := errors.New("injected post-commit routing failure")
+	oldReplace := replaceRoutingSnapshot
+	replaceRoutingSnapshot = func(store *routing.Store, snapshot routing.Snapshot) (routing.Snapshot, error) {
+		stored, err := store.Replace(snapshot)
+		if err != nil {
+			return routing.Snapshot{}, err
+		}
+		return stored, injected
+	}
+	defer func() { replaceRoutingSnapshot = oldReplace }()
+
+	if _, err := s.applyRoutingSnapshotTransaction(profileList, state); !errors.Is(err, injected) {
+		t.Fatalf("transaction error = %v, want injected failure", err)
+	}
+	assertFileBytesEqual(t, s.Switcher.ConfigPath, beforeConfig)
+	assertFileBytesEqual(t, s.Routing.Path(), beforeRouting)
 }
 
 func TestRoutingPolicyPUTRejectsRemoteMutation(t *testing.T) {

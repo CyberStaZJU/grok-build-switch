@@ -71,6 +71,9 @@ func (s *Store) Create(profile Profile) (Profile, error) {
 	if err := ValidateEndpoints(profile); err != nil {
 		return Profile{}, err
 	}
+	if err := ValidateModelVariants(profile); err != nil {
+		return Profile{}, err
+	}
 	if err := ValidateDefaultReasoningEffort(profile); err != nil {
 		return Profile{}, err
 	}
@@ -98,6 +101,9 @@ func (s *Store) Update(id string, next Profile) (Profile, error) {
 			if err := ValidateEndpoints(next); err != nil {
 				return Profile{}, err
 			}
+			if err := ValidateModelVariants(next); err != nil {
+				return Profile{}, err
+			}
 			if err := ValidateDefaultReasoningEffort(next); err != nil {
 				return Profile{}, err
 			}
@@ -118,6 +124,16 @@ func (s *Store) Restore(previous Profile) error {
 	defer s.mu.Unlock()
 	if previous.ID == "" {
 		return fmt.Errorf("cannot restore profile without ID")
+	}
+	previous = Normalize(previous)
+	if err := ValidateEndpoints(previous); err != nil {
+		return err
+	}
+	if err := ValidateModelVariants(previous); err != nil {
+		return err
+	}
+	if err := ValidateDefaultReasoningEffort(previous); err != nil {
+		return err
 	}
 	items, err := s.readLocked()
 	if err != nil {
@@ -259,6 +275,9 @@ func (s *Store) readLocked() ([]Profile, error) {
 		profiles[i] = Normalize(profiles[i])
 		if err := ValidateEndpoints(profiles[i]); err != nil {
 			return nil, s.quarantineLocked(data, fmt.Errorf("profile %q has unsupported endpoint: %w", profiles[i].Name, err))
+		}
+		if err := ValidateModelVariants(profiles[i]); err != nil {
+			return nil, s.quarantineLocked(data, fmt.Errorf("profile %q has invalid speed variants: %w", profiles[i].Name, err))
 		}
 	}
 	return profiles, nil
