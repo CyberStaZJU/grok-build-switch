@@ -162,7 +162,9 @@ func copyProxyHeaders(dst, src http.Header) {
 }
 
 // repairMalformedToolHistory only removes malformed protocol-level calls and
-// their matching results. Unrelated nested objects and valid tool history are
+// their matching results. Gemini subscription requests also get a schema
+// cleanup so CLIProxy's GenerateContent translation does not send empty enum
+// values. Unrelated nested objects and valid non-Gemini tool history are
 // preserved byte-for-byte when no repair is needed.
 func repairMalformedToolHistory(raw []byte) ([]byte, bool, error) {
 	var root map[string]any
@@ -182,6 +184,11 @@ func repairMalformedToolHistory(raw []byte) ([]byte, bool, error) {
 		var repaired bool
 		root["tools"], repaired = cleanToolDefinitions(tools)
 		changed = changed || repaired
+		if isGeminiSubscriptionModel(stringValue(root["model"])) {
+			if cleaned, ok := root["tools"].([]any); ok && sanitizeGeminiToolDefinitions(cleaned) {
+				changed = true
+			}
+		}
 	}
 	if !changed {
 		return raw, false, nil
