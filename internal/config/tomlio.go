@@ -266,6 +266,9 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 		if len(model.ExtraHeaders) > 0 {
 			entry["extra_headers"] = model.ExtraHeaders
 		}
+		if model.StreamToolCalls != nil {
+			entry["stream_tool_calls"] = *model.StreamToolCalls
+		}
 		modelTable[key] = entry
 	}
 	doc["model"] = modelTable
@@ -401,6 +404,7 @@ func readModels(doc map[string]any) []profiles.ModelDef {
 			ReasoningEffortsSource:  stringAt(table, "reasoning_efforts_source"),
 			ContextWindow:           intAt(table, "context_window"),
 			MaxCompletionTokens:     intAt(table, "max_completion_tokens"),
+			StreamToolCalls:         optionalBoolAt(table, "stream_tool_calls"),
 		})
 	}
 	return out
@@ -554,7 +558,10 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 		values["models_base_url"] = quote(profile.BaseURL)
 	case "models":
 		values["default"] = quote(profile.DefaultModel)
-		values["default_reasoning_effort"] = quote(profile.DefaultReasoningEffort)
+		// Omit empty / "none" so Grok does not reject an empty enum value.
+		if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" && effort != "none" {
+			values["default_reasoning_effort"] = quote(effort)
+		}
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(lines)+len(values))
@@ -568,6 +575,11 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 		if _, ok := values[key]; ok {
 			out = append(out, key+" = "+values[key])
 			seen[key] = true
+			continue
+		}
+		// Drop an empty/none default_reasoning_effort left by older writers;
+		// Grok rejects unknown enum variants including "".
+		if section == "models" && key == "default_reasoning_effort" {
 			continue
 		}
 		out = append(out, line)
@@ -685,6 +697,17 @@ func intAt(table map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+func optionalBoolAt(table map[string]any, key string) *bool {
+	if table == nil {
+		return nil
+	}
+	if _, ok := table[key]; !ok {
+		return nil
+	}
+	value := boolAt(table, key)
+	return profiles.BoolPtr(value)
 }
 
 func boolAt(table map[string]any, key string) bool {

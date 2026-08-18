@@ -254,7 +254,7 @@ func TestRoutingGETReturnsSafeMultiProviderCatalog(t *testing.T) {
 	}
 }
 
-func TestRoutingGETIncludesInactiveOrdinaryProfileForCollaborationWithoutCredentials(t *testing.T) {
+func TestRoutingGETIncludesInactiveOrdinaryProfileWithoutCredentials(t *testing.T) {
 	s := newRoutingTestServer(t)
 	profile, err := s.Profiles.Create(profiles.Profile{Name: "Inactive ordinary", BaseURL: "https://inactive-private.example/v1", APIKey: "inactive-api-secret", DefaultModel: "inactive-model", Models: []profiles.ModelDef{{Name: "inactive-model", Model: "inactive-upstream", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: "inactive-model", SupportsReasoningEffort: true, ReasoningEfforts: []string{"high"}, ReasoningEffortsSource: "declared"}}})
 	if err != nil {

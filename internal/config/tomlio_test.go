@@ -243,6 +243,44 @@ yolo = false
 	}
 }
 
+func TestApplyProfileWritesStreamToolCallsWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(`[models]
+default = "m"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := profiles.Profile{
+		BaseURL:      "https://new.example/v1",
+		DefaultModel: "m",
+		Models: []profiles.ModelDef{{
+			Name:            "m",
+			Model:           "m",
+			APIKey:          "k",
+			APIBackend:      "chat_completions",
+			StreamToolCalls: profiles.BoolPtr(false),
+		}},
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "stream_tool_calls") {
+		t.Fatalf("expected stream_tool_calls in:\n%s", data)
+	}
+	imported, err := ImportProfile(path, "Default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imported.Models) != 1 || imported.Models[0].StreamToolCalls == nil || *imported.Models[0].StreamToolCalls {
+		t.Fatalf("imported StreamToolCalls = %#v", imported.Models[0].StreamToolCalls)
+	}
+}
+
 func TestApplyProfileOmitsZeroTokenLimits(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

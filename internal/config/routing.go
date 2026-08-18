@@ -50,6 +50,7 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 			StandardAnchor:          profileAnchorAlias(snapshot, route),
 			ContextWindow:           route.ContextWindow,
 			MaxCompletionTokens:     route.MaxCompletionTokens,
+			StreamToolCalls:         route.StreamToolCalls,
 		})
 	}
 	// Per-model base_url is authoritative for a multi-provider config. Keep the
@@ -230,7 +231,7 @@ func CurrentMatchesRouting(path string, snapshot routing.Snapshot) (bool, error)
 	return currentMatchesRouting(path, snapshot, false)
 }
 
-// CurrentMatchesRoutingStrictDefaults is used by Collaboration status, where
+// CurrentMatchesRoutingStrictDefaults is used by strict routing status, where
 // the coordinator's default route and reasoning effort are transaction-owned
 // and any on-disk drift must be reported. Ordinary routing status continues to
 // tolerate Grok persisting a conversation's reasoning effort.

@@ -48,11 +48,11 @@ func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
 	}
 	combined := append(append(append([]byte{}, htmlData...), appData...), styleData...)
 	for _, removed := range []string{
-		"Grok Auth JSON", "Grok 注册机", "Grok 账号池", "CPA 设备授权", "CodeBuddy", "备份与恢复", "OAuth Client ID",
+		"Grok Auth JSON", "Grok 注册机", "Grok 账号池", "CPA 设备授权", "备份与恢复", "OAuth Client ID",
 		`id="grokAuthCard"`, `id="registrarCard"`, `id="grokPoolCard"`, `id="backupFold"`, `id="oauthClientID"`,
 		`id="toggleAdvancedBtn"`, "advancedOnly", `data-field="base_url"`, `data-field="api_backend"`,
 		`data-field="context_window"`, `data-field="max_completion_tokens"`, `data-field="extra_headers"`,
-		"/api/backups", "/api/grok-auth", "/api/grok-pool", "/api/registrar", "/api/cpa-mint", "/api/codebuddy",
+		"/api/backups", "/api/grok-auth", "/api/grok-pool", "/api/registrar", "/api/cpa-mint",
 	} {
 		if bytes.Contains(combined, []byte(removed)) {
 			t.Fatalf("removed UI feature remains in embedded UI: %s", removed)
@@ -144,7 +144,7 @@ func TestSSHFileDeleteIncludesConnectionID(t *testing.T) {
 	}
 }
 
-func TestMaxCollaborationUIContract(t *testing.T) {
+func TestMaxCollaborationUIRemoved(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -153,60 +153,22 @@ func TestMaxCollaborationUIContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	styleData, err := assets.ReadFile("ui/style.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{
-		"collaborationCard", "collaborationBadge", "collaborationRelationship", "collaborationIssues", "collaborationMode", "collaborationFederationDisclosure", "collaborationFederationMap", "collaborationFederationConsent", "collaborationFederationWarning",
-		"collaborationMainCoordinatorProvider", "collaborationMainCoordinatorDataScope", "collaborationMainCoordinatorModel", "collaborationMainCoordinatorSpeed", "collaborationMainCoordinatorEffort", "collaborationMainCoordinatorCapability",
-		"collaborationTaskDecompositionProvider", "collaborationTaskDecompositionDataScope", "collaborationTaskDecompositionModel", "collaborationTaskDecompositionSpeed", "collaborationTaskDecompositionEffort", "collaborationTaskDecompositionCapability",
-		"collaborationMainImplementationProvider", "collaborationMainImplementationDataScope", "collaborationMainImplementationModel", "collaborationMainImplementationSpeed", "collaborationMainImplementationEffort", "collaborationMainImplementationCapability",
-		"collaborationDifficultReviewProvider", "collaborationDifficultReviewDataScope", "collaborationDifficultReviewModel", "collaborationDifficultReviewSpeed", "collaborationDifficultReviewEffort", "collaborationDifficultReviewCapability",
-		"collaborationTier", "collaborationTierHint", "collaborationCreditWarning", "collaborationLaunchTitle", "collaborationLaunchBudget", "collaborationLaunchObjective", "collaborationLaunchInstruction", "copyCollaborationLaunchBtn", "previewCollaborationBtn", "applyCollaborationBtn",
-		"disableCollaborationBtn", "collaborationPreview", "collaborationConfigBefore", "collaborationConfigAfter",
-		"collaborationArtifacts", "collaborationFingerprint",
-	} {
-		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
-			t.Fatalf("collaboration control %q is missing", id)
-		}
-	}
 	for _, fragment := range []string{
-		"与路由策略的关系", "路由策略管理普通主会话的 default、web_search、explore 和 plan",
-		"只将 default 和默认推理强度对齐到主协调", "不覆盖 web_search、explore 或 plan",
-		"主协调", "任务拆解", "主实现", "困难实现 / 复核", "角色名称不绑定 Terra、Luna 或 Sol",
-		"Standard/Fast 速度档", "Fast 请求 priority", "更多订阅 credits", "缺失时不会回退",
-		"Switch 只预览并生成用户级 role/workflow", "budget 1", "budget 2", "budget 11", "budget 12", "budget 13",
-		"停用（保留文件）", "Critical Reviewed Build · budget 13（10 implementation agents，显式选择）", "all_workflow_tiers_v1", "跨供应商数据流确认", "适用于全部五条可执行路径", "Adaptive 仅是默认提示，不缩小本次授权", "我已核对并同意以上跨供应商数据流", "Prompt 约束不是硬 DLP 边界", "在 Grok Build 中启动", "直接 slash 启动固定使用默认 budget 128", "复制精确代理指令", "请调用 workflow 工具运行 named workflow gbs-max-collab", "agent_budget=1", "请不要启动并说明原因", "数据范围（workflow 固定）",
+		"collaborationCard",
+		"Max Collaboration",
+		"previewCollaborationBtn",
+		"applyCollaborationBtn",
+		"gbs-max-collab",
+		"function renderCollaboration(",
+		"function loadCollaborationSpec(",
+		`api("/api/collaboration"`,
 	} {
-		if !bytes.Contains(htmlData, []byte(fragment)) {
-			t.Fatalf("collaboration guidance is missing %q", fragment)
-		}
-	}
-	for _, fragment := range []string{
-		"function trustedCollaborationEfforts", "function collaborationRouteSupportsEffort", "function collaborationRouteSupportsMax",
-		"function collaborationStandardRoutes", "function resolveCollaborationRoute", "function populateCollaborationSpeedOptions", "function collaborationLaunchParameters", "function updateCollaborationLaunchGuide",
-		`source !== "declared" && source !== "probe"`, "speed_tier", "const roles =", "main_coordinator", "task_decomposition",
-		"main_implementation", "difficult_implementation_review", `api("/api/collaboration/preview"`,
-		`api("/api/collaboration"`, "confirmed: true", "fingerprint: pending.preview.fingerprint",
-		"async function disableCollaboration()", "路由 default 会对齐主协调解析后的具体 Standard/Fast 路由", "web_search、explore 和 plan 保持不变",
-		"更多订阅 credits", "不会回退到 Standard", "Switch 本身不会启动 agent", "不会删除已生成的 role/workflow", "JSON.stringify(args)", "workflow 工具运行 named workflow gbs-max-collab", "不要使用 /gbs-max-collab 或 /workflow slash 启动",
-	} {
-		if !bytes.Contains(appData, []byte(fragment)) {
-			t.Fatalf("collaboration client contract is missing %q", fragment)
-		}
-	}
-	for _, selector := range []string{".collaborationRelationship", ".collaborationGrid", ".collaborationRole", ".collaborationRoleHead", ".collaborationLaunchCard", ".collaborationLaunchCopyRow", ".collaborationFederationCard", ".collaborationFederationHead", ".collaborationFederationMap", ".collaborationFederationBoundary", ".collaborationConsent", ".collaborationCreditWarning", ".collaborationTierField", ".collaborationBudgetGrid", ".collaborationDiffGrid", ".collaborationArtifact"} {
-		if !bytes.Contains(styleData, []byte(selector)) {
-			t.Fatalf("collaboration style %q is missing", selector)
-		}
-	}
-	for _, forbidden := range []string{`/api/agent/`, `id="viewChat"`, `id="viewSessionGraph"`} {
-		if bytes.Contains(append(append(append([]byte{}, htmlData...), appData...), styleData...), []byte(forbidden)) {
-			t.Fatalf("collaboration UI restored forbidden runtime surface %q", forbidden)
+		if bytes.Contains(htmlData, []byte(fragment)) || bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("Max Collaboration UI residue still present: %q", fragment)
 		}
 	}
 }
+
 
 func TestCacheStatisticsUIContract(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
@@ -376,10 +338,13 @@ func TestProfileEditorUsesSaveOnly(t *testing.T) {
 	if !bytes.Contains(htmlData, []byte(`id="saveProfileBtn"`)) {
 		t.Fatal("profile editor save button not found")
 	}
-	for _, stale := range []string{`id="activateCurrentBtn"`, "保存并启用", `$("activateCurrentBtn")`} {
+	for _, stale := range []string{`id="activateCurrentBtn"`, `$("activateCurrentBtn")`} {
 		if bytes.Contains(htmlData, []byte(stale)) || bytes.Contains(appData, []byte(stale)) {
 			t.Fatalf("profile editor still contains obsolete save-and-activate behavior: %s", stale)
 		}
+	}
+	if bytes.Contains(htmlData, []byte(`id="saveAndActivateProfileBtn"`)) {
+		t.Fatal("profile editor still contains obsolete save-and-activate behavior")
 	}
 }
 
@@ -533,6 +498,43 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	}
 	if !bytes.Contains(appData, []byte("上游接受请求，可能静默忽略")) {
 		t.Fatal("accepted reasoning effort disclaimer not found")
+	}
+}
+
+func TestCodeBuddyPageContract(t *testing.T) {
+	htmlData, err := assets.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{
+		"navCodeBuddyBtn", "viewCodeBuddy", "backFromCodeBuddyBtn",
+		"codeBuddyRefreshBtn", "codeBuddyTestBtn", "codeBuddyApiKey",
+		"codeBuddyDefaultModel", "codeBuddySaveBtn", "codeBuddySaveActivateBtn",
+		"codeBuddyActivateBtn", "codeBuddyStatusBadge", "codeBuddyBaseUrl",
+	} {
+		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
+			t.Fatalf("%s control not found", id)
+		}
+		if !bytes.Contains(appData, []byte(`$("`+id+`")`)) {
+			t.Fatalf("%s client handler not found", id)
+		}
+	}
+	for _, fragment := range []string{
+		`api("/api/codebuddy"`,
+		`api("/api/codebuddy/test"`,
+		`api("/api/codebuddy/activate"`,
+		`function loadCodeBuddy(`,
+		`function renderCodeBuddy(`,
+		`function saveCodeBuddy(`,
+		`showView("codeBuddy")`,
+	} {
+		if !bytes.Contains(appData, []byte(fragment)) {
+			t.Fatalf("codebuddy client fragment missing: %s", fragment)
+		}
 	}
 }
 

@@ -29,6 +29,10 @@ type ModelDef struct {
 	StandardAnchor          string            `json:"standard_anchor,omitempty"`
 	ContextWindow           int64             `json:"context_window"`
 	MaxCompletionTokens     int64             `json:"max_completion_tokens"`
+	// StreamToolCalls is written to Grok [model.*] only when non-nil.
+	// CodeBuddy must set false: later SSE deltas send function.name="" and
+	// Grok's incremental assembler overwrites the real tool name.
+	StreamToolCalls *bool `json:"stream_tool_calls,omitempty"`
 }
 
 type Profile struct {
@@ -97,7 +101,8 @@ func modelEqual(a, b ModelDef) bool {
 		a.SupportsReasoningEffort != b.SupportsReasoningEffort ||
 		a.ReasoningEffortsSource != b.ReasoningEffortsSource ||
 		a.ContextWindow != b.ContextWindow ||
-		a.MaxCompletionTokens != b.MaxCompletionTokens {
+		a.MaxCompletionTokens != b.MaxCompletionTokens ||
+		!optionalBoolEqual(a.StreamToolCalls, b.StreamToolCalls) {
 		return false
 	}
 	if !stringSlicesEqual(a.ReasoningEfforts, b.ReasoningEfforts) {
@@ -321,6 +326,19 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// BoolPtr returns a pointer to v for optional ModelDef flags.
+func BoolPtr(v bool) *bool {
+	b := v
+	return &b
+}
+
+func optionalBoolEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func uniqueStrings(in []string) []string {

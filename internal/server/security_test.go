@@ -287,8 +287,8 @@ func TestLoopbackWriteCSRFProtection(t *testing.T) {
 	}
 }
 
-func TestCollaborationFullStackBlocksLANAndEnforcesCSRF(t *testing.T) {
-	s, requestBody := newCollaborationTestServer(t)
+func TestCodeBuddyFullStackBlocksLANAndEnforcesCSRF(t *testing.T) {
+	s := newCodeBuddyAPITestServer(t)
 	settingsStore := settings.NewStore(filepath.Join(s.Paths.DataDir, "settings.json"))
 	current := settings.Default()
 	current.LANAccessEnabled = true
@@ -306,16 +306,17 @@ func TestCollaborationFullStackBlocksLANAndEnforcesCSRF(t *testing.T) {
 	s.routes(mux)
 	handler := s.withAccess(mux)
 
-	remote := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:17878/api/collaboration", nil)
+	remote := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:17878/api/codebuddy", nil)
 	remote.RemoteAddr = "192.168.1.20:43000"
 	remote.Host = "192.168.1.10:17878"
 	remote.AddCookie(&http.Cookie{Name: lanSessionCookie, Value: snapshot.SessionToken})
 	remoteResponse := httptest.NewRecorder()
 	handler.ServeHTTP(remoteResponse, remote)
 	if remoteResponse.Code != http.StatusForbidden {
-		t.Fatalf("paired LAN collaboration status=%d body=%s", remoteResponse.Code, remoteResponse.Body.String())
+		t.Fatalf("paired LAN codebuddy status=%d body=%s", remoteResponse.Code, remoteResponse.Body.String())
 	}
 
+	requestBody := `{"api_key":"ck_test","default_model":"hy3","activate":false}`
 	for _, tc := range []struct {
 		name   string
 		origin string
@@ -325,7 +326,7 @@ func TestCollaborationFullStackBlocksLANAndEnforcesCSRF(t *testing.T) {
 		{name: "malicious origin", origin: "http://attacker.example", token: mustCSRFToken(t, s)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17878/api/collaboration/preview", strings.NewReader(requestBody))
+			req := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:17878/api/codebuddy", strings.NewReader(requestBody))
 			req.RemoteAddr = "127.0.0.1:43001"
 			req.Host = "127.0.0.1:17878"
 			req.Header.Set("Content-Type", "application/json")

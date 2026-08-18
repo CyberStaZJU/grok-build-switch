@@ -1,0 +1,301 @@
+package server
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"grok_switch/internal/codebuddy"
+	"grok_switch/internal/profiles"
+	"grok_switch/internal/routing"
+)
+
+// CodeBuddyProxyBaseURL returns the in-process OpenAI-compatible root.
+func (s *Server) CodeBuddyProxyBaseURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d/codebuddy-proxy/v1", s.ActualPort)
+}
+
+func (s *Server) handleCodeBuddyProxy(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "仅允许本机访问", http.StatusForbidden)
+		return
+	}
+	// Resolve fallback key from the managed profile if the client omitted auth.
+	fallback := ""
+	if s.Profiles != nil {
+		if list, err := s.Profiles.List(); err == nil {
+			if profile, ok := selectCodeBuddyProfile(list); ok && strings.TrimSpace(profile.APIKey) != "" {
+				fallback = profile.APIKey
+			}
+		}
+	}
+	h := &codebuddy.Handler{FallbackKey: fallback}
+	h.ServeHTTP(w, r)
+}
+
+// EnsureCodeBuddyRoutes rewrites managed profile base URLs onto the current
+// Switch listen port (same pattern as subscription-proxy).
+func (s *Server) EnsureCodeBuddyRoutes() error {
+	if s.Profiles == nil || s.Switcher == nil || s.ActualPort == 0 {
+		return nil
+	}
+	list, err := s.Profiles.List()
+	if err != nil {
+		return err
+	}
+	target := s.CodeBuddyProxyBaseURL()
+	changed := false
+	for _, profile := range list {
+		if !isCodeBuddyManagedProfile(profile) {
+			continue
+		}
+		profileChanged := profile.BaseURL != target || profile.Source != codebuddy.SourceTag
+		profile.Source = codebuddy.SourceTag
+		profile.BaseURL = target
+		for i := range profile.Models {
+			if profile.Models[i].BaseURL != target {
+				profile.Models[i].BaseURL = target
+				profileChanged = true
+			}
+			if profile.Models[i].StreamToolCalls == nil || *profile.Models[i].StreamToolCalls {
+				profile.Models[i].StreamToolCalls = profiles.BoolPtr(false)
+				profileChanged = true
+			}
+		}
+		if !profileChanged {
+			continue
+		}
+		if _, updateErr := s.Profiles.Update(profile.ID, profile); updateErr != nil {
+			return updateErr
+		}
+		changed = true
+	}
+	if changed {
+		if s.Routing != nil {
+			if err := s.ApplyCurrentRouting(); err != nil {
+				return err
+			}
+		}
+		s.changed()
+	}
+	return nil
+}
+
+// CodeBuddyEnsureOptions controls managed profile create/update/activation.
+type CodeBuddyEnsureOptions struct {
+	APIKey       string
+	DefaultModel string
+	Activate     bool
+}
+
+// EnsureCodeBuddyProvider creates or updates the managed CodeBuddy profile and
+// optionally activates it as the active Grok routing provider.
+func (s *Server) EnsureCodeBuddyProvider(apiKey string, activate bool) (profiles.Profile, error) {
+	return s.EnsureCodeBuddyProviderOpts(CodeBuddyEnsureOptions{APIKey: apiKey, Activate: activate})
+}
+
+// EnsureCodeBuddyProviderOpts is the full form of EnsureCodeBuddyProvider.
+func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profiles.Profile, error) {
+	if s.Profiles == nil || s.Switcher == nil || s.ActualPort == 0 {
+		return profiles.Profile{}, fmt.Errorf("server not ready")
+	}
+	apiKey := strings.TrimSpace(opts.APIKey)
+	if apiKey == "" {
+		return profiles.Profile{}, fmt.Errorf("缺少 CodeBuddy API Key")
+	}
+	defaultModel := strings.TrimSpace(opts.DefaultModel)
+	if defaultModel == "" {
+		defaultModel = codebuddy.DefaultModel
+	}
+	if !codebuddy.IsKnownModel(defaultModel) {
+		return profiles.Profile{}, fmt.Errorf("不支持的默认模型 %q", defaultModel)
+	}
+	baseURL := s.CodeBuddyProxyBaseURL()
+	desired := codebuddy.NewProfile(baseURL, apiKey)
+	desired.DefaultModel = defaultModel
+
+	list, err := s.Profiles.List()
+	if err != nil {
+		return profiles.Profile{}, err
+	}
+	var profile profiles.Profile
+	if existing, ok := selectCodeBuddyProfile(list); ok {
+		desired.ID = existing.ID
+		desired.CreatedAt = existing.CreatedAt
+		updated, updateErr := s.Profiles.Update(existing.ID, desired)
+		if updateErr != nil {
+			return profiles.Profile{}, updateErr
+		}
+		profile = updated
+	} else {
+		created, createErr := s.Profiles.Create(desired)
+		if createErr != nil {
+			return profiles.Profile{}, createErr
+		}
+		profile = created
+	}
+
+	if !opts.Activate {
+		if s.Routing != nil {
+			if err := s.ApplyCurrentRouting(); err != nil {
+				return profile, err
+			}
+		}
+		s.changed()
+		return profile, nil
+	}
+
+	if s.Routing == nil {
+		// Legacy single-profile path.
+		if _, err := s.Switcher.Activate(profile.ID); err != nil {
+			return profile, err
+		}
+		s.changed()
+		return profile, nil
+	}
+
+	// Activate via routing policy so the combined catalog stays consistent.
+	s.routingMu.Lock()
+	defer s.routingMu.Unlock()
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		return profile, err
+	}
+	profileList, err := s.Profiles.List()
+	if err != nil {
+		return profile, err
+	}
+	defaultRef := profile.ID + ":" + defaultModel
+	stored.ActiveProviderID = profile.ID
+	if stored.ProviderPolicies == nil {
+		stored.ProviderPolicies = map[string]routing.RoutingPolicy{}
+	}
+	// Clean default-only policy for this provider; web_search is not supported.
+	stored.ProviderPolicies[profile.ID] = routing.RoutingPolicy{
+		Default:          defaultRef,
+		WebSearchCapable: false,
+	}
+	if _, err := s.applyRoutingSnapshotTransaction(profileList, stored); err != nil {
+		return profile, err
+	}
+	s.changed()
+	return profile, nil
+}
+
+func isCodeBuddyProxyBaseURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	return path == "/codebuddy-proxy/v1" || strings.HasSuffix(path, "/codebuddy-proxy/v1")
+}
+
+func isCodeBuddyLegacyLookalike(profile profiles.Profile) bool {
+	if strings.TrimSpace(profile.Source) != "" {
+		return false
+	}
+	if strings.TrimSpace(profile.Name) != codebuddy.ProfileName {
+		return false
+	}
+	return isCodeBuddyProxyBaseURL(profile.BaseURL)
+}
+
+func isCodeBuddyManagedProfile(profile profiles.Profile) bool {
+	return profile.Source == codebuddy.SourceTag || isCodeBuddyLegacyLookalike(profile)
+}
+
+func selectCodeBuddyProfile(list []profiles.Profile) (profiles.Profile, bool) {
+	var tagged []profiles.Profile
+	var legacy []profiles.Profile
+	for _, profile := range list {
+		switch {
+		case profile.Source == codebuddy.SourceTag:
+			tagged = append(tagged, profile)
+		case isCodeBuddyLegacyLookalike(profile):
+			legacy = append(legacy, profile)
+		}
+	}
+	sortCodeBuddyProfilesByCreated(tagged)
+	sortCodeBuddyProfilesByCreated(legacy)
+	if len(tagged) > 0 {
+		return tagged[0], true
+	}
+	if len(legacy) == 1 {
+		return legacy[0], true
+	}
+	return profiles.Profile{}, false
+}
+
+func sortCodeBuddyProfilesByCreated(list []profiles.Profile) {
+	sort.SliceStable(list, func(i, j int) bool {
+		ti, tj := list[i].CreatedAt, list[j].CreatedAt
+		if ti.IsZero() && tj.IsZero() {
+			return list[i].ID < list[j].ID
+		}
+		if ti.IsZero() {
+			return false
+		}
+		if tj.IsZero() {
+			return true
+		}
+		if ti.Equal(tj) {
+			return list[i].ID < list[j].ID
+		}
+		return ti.Before(tj)
+	})
+}
+
+// LoadCodeBuddyAPIKey resolves a key from env, managed profile, or optional
+// secret file written by the temporary ~/.grok bridge helper.
+func LoadCodeBuddyAPIKey(profileStore *profiles.Store) string {
+	if v := strings.TrimSpace(os.Getenv("CODEBUDDY_API_KEY")); v != "" {
+		return v
+	}
+	if profileStore != nil {
+		if list, err := profileStore.List(); err == nil {
+			if profile, ok := selectCodeBuddyProfile(list); ok && strings.TrimSpace(profile.APIKey) != "" {
+				return profile.APIKey
+			}
+			// Fall back to any tagged/legacy key even when selection is ambiguous.
+			for _, p := range list {
+				if isCodeBuddyManagedProfile(p) && strings.TrimSpace(p.APIKey) != "" {
+					return p.APIKey
+				}
+			}
+		}
+	}
+	// Optional local helper used during early wiring (not committed).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	for _, rel := range []string{
+		filepath.Join(".grok", "codebuddy-bridge", ".env"),
+		filepath.Join("Library", "Application Support", "Grok Build Switch", "codebuddy.env"),
+	} {
+		path := filepath.Join(home, rel)
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			line = strings.TrimPrefix(line, "export ")
+			if strings.HasPrefix(line, "CODEBUDDY_API_KEY=") {
+				val := strings.Trim(strings.TrimPrefix(line, "CODEBUDDY_API_KEY="), `"'`)
+				if val != "" {
+					return val
+				}
+			}
+		}
+	}
+	return ""
+}

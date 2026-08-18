@@ -642,6 +642,13 @@ code, kbd, pre, .mono {
 /* Subscription proxy */
 .subscriptionSectionTitle { margin: 4px 0 6px; }
 .subscriptionStepHint { margin: 0 0 10px; }
+.codeBuddyView .codeBuddyNotes { margin: 0 0 8px; padding-left: 1.2em; }
+.codeBuddyView .codeBuddyNotes li { margin: 4px 0; }
+.codeBuddyView #codeBuddyModelChips .chip { cursor: pointer; }
+.codeBuddyView #codeBuddyModelChips .chip.active {
+  background: var(--accent-soft, color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent));
+  border-color: var(--accent, #3b82f6);
+}
 .subscriptionLoginGrid, .subscriptionProviderGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .subscriptionLoginGrid .formCard { box-shadow: none; }
 .subscriptionLoginGrid p { margin: 0; flex: 1; }

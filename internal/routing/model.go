@@ -43,6 +43,7 @@ type ModelRoute struct {
 	ReasoningEffortsSource  string            `json:"reasoning_efforts_source,omitempty"`
 	ContextWindow           int64             `json:"context_window,omitempty"`
 	MaxCompletionTokens     int64             `json:"max_completion_tokens,omitempty"`
+	StreamToolCalls         *bool             `json:"-"`
 }
 
 type SubagentsPolicy struct {
@@ -299,6 +300,7 @@ func Project(source []profiles.Profile) Snapshot {
 				SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
 				ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
 				ContextWindow: model.ContextWindow, MaxCompletionTokens: model.MaxCompletionTokens,
+				StreamToolCalls: model.StreamToolCalls,
 			})
 		}
 		for routeIndex, model := range profile.Models {
@@ -533,6 +535,7 @@ func Hydrate(snapshot Snapshot, source []profiles.Profile) (Snapshot, error) {
 		route.SupportsBackendSearch, route.SupportsReasoningEffort = model.SupportsBackendSearch, model.SupportsReasoningEffort
 		route.ReasoningEfforts, route.ReasoningEffortsSource = append([]string(nil), model.ReasoningEfforts...), model.ReasoningEffortsSource
 		route.ContextWindow, route.MaxCompletionTokens = model.ContextWindow, model.MaxCompletionTokens
+		route.StreamToolCalls = model.StreamToolCalls
 		if route.SpeedTier != model.SpeedTier {
 			return Snapshot{}, fmt.Errorf("routing model %q speed tier no longer matches profile metadata", route.Name)
 		}

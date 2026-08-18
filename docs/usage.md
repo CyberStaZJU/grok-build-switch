@@ -37,9 +37,13 @@
 
 保存后，应用会校验选择并更新 `~/.grok/config.toml`。如写入失败，应确认原配置仍可解析，并检查 Profile、模型和文件权限。
 
-## 6. 配置 Max Collaboration
+## 6. Max Collaboration（已移除）
 
-Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent runtime。
+当前版本已从模型路由页移除 Max Collaboration。它与 Grok Build 日常用法不适配，不再作为产品入口。请只用上一节的 default / web_search / explore / plan。
+
+以下旧步骤仅作追溯。
+
+Max Collaboration 曾是 Grok Build 配置预设，不是 Switch 内部的 agent runtime。
 
 1. 在统一路由中启用一个自定义供应商；
 2. 在 **Max Collaboration** 卡片中为四个语义角色分别选择 Standard 模型锚点、速度档和推理强度：
@@ -122,7 +126,35 @@ Max Collaboration 是 Grok Build 配置预设，不是 Switch 内部的 agent ru
 
 ## 12. 产品范围
 
-本教程第 3 至第 11 节覆盖当前完整产品范围。其他旧扩展已移除，不再提供现行操作入口。Max Collaboration 仅恢复配置控制面，不恢复 chat、session graph、transcript 或 `/api/agent/*`。
+本教程第 3 至第 5 节与第 7 至第 11 节覆盖当前完整产品范围。第 6 节仅为已移除能力的追溯。其他旧扩展不再提供现行操作入口。
 
+## CodeBuddy / WorkBuddy 订阅
 
-> Collaboration schema v5 defaults to `single_provider`. `federated` is an explicit-consent preview model with per-role provider and data-scope assignments; current active-provider/config serialization blocks safe multi-provider activation, so the Switch fails closed rather than merging credentials or pretending cross-provider routing works.
+Switch 可将腾讯 CodeBuddy/WorkBuddy 订阅接入 Grok Build harness（不经 WorkBuddy agent）。
+
+### GUI
+
+1. 打开管理页，点顶栏 **CodeBuddy**。
+2. 粘贴个人 API Key（[copilot.tencent.com/profile](https://copilot.tencent.com/profile/)，形如 `ck_…`）。
+3. 选择默认模型（推荐 `hy3`）。
+4. **测试连通** → **保存并启用**。
+5. 新开 `grok` 会话即走该供应商；`default` 为所选模型。
+
+状态页会显示 masked Key、进程内代理 Base URL，以及是否为当前 active provider。
+
+### CLI（可选）
+
+```bash
+# 进程内代理（需已运行含本功能的 Switch）
+CODEBUDDY_API_KEY=ck_... go run ./cmd/codebuddy-setup -activate
+
+# 独立代理（仅当 Switch 未含 /codebuddy-proxy 时）
+go run ./cmd/codebuddy-proxy -addr 127.0.0.1:8788
+go run ./cmd/codebuddy-setup -activate -base-url http://127.0.0.1:8788/v1
+```
+
+进程内路径：`http://127.0.0.1:<switch-port>/codebuddy-proxy/v1`。  
+启动时设置 `CODEBUDDY_ACTIVATE=1` 可在有 Key 时自动激活。  
+代理会强制上游流式，并清洗中间帧 `finish_reason:""`，否则 Grok 无法反序列化。  
+启用时会给每个 CodeBuddy 模型写入 `stream_tool_calls = false`：上游后续 SSE 分片会把 `function.name` 写成空串，Grok 增量合并后工具名会丢。
+

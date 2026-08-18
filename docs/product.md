@@ -6,14 +6,13 @@
 
 ## 1. 产品定位
 
-Grok Build Switch 是一个本地 macOS 菜单栏/桌面工具，用于管理 Grok CLI 的官方登录路由、`~/.grok/config.toml`、普通供应商 Profile、统一模型路由和可选的 Grok Build Max Collaboration 配置预设。
+Grok Build Switch 是一个本地 macOS 菜单栏/桌面工具，用于管理 Grok CLI 的官方登录路由、`~/.grok/config.toml`、普通供应商 Profile 与统一模型路由。
 
 核心能力：
 
 - 通过 Grok CLI 官方流程登录，并在登录后应用官方模型路由；
 - 以普通 Profile 管理供应商、Base URL、API Key、上游格式和常用模型；
 - 统一配置 `default`、`web_search`、`subagents.explore`、`subagents.plan`；
-- 为主协调、任务拆解、主实现、困难实现 / 复核分别选择可信 Codex 订阅供应商内的 Standard 模型锚点、Standard/Fast 速度档与推理强度，预览并管理四角色 role/workflow，用精确串行预算减少不必要的 agent 调用；
 - 只读展示近期 prompt、cached prompt、completion、reasoning token 和缓存命中率；
 - 通过内嵌 CLIProxyAPI 接入受支持的订阅代理；
 - 查看、校验和编辑 `~/.grok/config.toml`；
@@ -38,18 +37,17 @@ Browser management UI / Wails / macOS menu bar
                        │
        ┌───────────────┼────────────────────┐
        ▼               ▼                    ▼
-    Profiles        Routing          Collaboration / Services
- ordinary data   unified policy     roles/workflow + subscription/LAN/SSH
-                       │                    │
-                       ▼                    ▼
-             ~/.grok/config.toml      ~/.grok/roles + workflows
+    Profiles        Routing               Services
+ ordinary data   unified policy     subscription / LAN / SSH
+                       │
+                       ▼
+             ~/.grok/config.toml
 ```
 
 ### 2.1 配置真相
 
 - 普通 Profile 保存可选供应商和模型定义；
 - 统一路由策略保存当前模型选择；
-- `collaboration.json` 保存独立的预设状态和受管文件 SHA-256 manifest，不保存凭据或 agent 运行状态；
 - `~/.grok/config.toml` 是 Grok CLI 实际执行配置；
 - 官方认证由 Grok CLI 官方登录流程管理；
 - 路由更新必须保持统一路由策略与 `config.toml` 一致。
@@ -71,7 +69,6 @@ Browser management UI / Wails / macOS menu bar
 | 官方 Grok CLI | 使用官方登录流程，验证登录状态并应用官方模型路由 |
 | 普通 Profile | 管理供应商、Base URL、API Key、上游格式和常用模型 |
 | 统一模型路由 | 管理 default、web_search、explore 和 plan |
-| Max Collaboration | 校验同一可信 Codex 订阅供应商中四个独立角色的 Standard 锚点、Standard/Fast 速度档与推理强度，预览并生成用户级 role/workflow；不运行 agent |
 | 用量观察 | 聚合近期 prompt/cached/completion/reasoning token、turn 和缓存命中率；不推算美元成本 |
 | 订阅代理 | 管理内嵌 CLIProxyAPI 的生命周期、登录和代理路由 |
 | `config.toml` 编辑 | 查看、校验并编辑 Grok CLI 当前配置 |
@@ -105,9 +102,11 @@ subagents.plan
 
 路由更新执行严格校验、目标配置预览、原子写入和失败回滚。该流程只处理配置与模型选择。
 
-### 3.3 Max Collaboration
+### 3.3 Max Collaboration（已移除）
 
-该预设提供四个独立语义角色：
+Max Collaboration 已从当前产品移除：模型路由页不再提供该控制面，也不再作为与 Grok Build 适配的推荐路径。历史设计文档与博客仅用于追溯。
+
+该预设曾提供四个独立语义角色：
 
 - **主协调**：范围控制、结果收敛、最终验证与交付；
 - **任务拆解**：只读探索并输出约束、依赖、文件和测试组成的紧凑工作包；
@@ -213,7 +212,11 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 5. 在统一模型路由中选择 default、web_search、explore 和 plan；
 6. 保存并检查 `~/.grok/config.toml`。
 
-### 5.3 配置 Max Collaboration
+### 5.3 配置 Max Collaboration（已移除）
+
+当前版本不再提供该配置入口。普通任务请只使用统一模型路由的 default / web_search / explore / plan。
+
+旧步骤仅作追溯：
 
 1. 先启用一个提供所需模型路由的自定义供应商；
 2. 为主协调、任务拆解、主实现、困难实现 / 复核分别选择 Standard 模型锚点、Standard/Fast 速度档和推理强度；允许复用同一锚点；
@@ -252,7 +255,6 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 
 - 普通 Profile 与统一路由；
 - Grok CLI 官方登录和官方路由；
-- Max Collaboration schema v5 的 exact Standard/Fast 解析、具体 route effort fail-closed、preview/fingerprint、canonical manifest/文件类型/hash 漂移、事务回滚、policy-only disable 和 tier 精确预算；
 - CLIProxy 完整 YAML ownership merge 与仅精确 Fast alias 的 `service_tier: priority` 整形；
 - 用量聚合中的 prompt/cached/completion/reasoning token；
 - 订阅代理；
@@ -277,10 +279,6 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 ### web_search 路由不可用
 
 请选择实际支持原生搜索的模型，或在 Grok CLI 自身配置所需 MCP。应用不会把不支持搜索的模型描述为可用。
-
-### Max Collaboration 无法预览或应用
-
-确认当前启用的是 Switch 管理的可信 Codex 订阅供应商，四个角色都选择了 Standard 锚点、速度档与推理强度，并且解析后的具体 Standard/Fast route 对所选 effort 的能力来源是 `declared` 或 `probe`。角色可以复用同一锚点。若已保存锚点暂时缺失、Fast partner 消失，或 effort 不再受支持 / 不再具备可信 capability 来源，UI 会保留禁用的原选择，需由用户显式替换；若提示 non-canonical manifest、unmanaged collision、symlink 或 drift，请不要直接覆盖，先判断文件是否已由用户接管。
 
 ### 是否已经证明节省了多少钱
 

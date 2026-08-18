@@ -11,7 +11,6 @@
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
 - **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。
 - **统一模型路由**：事务性更新 `config.toml` 和 `routing.json`，覆盖 default、web_search、explore 与 plan。
-- **Max Collaboration 控制面**：独立 schema v5 policy；为主协调、任务拆解、主实现、困难实现 / 复核四个角色分别验证同一可信 Codex 订阅供应商内的 Standard 锚点、Standard/Fast 速度档与推理强度，生成用户级 agent definition、role 与 workflow，并以 Economy=1、Focused Evidence=2、Focused Build=11、Assurance=12、Critical=13 的精确预算门控 Grok Build；由 workflow 顶层启动 10 个主实现 agent。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。
 - **配置编辑**：查看、校验和编辑 Grok CLI 的 `~/.grok/config.toml`。

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>grok_switch</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/style.css?v=45">
+  <link rel="stylesheet" href="/style.css?v=47">
 </head>
 <body>
   <div class="shell">
@@ -24,6 +24,7 @@
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
         <button type="button" id="navRoutingBtn" class="btn">模型路由</button>
         <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
+        <button type="button" id="navCodeBuddyBtn" class="btn">CodeBuddy</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
         <button type="button" id="navSSHBtn" class="btn">SSH</button>
       </div>
@@ -214,132 +215,6 @@
         <p id="routingStatus" class="muted tiny" role="status">加载中…</p>
       </section>
 
-      <section class="formCard collaborationCard" id="collaborationCard">
-        <div class="rowBetween">
-          <div>
-            <h2 class="sectionTitle">Max Collaboration</h2>
-            <p class="muted tiny">为主协调、任务拆解、主实现和困难实现 / 复核分别选择 Standard 模型、Standard/Fast 速度档与推理强度；角色名称不绑定 Terra、Luna 或 Sol，且可复用同一模型。</p>
-          </div>
-          <span id="collaborationBadge" class="badge" data-state="stopped">未配置</span>
-        </div>
-        <div class="collaborationRelationship" id="collaborationRelationship">
-          <strong>与路由策略的关系</strong>
-          <p>路由策略管理普通主会话的 default、web_search、explore 和 plan。Collaboration 的供应商目录仅来自同一普通 Profiles/routing snapshot（包括当前未激活的普通 Profile），不会读取或创建另一套凭据来源；响应不包含 API Key 或 Base URL。Collaboration 保存四角色 Standard 锚点、独立速度档与推理强度；应用时只将 default 和默认推理强度对齐到主协调，不覆盖 web_search、explore 或 plan。</p>
-        </div>
-        <div id="collaborationIssues" class="alert warn collaborationIssues" hidden></div>
-        <div class="collaborationGrid">
-          <label class="field">模式<select id="collaborationMode"><option value="single_provider">Single provider（默认）</option><option value="federated">Federated（受控预览；当前激活架构可能阻止应用）</option></select></label>
-          <section id="collaborationFederationDisclosure" class="collaborationFederationCard" hidden aria-labelledby="collaborationFederationTitle">
-            <div class="collaborationFederationHead">
-              <span class="collaborationFederationIcon" aria-hidden="true">↗</span>
-              <div><strong id="collaborationFederationTitle">跨供应商数据流确认</strong><span>适用于全部五条可执行路径</span></div>
-              <code>all_workflow_tiers_v1</code>
-            </div>
-            <p>下方列出精确供应商集合，以及 Economy、Focused Evidence、Focused Build、Assurance、Critical 的跨供应商交接边。Adaptive 仅是默认提示，不缩小本次授权。</p>
-            <pre id="collaborationFederationMap" class="collaborationFederationMap"></pre>
-            <div class="collaborationFederationBoundary"><strong>传递边界</strong><span>仅限 bounded work products；不传递 credentials、secrets 或 full transcripts。Prompt 约束不是硬 DLP 边界。</span></div>
-            <label id="collaborationConsentField" class="collaborationConsent" hidden>
-              <input id="collaborationFederationConsent" type="checkbox">
-              <span><strong>我已核对并同意以上跨供应商数据流</strong><small>授权覆盖上方列出的全部五条路径、供应商与交接边，不随 Default tier 改变。</small></span>
-            </label>
-          </section>
-        </div>
-        <div class="collaborationGrid">
-          <section class="collaborationRole" data-role="mainCoordinator">
-            <div class="collaborationRoleHead"><strong>主协调</strong><span>全局 default 与最终交付</span></div>
-            <label class="field">供应商<select id="collaborationMainCoordinatorProvider" class="mono"></select></label>
-            <label class="field">Standard 模型<select id="collaborationMainCoordinatorModel" class="mono"></select></label>
-            <label class="field">数据范围（workflow 固定）<select id="collaborationMainCoordinatorDataScope" class="mono" disabled><option value="repository_plus_minimized_prior_work_products">仓库 + 最小前序工作产物</option></select></label>
-            <label class="field">速度档<select id="collaborationMainCoordinatorSpeed" class="mono" disabled><option value="">请先选择模型</option></select></label>
-            <label class="field">推理强度<select id="collaborationMainCoordinatorEffort" class="mono" disabled><option value="">请先选择速度档</option></select></label>
-            <span id="collaborationMainCoordinatorCapability" class="muted tiny">等待模型目录</span>
-          </section>
-          <section class="collaborationRole" data-role="taskDecomposition">
-            <div class="collaborationRoleHead"><strong>任务拆解</strong><span>只读分析约束、步骤与测试</span></div>
-            <label class="field">供应商<select id="collaborationTaskDecompositionProvider" class="mono"></select></label>
-            <label class="field">Standard 模型<select id="collaborationTaskDecompositionModel" class="mono"></select></label>
-            <label class="field">数据范围（workflow 固定）<select id="collaborationTaskDecompositionDataScope" class="mono" disabled><option value="repository_only">仅仓库</option></select></label>
-            <label class="field">速度档<select id="collaborationTaskDecompositionSpeed" class="mono" disabled><option value="">请先选择模型</option></select></label>
-            <label class="field">推理强度<select id="collaborationTaskDecompositionEffort" class="mono" disabled><option value="">请先选择速度档</option></select></label>
-            <span id="collaborationTaskDecompositionCapability" class="muted tiny">等待模型目录</span>
-          </section>
-          <section class="collaborationRole" data-role="mainImplementation">
-            <div class="collaborationRoleHead"><strong>主实现</strong><span>主体修改与聚焦验证</span></div>
-            <label class="field">供应商<select id="collaborationMainImplementationProvider" class="mono"></select></label>
-            <label class="field">Standard 模型<select id="collaborationMainImplementationModel" class="mono"></select></label>
-            <label class="field">数据范围（workflow 固定）<select id="collaborationMainImplementationDataScope" class="mono" disabled><option value="repository_plus_minimized_prior_work_products">仓库 + 最小前序工作产物</option></select></label>
-            <label class="field">速度档<select id="collaborationMainImplementationSpeed" class="mono" disabled><option value="">请先选择模型</option></select></label>
-            <label class="field">推理强度<select id="collaborationMainImplementationEffort" class="mono" disabled><option value="">请先选择速度档</option></select></label>
-            <span id="collaborationMainImplementationCapability" class="muted tiny">等待模型目录</span>
-          </section>
-          <section class="collaborationRole" data-role="difficultReview">
-            <div class="collaborationRoleHead"><strong>困难实现 / 复核</strong><span>困难调试、对抗审查与关键修正</span></div>
-            <label class="field">供应商<select id="collaborationDifficultReviewProvider" class="mono"></select></label>
-            <label class="field">Standard 模型<select id="collaborationDifficultReviewModel" class="mono"></select></label>
-            <label class="field">数据范围（workflow 固定）<select id="collaborationDifficultReviewDataScope" class="mono" disabled><option value="repository_plus_minimized_prior_work_products">仓库 + 最小前序工作产物</option></select></label>
-            <label class="field">速度档<select id="collaborationDifficultReviewSpeed" class="mono" disabled><option value="">请先选择模型</option></select></label>
-            <label class="field">推理强度<select id="collaborationDifficultReviewEffort" class="mono" disabled><option value="">请先选择速度档</option></select></label>
-            <span id="collaborationDifficultReviewCapability" class="muted tiny">等待模型目录</span>
-          </section>
-          <label class="field collaborationTierField">默认层级
-            <select id="collaborationTier">
-              <option value="adaptive">Adaptive / Economy-first</option>
-              <option value="economy">Economy · 主协调 · 1 agent</option>
-              <option value="focused-evidence">Focused Decomposition · 2 agents</option>
-              <option value="focused-build">Focused Implementation · budget 11（10 implementation agents）</option>
-              <option value="assurance">Assurance · budget 12（10 implementation agents）</option>
-              <option value="critical">Critical Reviewed Build · budget 13（10 implementation agents，显式选择）</option>
-            </select>
-            <span id="collaborationTierHint" class="muted tiny">Adaptive 是策略提示；运行 workflow 时仍须显式选择 tier 与精确 agent_budget。</span>
-          </label>
-        </div>
-        <div class="collaborationBudgetGrid" aria-label="协作层级预算">
-          <div><strong>Economy</strong><span>主协调 · budget 1</span></div>
-          <div><strong>Focused Evidence</strong><span>任务拆解 → 主协调 · budget 2</span></div>
-          <div><strong>Focused Build</strong><span>10 个主实现 agent → 主协调 · budget 11</span></div>
-          <div><strong>Assurance</strong><span>任务拆解 → 10 个主实现 agent → 主协调 · budget 12</span></div>
-          <div><strong>Critical</strong><span>再加入困难实现 / 复核 · budget 13</span></div>
-        </div>
-        <div id="collaborationFederationWarning" class="alert warn" hidden></div>
-        <div id="collaborationCreditWarning" class="alert warn collaborationCreditWarning" hidden></div>
-        <p class="muted tiny collaborationBoundary">Switch 只预览并生成用户级 role/workflow，不启动 agent、不保存消息或 transcript。四角色可以复用同一 Standard 模型并分别选择速度；Fast 请求 priority，通常消耗更多订阅 credits，缺失时不会回退。每个 concrete 路由的所选推理档位都必须由 declared 或 probe 明确支持；默认 budget 128 会被 workflow 拒绝。</p>
-        <div class="inlineActions">
-          <button type="button" id="previewCollaborationBtn" class="btn">预览变更</button>
-          <button type="button" id="applyCollaborationBtn" class="btn primary" disabled>确认并应用预览</button>
-          <button type="button" id="disableCollaborationBtn" class="btn danger" disabled>停用（保留文件）</button>
-        </div>
-        <section class="collaborationLaunchCard" aria-labelledby="collaborationLaunchTitle">
-          <div class="rowBetween">
-            <div><strong id="collaborationLaunchTitle">在 Grok Build 中启动</strong><p>命名 workflow 的直接 slash 启动固定使用默认 budget 128，会被安全门槛拒绝。请复制下方精确代理指令，让 Grok 通过 workflow 工具传入规范化 tier、JSON args 和匹配的 agent_budget。</p></div>
-            <span id="collaborationLaunchBudget" class="badge">budget 1</span>
-          </div>
-          <label class="field">任务目标<textarea id="collaborationLaunchObjective" rows="3" placeholder="例如：执行最小只读 smoke，确认 workflow 可启动且不修改文件。"></textarea></label>
-          <div class="collaborationLaunchCopyRow">
-            <code id="collaborationLaunchInstruction">请调用 workflow 工具运行 named workflow gbs-max-collab，设置 name=&quot;gbs-max-collab&quot;、args={&quot;objective&quot;:&quot;&lt;填写任务目标&gt;&quot;,&quot;tier&quot;:&quot;economy&quot;}，并精确设置 agent_budget=1。不要使用 /gbs-max-collab 或 /workflow slash 启动；如果不能精确设置 agent_budget=1，请不要启动并说明原因。</code>
-            <button type="button" id="copyCollaborationLaunchBtn" class="btn primary">复制精确代理指令</button>
-          </div>
-          <p class="muted tiny">粘贴到 Grok Build 对话中即可。这不是 slash 命令；若 Grok 无法以匹配预算调用 workflow 工具，指令要求其 fail closed，不启动 workflow。</p>
-        </section>
-        <details id="collaborationPreview" class="fold collaborationPreview" hidden>
-          <summary>预览详情</summary>
-          <div class="foldBody">
-            <div id="collaborationWarnings" class="collaborationWarnings"></div>
-            <section class="collaborationPreviewSection">
-              <div class="rowBetween"><strong>config.toml</strong><span id="collaborationConfigChange" class="badge">未预览</span></div>
-              <div class="collaborationDiffGrid">
-                <label class="field">当前<textarea id="collaborationConfigBefore" class="configTextarea mono" readonly rows="12"></textarea></label>
-                <label class="field">应用后<textarea id="collaborationConfigAfter" class="configTextarea mono" readonly rows="12"></textarea></label>
-              </div>
-            </section>
-            <section class="collaborationPreviewSection">
-              <div class="rowBetween"><strong>受管 role / workflow</strong><span id="collaborationArtifactCount" class="muted tiny">0 个</span></div>
-              <div id="collaborationArtifacts" class="collaborationArtifacts"></div>
-            </section>
-            <p id="collaborationFingerprint" class="muted tiny mono"></p>
-          </div>
-        </details>
-      </section>
-
       <section class="formCard">
         <div class="rowBetween">
           <div><h2 class="sectionTitle">统一模型目录</h2><p class="muted tiny">按供应商分组展示模型 route、upstream ID、backend 与推理能力来源。</p></div>
@@ -348,6 +223,91 @@
         <div id="routingCatalog" class="routingCatalog"><p class="muted tiny">加载中…</p></div>
       </section>
 
+    </main>
+
+    <!-- CODEBUDDY / WORKBUDDY -->
+    <main id="viewCodeBuddy" class="view codeBuddyView" hidden>
+      <div class="pageHead">
+        <div>
+          <h1 class="pageTitle">CodeBuddy / WorkBuddy</h1>
+          <p class="pageDesc">用订阅积分驱动 Grok Build harness，不经过 WorkBuddy agent</p>
+        </div>
+        <button type="button" id="backFromCodeBuddyBtn" class="btn">返回</button>
+      </div>
+
+      <section class="formCard">
+        <div class="rowBetween">
+          <div>
+            <h2 class="sectionTitle">连接状态</h2>
+            <p id="codeBuddyStatusDetail" class="muted tiny">加载中…</p>
+          </div>
+          <span id="codeBuddyStatusBadge" class="badge">未知</span>
+        </div>
+        <div class="subscriptionConnection">
+          <div>
+            <span>代理 Base URL</span>
+            <code id="codeBuddyBaseUrl">—</code>
+          </div>
+          <div>
+            <span>已保存 Key</span>
+            <code id="codeBuddyKeyMasked">—</code>
+          </div>
+        </div>
+        <div class="inlineActions">
+          <button type="button" id="codeBuddyRefreshBtn" class="btn ghost">刷新</button>
+          <button type="button" id="codeBuddyTestBtn" class="btn">测试连通</button>
+        </div>
+        <p id="codeBuddyTestResult" class="connStatus" hidden></p>
+      </section>
+
+      <section class="formCard">
+        <h2 class="sectionTitle">第 1 步：API Key</h2>
+        <p class="muted tiny subscriptionStepHint">
+          在 <a href="https://copilot.tencent.com/profile/" target="_blank" rel="noopener">copilot.tencent.com/profile</a>
+          创建个人 API Key（形如 <code>ck_…</code>）。保存后仅存于本机 Switch Profile，不会上传。
+        </p>
+        <label class="field">
+          CodeBuddy API Key
+          <div class="keyRow">
+            <input id="codeBuddyApiKey" type="password" autocomplete="off" placeholder="粘贴新 Key；留空则保留已保存的 Key">
+            <button type="button" id="toggleCodeBuddyKey" class="btn sm">显示</button>
+          </div>
+        </label>
+      </section>
+
+      <section class="formCard">
+        <h2 class="sectionTitle">第 2 步：默认模型</h2>
+        <p class="muted tiny">启用 CodeBuddy 供应商后，Grok 的 <code>default</code> 将指向这里选择的模型。</p>
+        <label class="field">
+          默认模型
+          <select id="codeBuddyDefaultModel" class="mono"></select>
+        </label>
+        <div id="codeBuddyModelChips" class="chips" aria-label="可选模型"></div>
+      </section>
+
+      <section class="formCard">
+        <h2 class="sectionTitle">第 3 步：保存 / 启用</h2>
+        <p class="muted tiny">
+          「保存供应商」只创建或更新 CodeBuddy Profile，不改变当前路由。
+          「保存并启用」会切换 active provider，并把 Grok <code>default</code> 设为上方模型。
+        </p>
+        <div class="inlineActions">
+          <button type="button" id="codeBuddySaveBtn" class="btn">保存供应商</button>
+          <button type="button" id="codeBuddySaveActivateBtn" class="btn primary">保存并启用</button>
+          <button type="button" id="codeBuddyActivateBtn" class="btn">仅启用（用已保存 Key）</button>
+        </div>
+        <p id="codeBuddyActionHint" class="muted tiny"></p>
+      </section>
+
+      <section class="formCard">
+        <h2 class="sectionTitle">说明</h2>
+        <ul class="muted tiny codeBuddyNotes">
+          <li>Harness 仍是 Grok Build；只有模型推理走 CodeBuddy 订阅。</li>
+          <li>上游仅支持流式；Switch 代理会清洗 <code>finish_reason:""</code>，避免 Grok 反序列化失败。</li>
+          <li>进程内路径：<code>/codebuddy-proxy/v1</code>（需使用含本功能的 Switch 版本）。</li>
+        </ul>
+        <p id="codeBuddyNote" class="muted tiny"></p>
+      </section>
     </main>
 
     <!-- SUBSCRIPTION PROXY -->
@@ -577,6 +537,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=52"></script>
+  <script src="/app.js?v=54"></script>
 </body>
 </html>

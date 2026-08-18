@@ -129,8 +129,8 @@ func TestCoreManagementEndpointsRejectUnknownTrailingAndOversizeJSON(t *testing.
 	}
 }
 
-func TestCollaborationFullStackRejectsUnknownTrailingAndOversizeJSON(t *testing.T) {
-	s, requestBody := newCollaborationTestServer(t)
+func TestCodeBuddyFullStackRejectsUnknownTrailingAndOversizeJSON(t *testing.T) {
+	s := newCodeBuddyAPITestServer(t)
 	mux := http.NewServeMux()
 	s.routes(mux)
 	handler := s.withAccess(mux)
@@ -138,6 +138,7 @@ func TestCollaborationFullStackRejectsUnknownTrailingAndOversizeJSON(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	requestBody := `{"api_key":"ck_test","default_model":"hy3","activate":false}`
 
 	for _, tc := range []struct {
 		name string
@@ -148,7 +149,7 @@ func TestCollaborationFullStackRejectsUnknownTrailingAndOversizeJSON(t *testing.
 		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", int(managementJSONLimit)+1) + `"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17878/api/collaboration/preview", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:17878/api/codebuddy", strings.NewReader(tc.body))
 			req.RemoteAddr = "127.0.0.1:44000"
 			req.Host = "127.0.0.1:17878"
 			req.Header.Set("Content-Type", "application/json")

@@ -6,7 +6,7 @@
 
 ## 1. 项目定位
 
-Grok Build Switch 是一个 macOS 桌面应用，用于管理 Grok CLI 官方登录路由、普通 Profile、统一模型路由、Max Collaboration 配置预设、订阅代理和 `~/.grok/config.toml`，并提供 LAN、SSH、菜单栏与 Wails 入口。
+Grok Build Switch 是一个 macOS 桌面应用，用于管理 Grok CLI 官方登录路由、普通 Profile、统一模型路由、订阅代理和 `~/.grok/config.toml`，并提供 LAN、SSH、菜单栏与 Wails 入口。Max Collaboration 已从当前产品 UI 移除。
 
 ### 1.1 真相源与工作区边界
 
@@ -22,7 +22,7 @@ Grok Build Switch 是一个 macOS 桌面应用，用于管理 Grok CLI 官方登
 - Grok CLI 官方登录与官方路由；
 - 普通 Profile；
 - default、web_search、explore、plan 统一模型路由；
-- Max Collaboration 配置控制面与 token/cache 用量观察；
+- token/cache 用量观察；
 - CLIProxyAPI 订阅代理；
 - `config.toml` 查看、校验与编辑；
 - LAN、SSH、macOS 菜单栏和 Wails。
@@ -48,9 +48,6 @@ Profiles ─┐
           ├─> unified routing ─> ~/.grok/config.toml
 Official ─┘
 
-Collaboration policy ─> ~/.grok/agents/gbs-*.md
-                     ├> ~/.grok/roles/gbs-*.toml
-                     └> ~/.grok/workflows/gbs-max-collab.rhai
 Usage reader          ─> ~/.grok/logs/unified.jsonl (read-only fields)
 Subscription proxy   ─> supported proxy routes
 LAN / SSH            ─> protected remote management
@@ -168,7 +165,7 @@ HTTP request
 
 ## 7. 前端约定
 
-- 当前 UI 聚焦官方登录、普通 Profile、统一模型路由、Max Collaboration、用量观察、订阅代理、配置编辑、LAN 和 SSH。
+- 当前 UI 聚焦官方登录、普通 Profile、统一模型路由、用量观察、订阅代理、CodeBuddy、配置编辑、LAN 和 SSH。
 - 菜单栏与 Wails 必须提供一致的当前能力。
 - UI 入口、状态卡和表单只覆盖当前产品范围。
 - 非原生搜索模型不得被描述为自动获得额外搜索工具。

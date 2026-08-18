@@ -18,7 +18,6 @@ import (
 
 	"grok_switch/internal/browseruse"
 	"grok_switch/internal/cliproxy"
-	"grok_switch/internal/collaboration"
 	"grok_switch/internal/crash"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
@@ -82,7 +81,6 @@ func main() {
 		crash.Logf("default profile import skipped: %v", err)
 	}
 	routingStore := routing.NewStore(resolved.RoutingFile)
-	collaborationStore := collaboration.NewStore(resolved.CollaborationFile)
 	routingSnapshot, err := routingStore.Initialize(profileStore)
 	if err != nil {
 		guiFatal(err)
@@ -119,7 +117,6 @@ func main() {
 		Paths:             resolved,
 		Profiles:          profileStore,
 		Routing:           routingStore,
-		Collaboration:     collaborationStore,
 		Settings:          settingsStore,
 		RemoteAccess:      remoteaccess.NewStore(resolved.RemoteAccessFile),
 		Switcher:          sw,
@@ -136,6 +133,16 @@ func main() {
 	if err := appServer.EnsureSubscriptionProxyRoutes(); err != nil {
 		_ = httpServer.Shutdown(context.Background())
 		guiFatal(fmt.Errorf("更新订阅代理路由失败: %w", err))
+	}
+	if err := appServer.EnsureCodeBuddyRoutes(); err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		guiFatal(fmt.Errorf("更新 CodeBuddy 路由失败: %w", err))
+	}
+	if key := server.LoadCodeBuddyAPIKey(profileStore); key != "" {
+		activate := os.Getenv("CODEBUDDY_ACTIVATE") == "1"
+		if _, err := appServer.EnsureCodeBuddyProvider(key, activate); err != nil {
+			crash.Logf("codebuddy provider ensure skipped: %v", err)
+		}
 	}
 	if err := appServer.ApplyCurrentRouting(); err != nil {
 		_ = httpServer.Shutdown(context.Background())

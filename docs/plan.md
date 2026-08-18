@@ -6,7 +6,7 @@
 
 ## 0. 本期产品收敛
 
-当前产品范围已收敛为：Grok CLI 官方登录与路由、普通 Profile、统一模型路由、Max Collaboration 配置控制面与用量观察、订阅代理、`config.toml` 编辑、LAN、SSH、macOS 菜单栏和 Wails 桌面窗口。
+当前产品范围已收敛为：Grok CLI 官方登录与路由、普通 Profile、统一模型路由、用量观察、订阅代理、`config.toml` 编辑、LAN、SSH、macOS 菜单栏和 Wails 桌面窗口。Max Collaboration 已从模型路由 UI 移除。
 
 核心范围之外的旧扩展已移除。当前文档、界面和运行入口只展示上述保留能力，不再保留被删功能、接口或数据目录的现行清单。
 

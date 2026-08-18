@@ -24,7 +24,6 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"grok_switch/internal/autostart"
-	"grok_switch/internal/collaboration"
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/httpjson"
 	"grok_switch/internal/paths"
@@ -40,7 +39,6 @@ type Server struct {
 	Paths                      paths.Paths
 	Profiles                   *profiles.Store
 	Routing                    *routing.Store
-	Collaboration              *collaboration.Store
 	Settings                   *settings.Store
 	RemoteAccess               *remoteaccess.Store
 	Switcher                   *switcher.Switcher
@@ -61,7 +59,6 @@ type Server struct {
 	subscriptionProxyState     *subscriptionProxySelection
 	subscriptionProxyStateOnce sync.Once
 	routingMu                  sync.Mutex
-	collaborationMu            sync.Mutex
 	csrfMu                     sync.Mutex
 	csrfSecret                 string
 	reconfigureLAN             func(bool) error
@@ -69,7 +66,6 @@ type Server struct {
 	resetRemoteSessions        func() error
 	restoreRemoteSessions      func(remoteaccess.Snapshot) error
 	updateSettings             func(settings.Settings) (settings.Settings, error)
-	persistCollaboration       func(collaboration.Policy) (collaboration.Policy, error)
 }
 
 func (s *Server) SetOnChanged(fn func()) {
@@ -190,9 +186,6 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/routing", s.handleRouting)
 	mux.HandleFunc("/api/routing/policy", s.handleRoutingPolicy)
 	mux.HandleFunc("/api/routing/reapply", s.handleRoutingReapply)
-	mux.HandleFunc("/api/collaboration", s.handleCollaboration)
-	mux.HandleFunc("/api/collaboration/spec", s.handleCollaborationSpec)
-	mux.HandleFunc("/api/collaboration/preview", s.handleCollaborationPreview)
 	mux.HandleFunc("/api/cache-stats", s.handleCacheStats)
 	mux.HandleFunc("/api/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/profiles/", s.handleProfileByID)
@@ -215,6 +208,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/subscription-proxy/diagnostics", s.handleSubscriptionProxyDiagnostics)
 	mux.HandleFunc("/subscription-proxy/v1", s.handleSubscriptionInference)
 	mux.HandleFunc("/subscription-proxy/v1/", s.handleSubscriptionInference)
+	mux.HandleFunc("/codebuddy-proxy/v1", s.handleCodeBuddyProxy)
+	mux.HandleFunc("/codebuddy-proxy/v1/", s.handleCodeBuddyProxy)
+	mux.HandleFunc("/api/codebuddy", s.handleCodeBuddyAPI)
+	mux.HandleFunc("/api/codebuddy/test", s.handleCodeBuddyTest)
+	mux.HandleFunc("/api/codebuddy/activate", s.handleCodeBuddyActivate)
 	if s.SSH != nil {
 		s.SSH.RegisterRoutes(mux)
 	}
@@ -631,6 +629,11 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			s.routingMu.Unlock()
 			writeError(w, fmt.Errorf("订阅代理供应商只能通过订阅代理页面更新"), http.StatusConflict)
 			return
+		}
+		// profileMutationDTO does not round-trip Source. Preserve managed ownership
+		// markers so startup ensure/reconcile does not create duplicate providers.
+		if previousErr == nil && strings.TrimSpace(profile.Source) == "" && strings.TrimSpace(previous.Source) != "" {
+			profile.Source = previous.Source
 		}
 		updated, err := s.Profiles.Update(id, profile)
 		if err == nil && s.Routing != nil {
@@ -1191,11 +1194,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
-		s.collaborationMu.Lock()
 		s.routingMu.Lock()
 		err := s.Switcher.WriteConfig([]byte(req.Content))
 		s.routingMu.Unlock()
-		s.collaborationMu.Unlock()
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -1245,11 +1246,9 @@ func (s *Server) handleConfigPrivacy(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	s.collaborationMu.Lock()
 	s.routingMu.Lock()
 	err := s.Switcher.ApplyPrivacyProtection()
 	s.routingMu.Unlock()
-	s.collaborationMu.Unlock()
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

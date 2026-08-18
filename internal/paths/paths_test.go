@@ -23,8 +23,8 @@ func TestResolveDataDir(t *testing.T) {
 	if got.DataDir != want {
 		t.Fatalf("DataDir = %q, want %q", got.DataDir, want)
 	}
-	if got.CollaborationFile != filepath.Join(want, "collaboration.json") {
-		t.Fatalf("CollaborationFile = %q", got.CollaborationFile)
+	if got.RoutingFile != filepath.Join(want, "routing.json") {
+		t.Fatalf("RoutingFile = %q", got.RoutingFile)
 	}
 }
 

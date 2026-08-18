@@ -1,6 +1,6 @@
 # Grok Build Switch
 
-Grok Build Switch 是一个 macOS 本地菜单栏/桌面工具，用于管理 Grok CLI 官方登录路由、普通供应商 Profile、统一模型路由、`~/.grok/config.toml`，以及可选的 Grok Build Max Collaboration 配置预设。
+Grok Build Switch 是一个 macOS 本地菜单栏/桌面工具，用于管理 Grok CLI 官方登录路由、普通供应商 Profile、统一模型路由与 `~/.grok/config.toml`。
 
 ## 快速入口
 

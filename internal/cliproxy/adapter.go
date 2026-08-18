@@ -272,8 +272,19 @@ func (m *Manager) StartLogin(ctx context.Context, provider string) (server.Subsc
 		Status:          status,
 		VerificationURL: url,
 		UserCode:        stringField(raw, "user_code"),
-		StatusMessage:   "请在浏览器中完成登录；可用第二个 ChatGPT 账号授权",
+		StatusMessage:   loginStatusMessage(provider),
 	}, nil
+}
+
+func loginStatusMessage(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "antigravity":
+		return "请在浏览器中用目标 Google 账号完成授权"
+	case "xai":
+		return "请在浏览器中用目标 xAI 账号完成授权"
+	default:
+		return "请在浏览器中用目标 ChatGPT 账号完成授权"
+	}
 }
 
 func (m *Manager) Login(ctx context.Context, id string) (server.SubscriptionProxyLogin, error) {

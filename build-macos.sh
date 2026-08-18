@@ -174,6 +174,8 @@ test -s "$CONTENTS/Resources/AppIcon.icns"
 
 # Run this only after every copy/icon operation: extended metadata must not enter signing.
 xattr -cr "$APP_BUNDLE"
+find "$APP_BUNDLE" \( -name '._*' -o -name '.DS_Store' \) -delete 2>/dev/null || true
+dot_clean -m "$APP_BUNDLE" 2>/dev/null || true
 # Some filesystems preserve/recreate FinderInfo on the bundle root after recursive clear.
 # Explicit deletion is idempotent and happens after every bundle mutation.
 while IFS= read -r bundle_path; do
@@ -183,14 +185,15 @@ while IFS= read -r bundle_path; do
 done < <(find "$APP_BUNDLE" -depth -print)
 # macOS may immediately attach com.apple.provenance; codesign permits it. Reject metadata
 # known to produce "resource fork, Finder information, or similar detritus" failures.
-FORBIDDEN_XATTRS="$(xattr -lr "$APP_BUNDLE" 2>/dev/null | grep -E 'com\.apple\.(FinderInfo|ResourceFork|quarantine):' || true)"
+# Inspect Contents only: reading the bundle root via xattr -lr can recreate FinderInfo
+# under Documents/File Provider, which we clear as the last step before codesign.
+FORBIDDEN_XATTRS="$(xattr -lr "$CONTENTS" 2>/dev/null | grep -E 'com\.apple\.(FinderInfo|ResourceFork|quarantine):' || true)"
 if [[ -n "$FORBIDDEN_XATTRS" ]]; then
   printf 'error: forbidden extended attributes remain before signing:\n%s\n' "$FORBIDDEN_XATTRS" >&2
   exit 1
 fi
-# Documents may be managed by a file provider that recreates Finder metadata when the
-# recursive validation above reads the bundle. Clear only the bundle root as the final
-# filesystem operation before codesign; do not recursively inspect the bundle afterward.
+# Clear only the bundle root as the final filesystem operation before codesign; do not
+# recursively inspect the bundle afterward.
 xattr -d com.apple.FinderInfo "$APP_BUNDLE" 2>/dev/null || true
 xattr -d com.apple.ResourceFork "$APP_BUNDLE" 2>/dev/null || true
 xattr -d com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true

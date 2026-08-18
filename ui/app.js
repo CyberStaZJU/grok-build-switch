@@ -9,11 +9,8 @@ const state = {
   search: "",
   draggedProviderKey: "",
   subscriptionProxy: null,
+  codeBuddy: null,
   routing: null,
-  collaboration: null,
-  collaborationSpec: null,
-  collaborationSpecIssue: "Collaboration workflow data-flow contract is unavailable; federated mode is disabled",
-  collaborationPreview: null,
 };
 
 const OFFICIAL_PROVIDER_KEY = "official";
@@ -277,674 +274,6 @@ function capableWebSearchRoutes(routes, official = false) {
   return official ? routes : routes.filter((route) => route.api_backend === "responses" && route.supports_backend_search === true);
 }
 
-const COLLABORATION_EFFORTS = REASONING_EFFORTS.filter((effort) => effort !== "none");
-const COLLABORATION_SPEED_STANDARD = "standard";
-const COLLABORATION_SPEED_FAST = "fast";
-const COLLABORATION_ROLE_DEFS = [
-  { key: "MainCoordinator", requestKey: "main_coordinator", preferredRoutingKey: "default", dataScope: "repository_plus_minimized_prior_work_products" },
-  { key: "TaskDecomposition", requestKey: "task_decomposition", preferredRoutingKey: "plan", dataScope: "repository_only" },
-  { key: "MainImplementation", requestKey: "main_implementation", preferredRoutingKey: "default", dataScope: "repository_plus_minimized_prior_work_products" },
-  { key: "DifficultReview", requestKey: "difficult_implementation_review", preferredRoutingKey: "", dataScope: "repository_plus_minimized_prior_work_products" },
-];
-const COLLABORATION_SPEC_SCHEMA_VERSION = 2;
-const COLLABORATION_POLICY_VERSION = 5;
-const COLLABORATION_SPEC_UNAVAILABLE = "Collaboration workflow data-flow contract is unavailable; federated mode is disabled";
-const COLLABORATION_WORKFLOW_PATHS_V1 = [
-  { tier: "economy", budget: 1, roles: ["main_coordinator"], data_flows: [] },
-  { tier: "focused-evidence", budget: 2, roles: ["task_decomposition", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_coordinator" }] },
-  { tier: "focused-build", budget: 11, roles: ["main_implementation", "main_coordinator"], data_flows: [{ from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "assurance", budget: 12, roles: ["task_decomposition", "main_implementation", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }] },
-  { tier: "critical", budget: 13, roles: ["task_decomposition", "main_implementation", "difficult_implementation_review", "main_coordinator"], data_flows: [{ from: "task_decomposition", to: "main_implementation" }, { from: "task_decomposition", to: "difficult_implementation_review" }, { from: "main_implementation", to: "difficult_implementation_review" }, { from: "task_decomposition", to: "main_coordinator" }, { from: "main_implementation", to: "main_coordinator" }, { from: "difficult_implementation_review", to: "main_coordinator" }] },
-];
-
-function plainJSONObject(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === null || Object.getPrototypeOf(prototype) === null;
-}
-
-function exactObjectFields(value, fields) {
-  if (!plainJSONObject(value)) return false;
-  const keys = Object.keys(value).sort();
-  const expected = [...fields].sort();
-  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
-}
-
-function validateCollaborationSpec(raw) {
-  const fail = (detail) => { throw new Error(`${COLLABORATION_SPEC_UNAVAILABLE}: ${detail}`); };
-  if (!exactObjectFields(raw, ["schema_version", "collaboration_policy_version", "workflow_paths"])) fail("response must contain only the version fields and workflow_paths");
-  if (!Number.isInteger(raw.schema_version) || raw.schema_version !== COLLABORATION_SPEC_SCHEMA_VERSION) fail("incompatible schema_version");
-  if (!Number.isInteger(raw.collaboration_policy_version) || raw.collaboration_policy_version !== COLLABORATION_POLICY_VERSION) fail("incompatible collaboration_policy_version");
-  if (!Array.isArray(raw.workflow_paths) || raw.workflow_paths.length !== COLLABORATION_WORKFLOW_PATHS_V1.length) fail("workflow_paths must contain exactly five paths");
-  const knownRoles = new Set(COLLABORATION_ROLE_DEFS.map((role) => role.requestKey));
-  const seenTiers = new Set();
-  const paths = raw.workflow_paths.map((path, pathIndex) => {
-    const expected = COLLABORATION_WORKFLOW_PATHS_V1[pathIndex];
-    if (!exactObjectFields(path, ["tier", "budget", "roles", "data_flows"])) fail(`invalid fields for workflow path ${pathIndex}`);
-    if (typeof path.tier !== "string" || path.tier !== expected.tier || seenTiers.has(path.tier)) fail(`invalid or duplicate tier at workflow path ${pathIndex}`);
-    seenTiers.add(path.tier);
-    if (!Number.isInteger(path.budget) || path.budget !== expected.budget) fail(`wrong budget for ${expected.tier}`);
-    if (!Array.isArray(path.roles) || path.roles.length !== expected.roles.length) fail(`wrong role sequence for ${expected.tier}`);
-    const seenRoles = new Set();
-    const roles = path.roles.map((role, roleIndex) => {
-      if (typeof role !== "string" || !knownRoles.has(role) || role !== expected.roles[roleIndex] || seenRoles.has(role)) fail(`invalid role sequence for ${expected.tier}`);
-      seenRoles.add(role);
-      return role;
-    });
-    if (!Array.isArray(path.data_flows) || path.data_flows.length !== expected.data_flows.length) fail(`incomplete data_flows for ${expected.tier}`);
-    const rolePositions = new Map(roles.map((role, index) => [role, index]));
-    const seenEdges = new Set();
-    const dataFlows = path.data_flows.map((edge, edgeIndex) => {
-      const expectedEdge = expected.data_flows[edgeIndex];
-      if (!exactObjectFields(edge, ["from", "to"]) || typeof edge.from !== "string" || typeof edge.to !== "string") fail(`invalid edge for ${expected.tier}`);
-      if (!knownRoles.has(edge.from) || !knownRoles.has(edge.to) || !rolePositions.has(edge.from) || !rolePositions.has(edge.to) || rolePositions.get(edge.from) >= rolePositions.get(edge.to)) fail(`invalid edge endpoints/order for ${expected.tier}`);
-      const edgeKey = `${edge.from}\u0000${edge.to}`;
-      if (seenEdges.has(edgeKey)) fail(`duplicate edge for ${expected.tier}`);
-      seenEdges.add(edgeKey);
-      if (edge.from !== expectedEdge.from || edge.to !== expectedEdge.to) fail(`extra, missing, or reordered edge for ${expected.tier}`);
-      return Object.freeze({ from: edge.from, to: edge.to });
-    });
-    return Object.freeze({ tier: path.tier, budget: path.budget, roles: Object.freeze(roles), data_flows: Object.freeze(dataFlows) });
-  });
-  return Object.freeze({ schema_version: raw.schema_version, collaboration_policy_version: raw.collaboration_policy_version, workflow_paths: Object.freeze(paths) });
-}
-
-let collaborationSpecRequestToken = null;
-
-function commitCollaborationSpec(raw, fetchError = null) {
-  state.collaborationSpec = null;
-  state.collaborationSpecIssue = COLLABORATION_SPEC_UNAVAILABLE;
-  if (fetchError) return null;
-  try {
-    const validated = validateCollaborationSpec(raw);
-    state.collaborationSpec = validated;
-    state.collaborationSpecIssue = "";
-    return validated;
-  } catch (error) {
-    state.collaborationSpecIssue = String(error?.message || COLLABORATION_SPEC_UNAVAILABLE).replace(/[\r\n\t]+/g, " ").slice(0, 240);
-    return null;
-  }
-}
-
-function setCollaborationSpec(raw, fetchError = null) {
-  collaborationSpecRequestToken = {};
-  return commitCollaborationSpec(raw, fetchError);
-}
-
-async function loadCollaborationSpec() {
-  const requestToken = {};
-  collaborationSpecRequestToken = requestToken;
-  try {
-    const raw = await api("/api/collaboration/spec");
-    if (collaborationSpecRequestToken !== requestToken) return null;
-    return commitCollaborationSpec(raw);
-  } catch (error) {
-    if (collaborationSpecRequestToken !== requestToken) return null;
-    return commitCollaborationSpec(null, error);
-  }
-}
-
-function trustedCollaborationEfforts(route = {}) {
-  const source = String(route.reasoning_efforts_source || "").trim().toLowerCase();
-  if (route.supports_reasoning_effort !== true || (source !== "declared" && source !== "probe")) return [];
-  const supported = new Set((Array.isArray(route.reasoning_efforts) ? route.reasoning_efforts : [])
-    .map((effort) => String(effort || "").trim().toLowerCase()));
-  return COLLABORATION_EFFORTS.filter((effort) => supported.has(effort));
-}
-
-function collaborationRouteSupportsEffort(route = {}, effort = "") {
-  return trustedCollaborationEfforts(route).includes(String(effort || "").trim().toLowerCase());
-}
-
-function collaborationRouteSupportsMax(route = {}) {
-  return collaborationRouteSupportsEffort(route, "max");
-}
-
-function collaborationCapabilityLabel(route = {}) {
-  const source = String(route.reasoning_efforts_source || "unknown").trim().toLowerCase() || "unknown";
-  const efforts = trustedCollaborationEfforts(route);
-  if (efforts.length) return `${efforts.join(" / ")} · ${source}`;
-  if (route.supports_reasoning_effort !== true) return "未声明推理能力";
-  return `无可信推理档位 · ${source}`;
-}
-
-function collaborationRoutes(snapshot = {}, providerID = snapshot.active_provider_id || "") {
-  if (!providerID || providerID === OFFICIAL_PROVIDER_KEY) return [];
-  return (snapshot.model_routes || []).filter((route) => route.provider_id === providerID);
-}
-
-function collaborationStandardRoutes(routes = []) {
-  return routes.filter((route) => route.speed_tier === COLLABORATION_SPEED_STANDARD && route.standard_anchor === route.id);
-}
-
-function resolveCollaborationRoute(routes = [], standardAnchorID = "", speedTier = COLLABORATION_SPEED_STANDARD) {
-  const anchorID = String(standardAnchorID || "").trim();
-  const tier = String(speedTier || "").trim().toLowerCase();
-  const standard = routes.find((route) => route.id === anchorID);
-  if (!standard || standard.speed_tier !== COLLABORATION_SPEED_STANDARD || standard.standard_anchor !== standard.id) return null;
-  if (tier === COLLABORATION_SPEED_STANDARD) return standard;
-  if (tier !== COLLABORATION_SPEED_FAST) return null;
-  const matches = routes.filter((route) => route.provider_id === standard.provider_id
-    && route.speed_tier === COLLABORATION_SPEED_FAST
-    && route.standard_anchor === standard.id);
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function collaborationFastRouteState(routes = [], standardAnchorID = "") {
-  const standard = resolveCollaborationRoute(routes, standardAnchorID, COLLABORATION_SPEED_STANDARD);
-  if (!standard) return { available: false, ambiguous: false, route: null };
-  const matches = routes.filter((route) => route.provider_id === standard.provider_id
-    && route.speed_tier === COLLABORATION_SPEED_FAST
-    && route.standard_anchor === standard.id);
-  return { available: matches.length === 1, ambiguous: matches.length > 1, route: matches.length === 1 ? matches[0] : null };
-}
-
-function collaborationAnchorCapable(routes = [], standard = {}) {
-  const standardRoute = resolveCollaborationRoute(routes, standard.id, COLLABORATION_SPEED_STANDARD);
-  const fastRoute = resolveCollaborationRoute(routes, standard.id, COLLABORATION_SPEED_FAST);
-  return trustedCollaborationEfforts(standardRoute || {}).length > 0 || trustedCollaborationEfforts(fastRoute || {}).length > 0;
-}
-
-function preferredCollaborationRoute(routes, preferredID = "") {
-  const standards = collaborationStandardRoutes(routes);
-  const preferred = routes.find((route) => route.id === preferredID);
-  const preferredAnchor = preferred?.speed_tier === COLLABORATION_SPEED_FAST ? preferred.standard_anchor : preferred?.id;
-  const eligible = standards.filter((route) => collaborationAnchorCapable(routes, route));
-  return eligible.find((route) => route.id === preferredAnchor)?.id || eligible[0]?.id || "";
-}
-
-function preferredCollaborationEffort(route = {}) {
-  const efforts = trustedCollaborationEfforts(route);
-  for (const effort of ["max", "xhigh", "high", "medium", "low", "minimal"]) {
-    if (efforts.includes(effort)) return effort;
-  }
-  return "";
-}
-
-function collaborationFederationConsent(roles = {}) {
-  if (!state.collaborationSpec) throw new Error(state.collaborationSpecIssue || COLLABORATION_SPEC_UNAVAILABLE);
-  const providerIDs = [...new Set(Object.values(roles).map((role) => role.provider_id).filter(Boolean))].sort();
-  const tierHandoffEdges = state.collaborationSpec.workflow_paths.map((path) => ({
-    tier: path.tier,
-    edges: path.data_flows.filter((edge) => roles[edge.from]?.provider_id && roles[edge.to]?.provider_id && roles[edge.from].provider_id !== roles[edge.to].provider_id),
-  }));
-  return { basis: "all_workflow_tiers_v1", provider_ids: providerIDs, handoff_policy: "bounded_work_products", tier_handoff_edges: tierHandoffEdges, never_transfer: ["credentials", "secrets", "full_transcripts"] };
-}
-
-function collaborationRequestFromValues(snapshot = {}, values = {}) {
-  const mode = values.mode || "single_provider";
-  const coordinatorProvider = values.mainCoordinatorProvider || snapshot.active_provider_id || "";
-  const role = (prefix, dataScope) => ({
-    provider_id: values[`${prefix}Provider`] || coordinatorProvider,
-    model: values[`${prefix}Model`] || "",
-    speed_tier: values[`${prefix}Speed`] || "",
-    reasoning_effort: values[`${prefix}Effort`] || "",
-    data_scope: dataScope,
-  });
-  const roles = Object.fromEntries(COLLABORATION_ROLE_DEFS.map((definition) => {
-    const prefix = definition.key[0].toLowerCase() + definition.key.slice(1);
-    return [definition.requestKey, role(prefix, definition.dataScope)];
-  }));
-  const request = { version: COLLABORATION_POLICY_VERSION, enabled: true, mode, provider_id: coordinatorProvider, roles, default_tier: values.defaultTier || "adaptive" };
-  if (mode === "federated" && values.federationConsent === true) request.federation_consent = collaborationFederationConsent(roles);
-  return request;
-}
-
-function collaborationRequestKey(request) {
-  return JSON.stringify(request || {});
-}
-
-function collaborationFormValues() {
-  const values = { defaultTier: $("collaborationTier")?.value || "adaptive", mode: $("collaborationMode")?.value || "single_provider", federationConsent: $("collaborationFederationConsent")?.checked === true };
-  for (const role of COLLABORATION_ROLE_DEFS) {
-    const prefix = role.key[0].toLowerCase() + role.key.slice(1);
-    values[`${prefix}Provider`] = $(`collaboration${role.key}Provider`)?.value || "";
-    values[`${prefix}Model`] = $(`collaboration${role.key}Model`)?.value || "";
-    values[`${prefix}Speed`] = $(`collaboration${role.key}Speed`)?.value || "";
-    values[`${prefix}Effort`] = $(`collaboration${role.key}Effort`)?.value || "";
-  }
-  return values;
-}
-
-function currentCollaborationRequest() {
-  try {
-    return collaborationRequestFromValues(state.routing || {}, collaborationFormValues());
-  } catch (error) {
-    return null;
-  }
-}
-
-function collaborationSelectionValid() {
-  const request = currentCollaborationRequest();
-  if (!request || !request.provider_id || request.provider_id === OFFICIAL_PROVIDER_KEY) return false;
-  if (request.mode === "federated" && !request.federation_consent) return false;
-  return Object.values(request.roles || {}).every((assignment) => {
-    const routes = collaborationRoutes(state.routing || {}, assignment.provider_id);
-    if (!assignment?.model || !assignment?.speed_tier || !assignment?.reasoning_effort) return false;
-    const route = resolveCollaborationRoute(routes, assignment.model, assignment.speed_tier);
-    return !!route && collaborationRouteSupportsEffort(route, assignment.reasoning_effort);
-  });
-}
-
-function invalidateCollaborationPreview() {
-  state.collaborationPreview = null;
-  const details = $("collaborationPreview");
-  if (details) {
-    details.hidden = true;
-    details.open = false;
-  }
-  if ($("applyCollaborationBtn")) $("applyCollaborationBtn").disabled = true;
-}
-
-function collaborationOptionHTML(route, routes = []) {
-  const capable = collaborationAnchorCapable(routes, route);
-  const model = route.model || route.profile_model || "";
-  const fast = collaborationFastRouteState(routes, route.id);
-  const speedLabel = fast.available ? "Standard / Fast" : (fast.ambiguous ? "Fast 配对歧义" : "仅 Standard");
-  return `<option value="${escapeHtml(route.id)}" ${capable ? "" : "disabled"}>${escapeHtml(route.name)} — ${escapeHtml(model)} · ${escapeHtml(speedLabel)}</option>`;
-}
-
-function collaborationModelOptionsHTML(routes, requestedModel = "") {
-  const requested = String(requestedModel || "").trim();
-  const standards = collaborationStandardRoutes(routes);
-  const missing = requested && !standards.some((route) => route.id === requested)
-    ? `<option value="${escapeHtml(requested)}" disabled>${escapeHtml(requested)}（已保存 Standard 路由当前不可用）</option>`
-    : "";
-  return `${missing}<option value="">（请选择可信 Standard 模型）</option>${standards.map((route) => collaborationOptionHTML(route, routes)).join("")}`;
-}
-
-function renderCollaborationStatus(status = {}, localIssues = []) {
-  const badge = $("collaborationBadge");
-  const policy = status.policy || {};
-  let label = "未配置";
-  let badgeState = "stopped";
-  if (status.unavailable) {
-    label = "仅限本机";
-    badgeState = "unhealthy";
-  } else if (status.configured && !policy.enabled) {
-    label = "已停用";
-  } else if (status.configured && policy.enabled && status.valid) {
-    label = "已启用";
-    badgeState = "running";
-  } else if (status.configured && status.drifted) {
-    label = "文件漂移";
-    badgeState = "error";
-  } else if (status.configured) {
-    label = "配置失效";
-    badgeState = "unhealthy";
-  }
-  if (badge) {
-    badge.textContent = label;
-    badge.dataset.state = badgeState;
-  }
-  const issues = [...(status.issues || []), ...localIssues].filter(Boolean);
-  const issueBox = $("collaborationIssues");
-  if (issueBox) {
-    issueBox.hidden = issues.length === 0;
-    issueBox.innerHTML = issues.length
-      ? `<div><strong>需要处理</strong><span>${issues.map(escapeHtml).join("<br>")}</span></div>`
-      : "";
-  }
-  if ($("disableCollaborationBtn")) $("disableCollaborationBtn").disabled = !(status.configured && policy.enabled);
-}
-
-function populateCollaborationSpeedOptions(role, routes, standardAnchorID, requestedSpeed = "") {
-  const select = $(`collaboration${role.key}Speed`);
-  if (!select) return "";
-  const selected = String(requestedSpeed || COLLABORATION_SPEED_STANDARD).trim().toLowerCase();
-  const standard = resolveCollaborationRoute(routes, standardAnchorID, COLLABORATION_SPEED_STANDARD);
-  const fast = collaborationFastRouteState(routes, standardAnchorID);
-  const options = [];
-  if (standard) options.push('<option value="standard">Standard · 标准额度</option>');
-  if (fast.available) options.push('<option value="fast">Fast · priority（更高 credits）</option>');
-  if (selected === COLLABORATION_SPEED_FAST && !fast.available) {
-    const reason = fast.ambiguous ? "配对歧义" : "当前不可用";
-    options.push(`<option value="fast" disabled>Fast（已保存，但${reason}）</option>`);
-  }
-  select.innerHTML = options.length ? options.join("") : '<option value="">无可信速度档</option>';
-  select.disabled = !standard && !(selected === COLLABORATION_SPEED_FAST && !fast.available);
-  select.value = selected;
-  return select.value;
-}
-
-function populateCollaborationEffortOptions(role, route, requestedEffort = "") {
-  const select = $(`collaboration${role.key}Effort`);
-  if (!select) return "";
-  const efforts = trustedCollaborationEfforts(route);
-  const selected = String(requestedEffort || "").trim().toLowerCase();
-  const options = efforts.map((effort) => `<option value="${escapeHtml(effort)}">${escapeHtml(REASONING_EFFORT_LABELS[effort] || effort)}</option>`);
-  if (selected && !efforts.includes(selected)) {
-    options.unshift(`<option value="${escapeHtml(selected)}" disabled>${escapeHtml(REASONING_EFFORT_LABELS[selected] || selected)}（当前模型不再支持）</option>`);
-  }
-  select.innerHTML = options.length ? options.join("") : '<option value="">无可信推理档位</option>';
-  // A saved-but-stale effort must remain visible and selected so the UI cannot
-  // silently manufacture a different valid request. Keep the selector enabled
-  // when that disabled sentinel exists, allowing the user to choose a trusted
-  // replacement explicitly.
-  select.disabled = efforts.length === 0 && !selected;
-  const next = selected || preferredCollaborationEffort(route);
-  select.value = next;
-  return select.value;
-}
-
-function updateCollaborationRoleControls(role, routes, requestedEffort = "") {
-  const modelSelect = $(`collaboration${role.key}Model`);
-  const speedSelect = $(`collaboration${role.key}Speed`);
-  const effortSelect = $(`collaboration${role.key}Effort`);
-  const output = $(`collaboration${role.key}Capability`);
-  if (!modelSelect || !speedSelect || !effortSelect || !output) return;
-  const route = resolveCollaborationRoute(routes, modelSelect.value, speedSelect.value);
-  populateCollaborationEffortOptions(role, route || {}, requestedEffort || effortSelect.value);
-  const valid = !!route && collaborationRouteSupportsEffort(route, effortSelect.value);
-  output.textContent = route
-    ? `${speedSelect.value === COLLABORATION_SPEED_FAST ? "Fast" : "Standard"} → ${route.name} · ${collaborationCapabilityLabel(route)}${valid ? ` · 已选 ${effortSelect.value}` : " · 请选择受支持档位"}`
-    : (speedSelect.value === COLLABORATION_SPEED_FAST ? "已保存 Fast 当前不可解析；不会回退到 Standard" : "请选择可信 Standard 模型");
-  output.className = `muted tiny ${valid ? "ok" : "warn"}`;
-}
-
-const COLLABORATION_LAUNCH_TIERS = {
-  adaptive: { tier: "economy", label: "Economy", budget: 1 },
-  economy: { tier: "economy", label: "Economy", budget: 1 },
-  "focused-evidence": { tier: "focused-evidence", label: "Focused Evidence", budget: 2 },
-  "focused-build": { tier: "focused-build", label: "Focused Build", budget: 11 },
-  assurance: { tier: "assurance", label: "Assurance", budget: 12 },
-  critical: { tier: "critical", label: "Critical", budget: 13 },
-};
-
-function collaborationLaunchParameters(selectedTier = $("collaborationTier")?.value || "adaptive", objective = $("collaborationLaunchObjective")?.value || "") {
-  const selected = COLLABORATION_LAUNCH_TIERS[selectedTier] || COLLABORATION_LAUNCH_TIERS.adaptive;
-  const normalizedObjective = String(objective || "").trim();
-  const args = { objective: normalizedObjective || "<填写任务目标>", tier: selected.tier };
-  return {
-    ...selected,
-    objective: normalizedObjective,
-    instruction: `请调用 workflow 工具运行 named workflow gbs-max-collab，设置 name="gbs-max-collab"、args=${JSON.stringify(args)}，并精确设置 agent_budget=${selected.budget}。不要使用 /gbs-max-collab 或 /workflow slash 启动；如果不能精确设置 agent_budget=${selected.budget}，请不要启动并说明原因。`,
-  };
-}
-
-function updateCollaborationLaunchGuide() {
-  const launch = collaborationLaunchParameters();
-  if ($("collaborationLaunchBudget")) $("collaborationLaunchBudget").textContent = `budget ${launch.budget}`;
-  if ($("collaborationLaunchInstruction")) $("collaborationLaunchInstruction").textContent = launch.instruction;
-}
-
-function updateCollaborationTierHint() {
-  const tier = $("collaborationTier")?.value || "adaptive";
-  const hint = $("collaborationTierHint");
-  if (hint) {
-    hint.textContent = tier === "critical"
-      ? "Critical 仍不会由 Switch 自动运行；请使用下方复制式启动指令，由 Grok 以 agent_budget=13 调用 workflow。workflow 顶层会启动 10 个主实现 agent。"
-      : "Adaptive 映射为 Economy-first 启动建议；请使用下方复制式指令，让 Grok 传入精确 agent_budget。";
-  }
-  updateCollaborationLaunchGuide();
-}
-
-function updateCollaborationCreditWarning() {
-  const request = currentCollaborationRequest();
-  const fastRoles = COLLABORATION_ROLE_DEFS.filter((role) => request?.roles?.[role.requestKey]?.speed_tier === COLLABORATION_SPEED_FAST);
-  const warning = $("collaborationCreditWarning");
-  if (!warning) return;
-  warning.hidden = fastRoles.length === 0;
-  warning.textContent = fastRoles.length
-    ? `已为 ${fastRoles.length} 个角色选择 Fast。Fast 会请求 priority service tier，通常更快但会消耗更多订阅 credits；不存在静默回退。`
-    : "";
-}
-
-function renderCollaborationFederationDisclosure() {
-  const disclosure = $("collaborationFederationDisclosure");
-  const map = $("collaborationFederationMap");
-  const mode = $("collaborationMode")?.value || "single_provider";
-  if (disclosure) disclosure.hidden = mode !== "federated";
-  if (!map || mode !== "federated") return;
-  if (!state.collaborationSpec) {
-    map.textContent = state.collaborationSpecIssue || COLLABORATION_SPEC_UNAVAILABLE;
-    return;
-  }
-  let consent;
-  try {
-    consent = collaborationFederationConsent(collaborationRequestFromValues(state.routing || {}, collaborationFormValues()).roles);
-  } catch (error) {
-    map.textContent = state.collaborationSpecIssue || COLLABORATION_SPEC_UNAVAILABLE;
-    return;
-  }
-  const lines = [`Providers: ${consent.provider_ids.join(", ") || "（未完整选择）"}`];
-  for (const path of consent.tier_handoff_edges) {
-    const edges = path.edges.length ? path.edges.map((edge) => `${edge.from} → ${edge.to}`).join("; ") : "无跨供应商边";
-    lines.push(`${path.tier}: ${edges}`);
-  }
-  map.textContent = lines.join("\n");
-}
-
-function updateCollaborationControls() {
-  const snapshot = state.routing || {};
-  for (const role of COLLABORATION_ROLE_DEFS) {
-    const providerSelect = $(`collaboration${role.key}Provider`);
-    const dataScopeSelect = $(`collaboration${role.key}DataScope`);
-    const modelSelect = $(`collaboration${role.key}Model`);
-    const speedSelect = $(`collaboration${role.key}Speed`);
-    const effortSelect = $(`collaboration${role.key}Effort`);
-    const output = $(`collaboration${role.key}Capability`);
-    if (!modelSelect || !speedSelect || !effortSelect || !output) continue;
-    const roleRoutes = collaborationRoutes(snapshot, providerSelect?.value || snapshot.active_provider_id || "");
-    const route = resolveCollaborationRoute(roleRoutes, modelSelect.value, speedSelect.value);
-    const valid = !!route && collaborationRouteSupportsEffort(route, effortSelect.value);
-    output.textContent = route
-      ? `${speedSelect.value === COLLABORATION_SPEED_FAST ? "Fast" : "Standard"} → ${route.name} · ${collaborationCapabilityLabel(route)}${valid ? ` · 已选 ${effortSelect.value}` : " · 请选择受支持档位"}`
-      : (speedSelect.value === COLLABORATION_SPEED_FAST ? "已保存 Fast 当前不可解析；不会回退到 Standard" : "请选择可信 Standard 模型");
-    output.className = `muted tiny ${valid ? "ok" : "warn"}`;
-  }
-  updateCollaborationCreditWarning();
-  updateCollaborationTierHint();
-  const mode = $("collaborationMode")?.value || "single_provider";
-  renderCollaborationFederationDisclosure();
-  if ($("collaborationConsentField")) $("collaborationConsentField").hidden = mode !== "federated";
-  if ($("collaborationFederationWarning")) $("collaborationFederationWarning").hidden = mode !== "federated";
-  const federatedSpecAvailable = mode !== "federated" || !!state.collaborationSpec;
-  const consentCheckbox = $("collaborationFederationConsent");
-  if (consentCheckbox) consentCheckbox.disabled = mode === "federated" && !state.collaborationSpec;
-  const previewButton = $("previewCollaborationBtn");
-  if (previewButton) previewButton.disabled = !federatedSpecAvailable || !collaborationSelectionValid();
-  const current = currentCollaborationRequest();
-  const pending = state.collaborationPreview;
-  if ($("applyCollaborationBtn")) {
-    $("applyCollaborationBtn").disabled = !(federatedSpecAvailable
-      && current
-      && pending?.mode === "enable"
-      && pending.preview?.fingerprint
-      && collaborationRequestKey(pending.request) === collaborationRequestKey(current));
-  }
-  if ($("saveRoutingPolicyBtn")) $("saveRoutingPolicyBtn").disabled = !$("routingProvider")?.value;
-  const policy = state.collaboration?.policy || {};
-  if ($("disableCollaborationBtn")) {
-    $("disableCollaborationBtn").disabled = !(state.collaboration?.configured && policy.enabled);
-  }
-}
-
-function renderCollaboration(snapshot, status = {}) {
-  state.collaboration = status;
-  invalidateCollaborationPreview();
-  const routes = snapshot.model_routes || [];
-  const policy = status.policy || {};
-  const activeProviderID = snapshot.active_provider_id || "";
-  // Keep persisted assignments visible even when the active provider or model
-  // catalog changed. Missing routes and stale efforts remain disabled invalid
-  // choices until the user explicitly selects replacements and previews again.
-  const savedRoles = status.configured ? (policy.roles || {}) : {};
-  const activePolicy = snapshot.policy || {};
-  const preferredModels = {
-    MainCoordinator: activePolicy.default || "",
-    TaskDecomposition: activePolicy.subagents?.plan || activePolicy.default || "",
-    MainImplementation: activePolicy.default || "",
-    DifficultReview: activePolicy.default || "",
-  };
-
-  for (const role of COLLABORATION_ROLE_DEFS) {
-    const saved = savedRoles[role.requestKey] || {};
-    const providerSelect = $(`collaboration${role.key}Provider`);
-    const dataScopeSelect = $(`collaboration${role.key}DataScope`);
-    const modelSelect = $(`collaboration${role.key}Model`);
-    const speedSelect = $(`collaboration${role.key}Speed`);
-    const effortSelect = $(`collaboration${role.key}Effort`);
-    if (!modelSelect || !speedSelect || !effortSelect) continue;
-    const savedProvider = saved.provider_id || policy.provider_id || activeProviderID;
-    if (providerSelect) {
-      const providers = snapshot.providers || [];
-      const missing = savedProvider && !providers.some((p) => p.id === savedProvider) ? `<option value="${escapeHtml(savedProvider)}" disabled>${escapeHtml(savedProvider)}（已保存供应商当前不可用）</option>` : "";
-      providerSelect.innerHTML = missing + providers.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.id)}</option>`).join("");
-      providerSelect.value = savedProvider;
-    }
-    if (dataScopeSelect) {
-      dataScopeSelect.value = role.dataScope;
-      dataScopeSelect.disabled = true;
-    }
-    const roleRoutes = collaborationRoutes(snapshot, savedProvider);
-    modelSelect.innerHTML = collaborationModelOptionsHTML(roleRoutes, saved.model || "");
-    modelSelect.value = saved.model || preferredCollaborationRoute(roleRoutes, preferredModels[role.key]);
-    populateCollaborationSpeedOptions(role, roleRoutes, modelSelect.value, saved.speed_tier || COLLABORATION_SPEED_STANDARD);
-    const route = resolveCollaborationRoute(roleRoutes, modelSelect.value, speedSelect.value) || {};
-    populateCollaborationEffortOptions(role, route, saved.reasoning_effort || "");
-    if (providerSelect) providerSelect.onchange = () => {
-      invalidateCollaborationPreview();
-      const nextRoutes = collaborationRoutes(snapshot, providerSelect.value);
-      modelSelect.innerHTML = collaborationModelOptionsHTML(nextRoutes, "");
-      modelSelect.value = preferredCollaborationRoute(nextRoutes, "");
-      populateCollaborationSpeedOptions(role, nextRoutes, modelSelect.value, COLLABORATION_SPEED_STANDARD);
-      populateCollaborationEffortOptions(role, resolveCollaborationRoute(nextRoutes, modelSelect.value, speedSelect.value) || {}, "");
-      updateCollaborationControls();
-    };
-    modelSelect.onchange = () => {
-      invalidateCollaborationPreview();
-      const nextRoutes = collaborationRoutes(snapshot, providerSelect?.value || savedProvider);
-      populateCollaborationSpeedOptions(role, nextRoutes, modelSelect.value, COLLABORATION_SPEED_STANDARD);
-      const selectedRoute = resolveCollaborationRoute(nextRoutes, modelSelect.value, speedSelect.value) || {};
-      populateCollaborationEffortOptions(role, selectedRoute, "");
-      updateCollaborationControls();
-    };
-    speedSelect.onchange = () => {
-      invalidateCollaborationPreview();
-      const nextRoutes = collaborationRoutes(snapshot, providerSelect?.value || savedProvider);
-      const selectedRoute = resolveCollaborationRoute(nextRoutes, modelSelect.value, speedSelect.value) || {};
-      populateCollaborationEffortOptions(role, selectedRoute, "");
-      updateCollaborationControls();
-    };
-    effortSelect.onchange = () => {
-      invalidateCollaborationPreview();
-      updateCollaborationControls();
-    };
-  }
-  const allowedTiers = ["adaptive", "economy", "focused-evidence", "focused-build", "assurance", "critical"];
-  const tier = status.configured && allowedTiers.includes(policy.default_tier) ? policy.default_tier : "adaptive";
-  if ($("collaborationTier")) {
-    $("collaborationTier").value = tier;
-    $("collaborationTier").onchange = () => {
-      invalidateCollaborationPreview();
-      updateCollaborationControls();
-    };
-  }
-  if ($("collaborationLaunchObjective")) {
-    $("collaborationLaunchObjective").oninput = updateCollaborationLaunchGuide;
-  }
-  if ($("collaborationMode")) { $("collaborationMode").value = policy.mode || "single_provider"; $("collaborationMode").onchange = () => { invalidateCollaborationPreview(); updateCollaborationControls(); }; }
-  if ($("collaborationFederationConsent")) { $("collaborationFederationConsent").checked = false; $("collaborationFederationConsent").disabled = false; $("collaborationFederationConsent").onchange = () => { invalidateCollaborationPreview(); updateCollaborationControls(); }; }
-  const mode = $("collaborationMode")?.value || "single_provider";
-  if ($("collaborationConsentField")) $("collaborationConsentField").hidden = mode !== "federated";
-  if ($("collaborationFederationWarning")) { $("collaborationFederationWarning").hidden = mode !== "federated"; $("collaborationFederationWarning").textContent = "Federated 会在预览中列出精确跨供应商边；当前 active-provider/config 架构若不能安全同时引用多供应商路由，服务端会明确阻止应用。"; }
-  const localIssues = [];
-  if (state.collaborationSpecIssue) localIssues.push(state.collaborationSpecIssue);
-  if (!activeProviderID || activeProviderID === OFFICIAL_PROVIDER_KEY) {
-    localIssues.push("Collaboration 只支持当前启用的自定义供应商；请先在路由策略中启用一个供应商。");
-  } else if (policy.enabled && policy.provider_id && policy.provider_id !== activeProviderID) {
-    localIssues.push(`已保存 Collaboration 属于供应商 ${policy.provider_id}，当前供应商已切换；请为当前供应商重新选择四个角色并预览。`);
-  } else if (!collaborationStandardRoutes(routes).some((route) => collaborationAnchorCapable(routes, route))) {
-    localIssues.push("当前供应商没有同时具备显式 Standard 锚点与可信推理档位的模型；未分类或未知能力会 fail closed。");
-  }
-  renderCollaborationStatus(status, localIssues);
-  updateCollaborationControls();
-}
-
-function collaborationArtifactHTML(artifact = {}) {
-  const path = String(artifact.path || "");
-  const filename = path.split(/[\\/]/).pop() || path || "artifact";
-  const actionLabels = { create: "新建", update: "更新", unchanged: "不变" };
-  const action = actionLabels[artifact.action] || artifact.action || "预览";
-  const previous = artifact.previously_exists ? (artifact.previous_content || "") : "（新文件）";
-  return `<details class="collaborationArtifact"><summary><span><strong>${escapeHtml(filename)}</strong><code>${escapeHtml(path)}</code></span><span class="badge">${escapeHtml(action)}</span></summary><div class="collaborationArtifactBody"><p class="muted tiny mono">SHA-256 ${escapeHtml(artifact.sha256 || "—")}</p><div class="collaborationDiffGrid"><label class="field">当前<textarea class="configTextarea mono" readonly rows="10">${escapeHtml(previous)}</textarea></label><label class="field">应用后<textarea class="configTextarea mono" readonly rows="10">${escapeHtml(artifact.content || "")}</textarea></label></div></div></details>`;
-}
-
-function renderCollaborationPreview(preview, mode = "enable", request = null) {
-  state.collaborationPreview = { preview, mode, request: request || (mode === "enable" ? currentCollaborationRequest() : { version: COLLABORATION_POLICY_VERSION, enabled: false }) };
-  const details = $("collaborationPreview");
-  if (details) {
-    details.hidden = false;
-    details.open = true;
-  }
-  if ($("collaborationWarnings")) {
-    $("collaborationWarnings").innerHTML = (preview.warnings || []).map((warning) => `<p>${escapeHtml(warning)}</p>`).join("");
-  }
-  if ($("collaborationConfigBefore")) $("collaborationConfigBefore").value = preview.config_before || "";
-  if ($("collaborationConfigAfter")) $("collaborationConfigAfter").value = preview.config_after || "";
-  if ($("collaborationConfigChange")) {
-    $("collaborationConfigChange").textContent = preview.config_changed ? "将更新" : "不变";
-    $("collaborationConfigChange").dataset.state = preview.config_changed ? "unhealthy" : "running";
-  }
-  const artifacts = preview.artifacts || [];
-  if ($("collaborationArtifactCount")) $("collaborationArtifactCount").textContent = `${artifacts.length} 个`;
-  if ($("collaborationArtifacts")) {
-    $("collaborationArtifacts").innerHTML = artifacts.length
-      ? artifacts.map(collaborationArtifactHTML).join("")
-      : '<p class="muted tiny">停用不会删除或改写已生成的 role/workflow。</p>';
-  }
-  if ($("collaborationFingerprint")) $("collaborationFingerprint").textContent = `preview fingerprint: ${preview.fingerprint || "—"}`;
-  updateCollaborationControls();
-  return preview;
-}
-
-async function previewCollaboration(request = currentCollaborationRequest(), mode = "enable") {
-  if (!request) {
-    toast(state.collaborationSpecIssue || COLLABORATION_SPEC_UNAVAILABLE, "error");
-    return false;
-  }
-  const preview = await api("/api/collaboration/preview", { method: "POST", body: JSON.stringify(request) });
-  return renderCollaborationPreview(preview, mode, request);
-}
-
-async function applyCollaborationPreview() {
-  const pending = state.collaborationPreview;
-  const current = currentCollaborationRequest();
-  if (!current || !pending || pending.mode !== "enable" || !pending.preview?.fingerprint || collaborationRequestKey(pending.request) !== collaborationRequestKey(current)) {
-    toast(!current ? (state.collaborationSpecIssue || COLLABORATION_SPEC_UNAVAILABLE) : "请先预览当前选择，再应用未过期的变更", "error");
-    return false;
-  }
-  const critical = current.default_tier === "critical";
-  const fastCount = Object.values(current.roles || {}).filter((assignment) => assignment.speed_tier === COLLABORATION_SPEED_FAST).length;
-  const fastNotice = fastCount ? ` 当前有 ${fastCount} 个角色使用 Fast priority，通常会消耗更多订阅 credits，且缺失时不会回退到 Standard。` : "";
-  const message = critical
-    ? `将把默认层级设为 Critical，并按预览写入 config.toml、routing policy、4 个 agent definition、4 个角色文件和 1 个分阶段 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 本身不会启动 agent；以后运行该 workflow 仍必须显式选择 Critical 并传入 agent_budget=13，workflow 顶层会启动 10 个主实现 agent。确认应用当前预览？`
-    : `将按当前预览更新 config.toml、routing policy，并写入 4 个 agent definition、4 个角色文件和 1 个分阶段 workflow。路由 default 会对齐主协调解析后的具体 Standard/Fast 路由；web_search、explore 和 plan 保持不变。${fastNotice} Switch 不会启动 agent，也不会保存消息或 transcript。确认应用？`;
-  if (!(await customConfirm(message, { okLabel: "确认应用" }))) return false;
-  const result = await api("/api/collaboration", {
-    method: "PUT",
-    body: JSON.stringify({ ...pending.request, confirmed: true, fingerprint: pending.preview.fingerprint }),
-  });
-  await refreshAll();
-  await loadRoutingView();
-  return result;
-}
-
-async function disableCollaboration() {
-  const request = { version: COLLABORATION_POLICY_VERSION, enabled: false };
-  const preview = await previewCollaboration(request, "disable");
-  const message = "停用只会停止使用 Max Collaboration policy；不会删除已生成的 role/workflow，也不会改写当前 config.toml 或 routing。确认按预览停用？";
-  if (!(await customConfirm(message, { okLabel: "确认停用", danger: true }))) return false;
-  const result = await api("/api/collaboration", {
-    method: "PUT",
-    body: JSON.stringify({ ...request, confirmed: true, fingerprint: preview.fingerprint }),
-  });
-  await refreshAll();
-  await loadRoutingView();
-  return result;
-}
-
 // Custom confirm dialog (window.confirm is unreliable in Wails WebView)
 function customConfirm(message, { okLabel = "确定", cancelLabel = "取消", danger = false } = {}) {
   return new Promise((resolve) => {
@@ -1111,6 +440,7 @@ function showView(name) {
   const settings = $("viewSettings");
   const routing = $("viewRouting");
   const subscriptionProxy = $("viewSubscriptionProxy");
+  const codeBuddy = $("viewCodeBuddy");
   const ssh = $("viewSSH");
   if (home) {
     home.hidden = name !== "home";
@@ -1132,6 +462,10 @@ function showView(name) {
     subscriptionProxy.hidden = name !== "subscriptionProxy";
     subscriptionProxy.style.display = name === "subscriptionProxy" ? "" : "none";
   }
+  if (codeBuddy) {
+    codeBuddy.hidden = name !== "codeBuddy";
+    codeBuddy.style.display = name === "codeBuddy" ? "" : "none";
+  }
   if (ssh) {
     ssh.hidden = name !== "ssh";
     ssh.style.display = name === "ssh" ? "" : "none";
@@ -1143,7 +477,13 @@ function showView(name) {
   // Keep header add/import only on home list.
   if ($("headerSubtitle")) {
     $("headerSubtitle").textContent =
-      name === "settings" ? "设置" : name === "routing" ? "模型路由" : name === "subscriptionProxy" ? "订阅代理" : name === "ssh" ? "SSH 远程文件" : name === "edit" ? ( $("profileId")?.value ? "编辑供应商" : "添加供应商") : "供应商";
+      name === "settings" ? "设置"
+        : name === "routing" ? "模型路由"
+          : name === "subscriptionProxy" ? "订阅代理"
+            : name === "codeBuddy" ? "CodeBuddy"
+              : name === "ssh" ? "SSH 远程文件"
+                : name === "edit" ? ($("profileId")?.value ? "编辑供应商" : "添加供应商")
+                  : "供应商";
   }
   if (name === "settings") {
     loadConfigEditor().catch((err) => toast(err.message, "error"));
@@ -1159,6 +499,9 @@ function showView(name) {
     loadSubscriptionProxy().catch((err) => toast(err.message, "error"));
   } else {
     clearSubscriptionLoginPoll();
+  }
+  if (name === "codeBuddy") {
+    loadCodeBuddy().catch((err) => toast(err.message, "error"));
   }
 }
 
@@ -2077,6 +1420,94 @@ async function loadSubscriptionProxy() {
   renderSubscriptionProxy(await api("/api/subscription-proxy"));
 }
 
+function renderCodeBuddy(data) {
+  state.codeBuddy = data || {};
+  const status = data || {};
+  const badge = $("codeBuddyStatusBadge");
+  const detail = $("codeBuddyStatusDetail");
+  if (badge) {
+    if (status.active) {
+      badge.textContent = "已启用";
+      badge.dataset.state = "running";
+    } else if (status.configured || status.has_api_key) {
+      badge.textContent = "已配置";
+      badge.dataset.state = "ready";
+    } else {
+      badge.textContent = "未配置";
+      badge.dataset.state = "stopped";
+    }
+  }
+  if (detail) {
+    const bits = [];
+    if (status.profile_name) bits.push(status.profile_name);
+    if (status.profile_id) bits.push(`id ${status.profile_id.slice(0, 8)}…`);
+    if (status.active) bits.push("当前 active provider");
+    else if (status.configured) bits.push("未设为 active");
+    detail.textContent = bits.join(" · ") || "尚未保存 CodeBuddy 供应商";
+  }
+  if ($("codeBuddyBaseUrl")) $("codeBuddyBaseUrl").textContent = status.proxy_base_url || "—";
+  if ($("codeBuddyKeyMasked")) {
+    $("codeBuddyKeyMasked").textContent = status.api_key_masked || (status.has_api_key ? "已设置" : "未设置");
+  }
+  if ($("codeBuddyNote")) $("codeBuddyNote").textContent = status.note || "";
+  if ($("codeBuddyActionHint")) {
+    $("codeBuddyActionHint").textContent = status.active
+      ? `当前 default 模型：${status.default_model || "hy3"}。新开 grok 会话生效。`
+      : "保存并启用后，可在「模型路由」确认 active provider 与 default。";
+  }
+
+  const models = Array.isArray(status.models) && status.models.length
+    ? status.models
+    : ["hy3", "hy3-preview-agent", "glm-5.2", "deepseek-v4-flash", "kimi-k2.5", "auto"];
+  const selected = status.default_model || "hy3";
+  const select = $("codeBuddyDefaultModel");
+  if (select) {
+    select.innerHTML = models.map((id) =>
+      `<option value="${escapeAttr(id)}" ${id === selected ? "selected" : ""}>${escapeHtml(id)}</option>`
+    ).join("");
+  }
+  const chips = $("codeBuddyModelChips");
+  if (chips) {
+    chips.innerHTML = models.map((id) =>
+      `<button type="button" class="chip${id === selected ? " active" : ""}" data-model="${escapeAttr(id)}">${escapeHtml(id)}</button>`
+    ).join("");
+    chips.querySelectorAll(".chip").forEach((chip) => {
+      chip.onclick = () => {
+        const model = chip.dataset.model;
+        if (select) select.value = model;
+        chips.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.model === model));
+      };
+    });
+  }
+  if (select) {
+    select.onchange = () => {
+      const model = select.value;
+      chips?.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.model === model));
+    };
+  }
+}
+
+async function loadCodeBuddy() {
+  renderCodeBuddy(await api("/api/codebuddy"));
+}
+
+async function saveCodeBuddy({ activate }) {
+  const body = {
+    default_model: $("codeBuddyDefaultModel")?.value || "hy3",
+    activate: !!activate,
+  };
+  const typed = $("codeBuddyApiKey")?.value?.trim();
+  if (typed) body.api_key = typed;
+  // When no typed key and nothing saved, force explicit empty so server returns a clear error.
+  if (!typed && !state.codeBuddy?.has_api_key) body.api_key = "";
+  const result = await api("/api/codebuddy", { method: "PUT", body: JSON.stringify(body) });
+  if ($("codeBuddyApiKey")) $("codeBuddyApiKey").value = "";
+  if (result?.status) renderCodeBuddy(result.status);
+  else await loadCodeBuddy();
+  await refreshAll().catch(() => {});
+  return result;
+}
+
 function isSubscriptionLoginPending(status) {
   return ["pending", "wait", "waiting", "opening"].includes(String(status || "").toLowerCase());
 }
@@ -2585,6 +2016,7 @@ $("navHomeBtn").onclick = () => showView("home");
 $("navSettingsBtn").onclick = () => showView("settings");
 $("navRoutingBtn").onclick = () => showView("routing");
 $("navSubscriptionProxyBtn").onclick = () => showView("subscriptionProxy");
+if ($("navCodeBuddyBtn")) $("navCodeBuddyBtn").onclick = () => showView("codeBuddy");
 $("navSSHBtn").onclick = () => showView("ssh");
 if ($("refreshCacheStatsBtn")) {
   $("refreshCacheStatsBtn").onclick = () => run(loadCacheStats, {
@@ -2598,6 +2030,66 @@ if ($("cacheStatsHours")) {
   };
 }
 $("backFromSubscriptionProxyBtn").onclick = () => showView("home");
+if ($("backFromCodeBuddyBtn")) $("backFromCodeBuddyBtn").onclick = () => showView("home");
+if ($("codeBuddyRefreshBtn")) {
+  $("codeBuddyRefreshBtn").onclick = () => run(loadCodeBuddy, { button: $("codeBuddyRefreshBtn"), busyLabel: "刷新中…" });
+}
+if ($("toggleCodeBuddyKey")) {
+  $("toggleCodeBuddyKey").onclick = () => {
+    const input = $("codeBuddyApiKey");
+    if (!input) return;
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    $("toggleCodeBuddyKey").textContent = show ? "隐藏" : "显示";
+  };
+}
+if ($("codeBuddyTestBtn")) {
+  $("codeBuddyTestBtn").onclick = () => run(async () => {
+    const body = {
+      model: $("codeBuddyDefaultModel")?.value || "hy3",
+    };
+    const typed = $("codeBuddyApiKey")?.value?.trim();
+    if (typed) body.api_key = typed;
+    const result = await api("/api/codebuddy/test", { method: "POST", body: JSON.stringify(body) });
+    const el = $("codeBuddyTestResult");
+    if (el) {
+      el.hidden = false;
+      el.className = result?.ok ? "connStatus ok" : "connStatus err";
+      el.textContent = result?.ok
+        ? `连通正常 · 模型 ${result.model || body.model} · 回复 ${result.reply || ""}`
+        : `失败：${result?.error || "未知错误"}`;
+    }
+    if (!result?.ok) throw new Error(result?.error || "连通测试失败");
+  }, { button: $("codeBuddyTestBtn"), busyLabel: "测试中…", success: "CodeBuddy 连通正常" });
+}
+if ($("codeBuddySaveBtn")) {
+  $("codeBuddySaveBtn").onclick = () => run(() => saveCodeBuddy({ activate: false }), {
+    button: $("codeBuddySaveBtn"),
+    busyLabel: "保存中…",
+    success: "CodeBuddy 供应商已保存",
+  });
+}
+if ($("codeBuddySaveActivateBtn")) {
+  $("codeBuddySaveActivateBtn").onclick = () => run(() => saveCodeBuddy({ activate: true }), {
+    button: $("codeBuddySaveActivateBtn"),
+    busyLabel: "启用中…",
+    success: "已启用 CodeBuddy，新开 grok 会话生效",
+  });
+}
+if ($("codeBuddyActivateBtn")) {
+  $("codeBuddyActivateBtn").onclick = () => run(async () => {
+    const result = await api("/api/codebuddy/activate", {
+      method: "POST",
+      body: JSON.stringify({ default_model: $("codeBuddyDefaultModel")?.value || "hy3" }),
+    });
+    if (result?.status) renderCodeBuddy(result.status);
+    await refreshAll().catch(() => {});
+  }, {
+    button: $("codeBuddyActivateBtn"),
+    busyLabel: "启用中…",
+    success: "已启用 CodeBuddy，新开 grok 会话生效",
+  });
+}
 $("subscriptionRefreshBtn").onclick = () => run(loadSubscriptionProxy, { button: $("subscriptionRefreshBtn"), busyLabel: "刷新中…" });
 for (const action of ["start", "stop", "restart"]) $("subscription" + action[0].toUpperCase() + action.slice(1) + "Btn").onclick = (event) => run(async () => {
   const result = await api("/api/subscription-proxy/service", { method: "POST", body: JSON.stringify({ action }) });
@@ -2887,28 +2379,21 @@ document.addEventListener("keydown", (event) => {
 });
 
 // ——— Routing View ———
+
+function routeCapabilityLabel(route = {}) {
+  const efforts = Array.isArray(route.reasoning_efforts) ? route.reasoning_efforts : [];
+  if (!route.supports_reasoning_effort && !efforts.length) return "无推理档位";
+  if (!efforts.length) return "支持推理";
+  return efforts.join(" / ");
+}
+
 async function loadRoutingView() {
   const routingStatus = $("routingStatus");
   const catalog = $("routingCatalog");
   if (routingStatus) routingStatus.textContent = "加载中…";
   if (catalog) catalog.innerHTML = '<p class="muted tiny">加载中…</p>';
-  if ($("collaborationBadge")) {
-    $("collaborationBadge").textContent = "加载中";
-    $("collaborationBadge").dataset.state = "stopped";
-  }
-  const [routingSnapshot, collaborationResult, collaborationSpecResult] = await Promise.all([
-    api("/api/routing"),
-    api("/api/collaboration").then((status) => ({ status, error: null })).catch((error) => ({ status: null, error })),
-    loadCollaborationSpec().then((spec) => ({ spec, error: spec ? null : new Error(state.collaborationSpecIssue) })),
-  ]);
+  const routingSnapshot = await api("/api/routing");
   renderRouting(routingSnapshot);
-  const collaborationStatus = collaborationResult.status || {
-    configured: false,
-    valid: false,
-    unavailable: true,
-    issues: [collaborationResult.error?.message || "Max Collaboration 状态仅允许在本机查看"],
-  };
-  renderCollaboration(routingSnapshot, collaborationStatus);
 }
 
 function renderRouting(snapshot) {
@@ -2973,9 +2458,7 @@ function renderRouting(snapshot) {
   providerSelect.onchange = () => {
     renderProviderPolicy(providerSelect.value);
     if (providerSelect.value !== activeProviderID) {
-      renderCollaboration({ ...snapshot, active_provider_id: "" }, state.collaboration || {});
     } else {
-      renderCollaboration(snapshot, state.collaboration || {});
     }
   };
   renderProviderPolicy(activeProviderID);
@@ -2987,7 +2470,7 @@ function renderRouting(snapshot) {
   for (const route of modelRoutes) (byProvider[route.provider_id] ||= []).push(route);
   $("routingCatalog").innerHTML = modelRoutes.length ? Object.entries(byProvider).map(([providerID, routes]) => {
     const provider = providers.find((item) => item.id === providerID);
-    return `<section class="routingCatalogGroup"><div class="routingCatalogHead"><strong>${escapeHtml(provider?.name || providerID)}</strong><span class="muted tiny">${routes.length} 个模型</span></div><div class="routingCatalogModels">${routes.map((route) => `<div class="routingCatalogModel"><div class="routingCatalogModelInfo"><strong>${escapeHtml(route.name)}</strong><code>${escapeHtml(route.model)}</code><span class="muted tiny">backend: ${escapeHtml(route.api_backend || "")}</span></div><div class="routingCatalogModelMeta">${route.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}${route.supports_reasoning_effort ? `<span class="badge ${collaborationRouteSupportsMax(route) ? "active" : ""}">${escapeHtml(collaborationCapabilityLabel(route))}</span>` : ""}</div></div>`).join("")}</div></section>`;
+    return `<section class="routingCatalogGroup"><div class="routingCatalogHead"><strong>${escapeHtml(provider?.name || providerID)}</strong><span class="muted tiny">${routes.length} 个模型</span></div><div class="routingCatalogModels">${routes.map((route) => `<div class="routingCatalogModel"><div class="routingCatalogModelInfo"><strong>${escapeHtml(route.name)}</strong><code>${escapeHtml(route.model)}</code><span class="muted tiny">backend: ${escapeHtml(route.api_backend || "")}</span></div><div class="routingCatalogModelMeta">${route.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}${route.supports_reasoning_effort ? `<span class="badge ${false ? "active" : ""}">${escapeHtml(routeCapabilityLabel(route))}</span>` : ""}</div></div>`).join("")}</div></section>`;
   }).join("") : '<div class="routingUnavailable"><strong>暂无可用模型</strong><p>请先添加至少一个包含模型的供应商。</p></div>';
 }
 
@@ -3019,14 +2502,6 @@ function saveRoutingPolicy() {
 $("refreshRoutingBtn").onclick = () => run(loadRoutingView, { button: $("refreshRoutingBtn"), busyLabel: "刷新中…" });
 $("backFromRoutingBtn").onclick = () => showView("home");
 $("saveRoutingPolicyBtn").onclick = () => saveRoutingPolicy();
-$("previewCollaborationBtn").onclick = () => run(() => previewCollaboration(), { button: $("previewCollaborationBtn"), busyLabel: "预览中…", success: "预览已生成，尚未写入任何文件" });
-$("applyCollaborationBtn").onclick = () => run(applyCollaborationPreview, { button: $("applyCollaborationBtn"), busyLabel: "应用中…", success: "Max Collaboration 已应用；Switch 未启动任何 agent" });
-$("disableCollaborationBtn").onclick = () => run(disableCollaboration, { button: $("disableCollaborationBtn"), busyLabel: "停用中…", success: "Max Collaboration 已停用，受管文件已保留" });
-$("copyCollaborationLaunchBtn").onclick = () => run(async () => {
-  const launch = collaborationLaunchParameters();
-  if (!launch.objective) throw new Error("请先填写任务目标");
-  await copyText(launch.instruction, `${launch.label} 启动指令已复制（agent_budget=${launch.budget}）`);
-}, { button: $("copyCollaborationLaunchBtn"), busyLabel: "复制中…" });
 
 showView("home");
 refreshAll().catch((err) => toast(err.message, "error"));

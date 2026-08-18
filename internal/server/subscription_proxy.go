@@ -226,7 +226,7 @@ func (s *Server) handleSubscriptionProxyLogin(w http.ResponseWriter, r *http.Req
 		if s.BrowserOpener != nil {
 			if openErr := s.BrowserOpener.Open(login.VerificationURL); openErr == nil {
 				if login.Status == "" || login.Status == "pending" {
-					login.StatusMessage = "已打开浏览器，请用目标 ChatGPT 账号完成授权"
+					login.StatusMessage = openedBrowserLoginMessage(provider)
 				}
 			} else if login.StatusMessage == "" {
 				login.StatusMessage = "请点击「打开验证页」在浏览器中完成授权"
@@ -580,6 +580,17 @@ func subscriptionProviderLabel(provider string) string {
 		return "Grok"
 	default:
 		return provider
+	}
+}
+
+func openedBrowserLoginMessage(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "antigravity":
+		return "已打开浏览器，请用目标 Google 账号完成授权"
+	case "xai":
+		return "已打开浏览器，请用目标 xAI 账号完成授权"
+	default:
+		return "已打开浏览器，请用目标 ChatGPT 账号完成授权"
 	}
 }
 

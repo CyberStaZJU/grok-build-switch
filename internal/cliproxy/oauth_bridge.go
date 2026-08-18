@@ -14,15 +14,32 @@ import (
 	"time"
 )
 
-// OAuth callback bridge: CLIProxyAPI in LaunchAgent mode often does not bind
-// localhost:1455 itself, so browser OAuth redirects never complete. We listen
-// on that port and forward the callback into CLIProxyAPI's management API.
+// OAuth callback bridge: CLIProxyAPI in LaunchAgent / headless mode often does
+// not bind provider callback ports itself, so browser OAuth redirects never
+// complete. We listen on the ports registered with each provider and forward
+// callbacks into CLIProxyAPI's management API.
+//
+// Ports match CLIProxyAPI's hard-coded redirect URIs:
+//   - Codex:        http://localhost:1455/auth/callback
+//   - Antigravity:  http://localhost:51121/oauth-callback
 
-const oauthCallbackPort = "1455"
+type oauthCallbackEndpoint struct {
+	Port     string
+	Provider string // default provider when the redirect omits ?provider=
+}
+
+var oauthCallbackEndpoints = []oauthCallbackEndpoint{
+	{Port: "1455", Provider: "codex"},
+	{Port: "51121", Provider: "antigravity"},
+}
 
 var (
 	bridgeOnce sync.Once
 	bridgeErr  error
+
+	// oauthManagementBase is the CLIProxyAPI origin used by the browser callback
+	// forwarder. Tests may override it.
+	oauthManagementBase = "http://127.0.0.1:8317"
 )
 
 func ensureOAuthCallbackBridge() error {
@@ -33,17 +50,35 @@ func ensureOAuthCallbackBridge() error {
 }
 
 func startOAuthCallbackBridge() error {
-	ln, err := net.Listen("tcp", "127.0.0.1:"+oauthCallbackPort)
+	var started int
+	var lastErr error
+	for _, endpoint := range oauthCallbackEndpoints {
+		if err := listenOAuthCallback(endpoint); err != nil {
+			lastErr = err
+			continue
+		}
+		started++
+	}
+	if started == 0 && lastErr != nil {
+		return lastErr
+	}
+	return nil
+}
+
+func listenOAuthCallback(endpoint oauthCallbackEndpoint) error {
+	ln, err := net.Listen("tcp", "127.0.0.1:"+endpoint.Port)
 	if err != nil {
 		// Another process (possibly CLIProxyAPI itself) already owns the port.
 		if isAddrInUse(err) {
 			return nil
 		}
-		return fmt.Errorf("无法启动 OAuth 回调服务: %w", err)
+		return fmt.Errorf("无法启动 OAuth 回调服务（端口 %s）: %w", endpoint.Port, err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/callback", handleOAuthBrowserCallback)
-	mux.HandleFunc("/", handleOAuthBrowserCallback)
+	handler := oauthBrowserCallbackHandler(endpoint)
+	mux.HandleFunc("/auth/callback", handler)
+	mux.HandleFunc("/oauth-callback", handler)
+	mux.HandleFunc("/", handler)
 	srv := newOAuthCallbackHTTPServer(mux)
 	go func() {
 		_ = srv.Serve(ln)
@@ -70,20 +105,29 @@ func isAddrInUse(err error) bool {
 	return strings.Contains(msg, "address already in use") || strings.Contains(msg, "bind: address already in use")
 }
 
-func handleOAuthBrowserCallback(w http.ResponseWriter, r *http.Request) {
+func oauthBrowserCallbackHandler(endpoint oauthCallbackEndpoint) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		handleOAuthBrowserCallback(w, r, endpoint)
+	}
+}
+
+func handleOAuthBrowserCallback(w http.ResponseWriter, r *http.Request, endpoint oauthCallbackEndpoint) {
 	q := r.URL.Query()
 	code := firstNonEmpty(q.Get("code"), r.FormValue("code"))
 	state := firstNonEmpty(q.Get("state"), r.FormValue("state"))
 	errMsg := firstNonEmpty(q.Get("error"), r.FormValue("error"))
 	errDesc := firstNonEmpty(q.Get("error_description"), r.FormValue("error_description"))
-	provider := firstNonEmpty(q.Get("provider"), "codex")
+	// Prefer an explicit provider query, otherwise use the listener's provider.
+	// Do not fall back to "codex": Google Antigravity redirects omit provider and
+	// a wrong value makes CLIProxyAPI reject the callback ("provider does not match state").
+	provider := firstNonEmpty(q.Get("provider"), endpoint.Provider)
 
 	if state == "" {
 		writeCallbackPage(w, http.StatusBadRequest, "回调缺少 state，请回到 Grok Build Switch 重试登录。", false)
 		return
 	}
 
-	redirectURL := "http://localhost:" + oauthCallbackPort + r.URL.RequestURI()
+	redirectURL := "http://localhost:" + endpoint.Port + r.URL.RequestURI()
 	forwardErr := forwardOAuthCallback(r.Context(), provider, state, code, errMsg, errDesc, redirectURL)
 	if errMsg != "" {
 		writeCallbackPage(w, http.StatusBadRequest, "登录被取消或拒绝："+firstNonEmpty(errDesc, errMsg), false)
@@ -101,7 +145,9 @@ func forwardOAuthCallback(ctx context.Context, provider, state, code, errMsg, er
 
 	// Documented open endpoint: GET with provider/state/code.
 	params := url.Values{}
-	params.Set("provider", provider)
+	if provider != "" {
+		params.Set("provider", provider)
+	}
 	params.Set("state", state)
 	if code != "" {
 		params.Set("code", code)
@@ -112,7 +158,7 @@ func forwardOAuthCallback(ctx context.Context, provider, state, code, errMsg, er
 	if errDesc != "" {
 		params.Set("error_description", errDesc)
 	}
-	getURL := "http://127.0.0.1:8317/v0/management/oauth-callback?" + params.Encode()
+	getURL := strings.TrimRight(oauthManagementBase, "/") + "/v0/management/oauth-callback?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
 	if err != nil {
 		return err
@@ -128,14 +174,17 @@ func forwardOAuthCallback(ctx context.Context, provider, state, code, errMsg, er
 		_ = body
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"provider":     provider,
+	payloadBody := map[string]string{
 		"state":        state,
 		"code":         code,
 		"error":        errMsg,
 		"redirect_url": redirectURL,
-	})
-	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:8317/v0/management/oauth-callback", bytes.NewReader(payload))
+	}
+	if provider != "" {
+		payloadBody["provider"] = provider
+	}
+	payload, _ := json.Marshal(payloadBody)
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(oauthManagementBase, "/")+"/v0/management/oauth-callback", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
