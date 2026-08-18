@@ -51,7 +51,7 @@ func TestRemovedAccountAndAdvancedFeaturesAreAbsent(t *testing.T) {
 		"Grok Auth JSON", "Grok 注册机", "Grok 账号池", "CPA 设备授权", "备份与恢复", "OAuth Client ID",
 		`id="grokAuthCard"`, `id="registrarCard"`, `id="grokPoolCard"`, `id="backupFold"`, `id="oauthClientID"`,
 		`id="toggleAdvancedBtn"`, "advancedOnly", `data-field="base_url"`, `data-field="api_backend"`,
-		`data-field="context_window"`, `data-field="max_completion_tokens"`, `data-field="extra_headers"`,
+		`data-field="max_completion_tokens"`, `data-field="extra_headers"`,
 		"/api/backups", "/api/grok-auth", "/api/grok-pool", "/api/registrar", "/api/cpa-mint",
 	} {
 		if bytes.Contains(combined, []byte(removed)) {

@@ -23,6 +23,7 @@ this.appTest = {
   reapplyRouting,
   deleteSSHFiles,
   modelSupportsBackendSearch,
+  suggestContextWindow,
   minimatch,
   setStatus(value) { state.status = value; },
   setRouting(value) { state.routing = value; },
@@ -104,6 +105,21 @@ test("custom prompt resolves null on Escape and clears every handler", async () 
   assert.equal(ok.onclick, null);
   assert.equal(cancel.onclick, null);
   assert.equal(dialog.oncancel, null);
+});
+
+test("suggestContextWindow resolves known leaves and leaves unknown models unset", () => {
+  const app = loadApp(async () => response(500));
+  assert.equal(app.suggestContextWindow("k3-256k"), 262144);
+  assert.equal(app.suggestContextWindow("K3-256K"), 262144);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 272000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 272000);
+  assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.7-flash-high"), 1048576);
+  assert.equal(app.suggestContextWindow("subscription/grok/grok-4.5"), 500000);
+  assert.equal(app.suggestContextWindow("subscription/grok/grok-4.6"), 500000);
+  assert.equal(app.suggestContextWindow("hy3"), 128000);
+  assert.equal(app.suggestContextWindow("unknown-model"), 0);
+  assert.equal(app.suggestContextWindow("grok-4.5-mini"), 0);
+  assert.equal(app.suggestContextWindow(""), 0);
 });
 
 test("SSH filename glob treats question mark as one arbitrary character", () => {

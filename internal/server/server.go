@@ -603,6 +603,7 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		profile := request.profile()
+		profiles.ApplyKnownContextDefaults(&profile)
 		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
@@ -649,6 +650,7 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		profile := request.profile()
+		profiles.ApplyKnownContextDefaults(&profile)
 		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

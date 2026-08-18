@@ -637,7 +637,8 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 				seen[standard], seen[fast] = true, true
 				if p.DefaultModel == "" {
 					p.DefaultModel = standard
-					p.DefaultReasoningEffort = "low"
+					// Canonical menu dropped "low"; use the lowest canonical tier.
+					p.DefaultReasoningEffort = "medium"
 				}
 				continue
 			}
@@ -647,6 +648,7 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 		p.Models = append(p.Models, profiles.ModelDef{
 			Name: alias, Model: alias, BaseURL: baseURL, APIKey: key,
 			APIBackend: "chat_completions", ReasoningEffortsSource: "default",
+			ContextWindow: profiles.KnownContextWindow(alias),
 		})
 		if p.DefaultModel == "" {
 			p.DefaultModel = alias
@@ -660,6 +662,7 @@ func trustedSubscriptionModel(name, model, baseURL, key, tier, anchor string, ef
 		Name: name, Model: model, BaseURL: baseURL, APIKey: key, APIBackend: "chat_completions",
 		SupportsReasoningEffort: true, ReasoningEfforts: append([]string(nil), efforts...), ReasoningEffortsSource: "declared",
 		SpeedTier: tier, StandardAnchor: anchor,
+		ContextWindow: profiles.KnownContextWindow(name),
 	}
 }
 

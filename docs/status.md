@@ -9,7 +9,7 @@
 ### 1.1 保留并维护的能力
 
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
-- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。
+- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。
 - **供应商默认模型写入路由**：在供应商编辑页设置 default 模型与推理强度；保存后事务性更新 `config.toml` 与 `routing.json`。explore / plan 跟随该 default（无独立「模型路由」页）。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。

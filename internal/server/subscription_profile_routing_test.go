@@ -54,8 +54,8 @@ func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testin
 
 	standard := "subscription/codex/gpt-5.6-terra"
 	fast := standard + "-fast"
-	if profile.DefaultModel != standard || profile.DefaultReasoningEffort != "low" {
-		t.Fatalf("trusted default = %q/%q, want %q/low", profile.DefaultModel, profile.DefaultReasoningEffort, standard)
+	if profile.DefaultModel != standard || profile.DefaultReasoningEffort != "medium" {
+		t.Fatalf("trusted default = %q/%q, want %q/medium", profile.DefaultModel, profile.DefaultReasoningEffort, standard)
 	}
 	if len(profile.Models) != 4 {
 		t.Fatalf("models = %#v, want trusted pair plus two unclassified codex selections", profile.Models)
@@ -71,6 +71,9 @@ func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testin
 	fastModel, ok := byName[fast]
 	if !ok || fastModel.Model != fast || fastModel.SpeedTier != profiles.SpeedTierFast || fastModel.StandardAnchor != standard {
 		t.Fatalf("fast model = %#v", fastModel)
+	}
+	if standardModel.ContextWindow != 272000 || fastModel.ContextWindow != 272000 {
+		t.Fatalf("trusted codex context windows = %d/%d, want 272000/272000", standardModel.ContextWindow, fastModel.ContextWindow)
 	}
 	for _, model := range []profiles.ModelDef{standardModel, fastModel} {
 		if !model.SupportsReasoningEffort || model.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(model.ReasoningEfforts, modelvariants.TrustedCodexReasoningEfforts()) {

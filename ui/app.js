@@ -36,6 +36,34 @@ function normalizeReasoningEffort(effort) {
   return REASONING_EFFORTS.includes(effort) ? effort : "none";
 }
 
+// Mirrors internal/profiles/context_defaults.go — keep both tables in sync.
+// Upstream /v1/models does not report context sizes; Grok falls back to ~200k
+// when config.toml omits context_window, so known models get an explicit
+// default here. Exact leaf matches only; values stay editable per model.
+const CONTEXT_WINDOW_SUGGESTIONS = {
+  "gpt-5.6-terra": 272000,
+  "gpt-5.6-sol": 272000,
+  "gpt-5.6-luna": 272000,
+  "gemini-3.7-flash-high": 1048576,
+  "grok-4.5": 500000,
+  "grok-4.6": 500000,
+  "k3-256k": 262144,
+  "hy3": 128000,
+  "deepseek-v4-flash": 128000,
+};
+
+function suggestContextWindow(alias) {
+  let leaf = String(alias || "").trim().toLowerCase();
+  if (!leaf) return 0;
+  leaf = leaf.split("/").pop();
+  if (CONTEXT_WINDOW_SUGGESTIONS[leaf]) return CONTEXT_WINDOW_SUGGESTIONS[leaf];
+  if (leaf.endsWith("-fast")) {
+    const base = leaf.slice(0, -"-fast".length);
+    if (CONTEXT_WINDOW_SUGGESTIONS[base]) return CONTEXT_WINDOW_SUGGESTIONS[base];
+  }
+  return 0;
+}
+
 function newProfileDraft() {
   return {
     upstream_format: "openai_responses",
@@ -1099,13 +1127,14 @@ function syncModelBaseURLs() {
 function addModelCard(model = {}) {
   const card = document.createElement("div");
   card.className = "modelCard";
+  const contextWindowSuggestion = suggestContextWindow(model.model || model.name);
   card.modelDraft = {
     ...model,
     base_url: model.base_url || $("baseUrl")?.value.trim() || "",
     api_backend: model.api_backend || apiBackendFor($("upstreamFormat").value),
     extra_headers: model.extra_headers || {},
     supports_backend_search: modelSupportsBackendSearch(model),
-    context_window: Number(model.context_window || 0),
+    context_window: Number(model.context_window || 0) || contextWindowSuggestion,
     max_completion_tokens: Number(model.max_completion_tokens || 0),
   };
   card.dataset.reasoningEfforts = JSON.stringify((model.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort)));
@@ -1126,6 +1155,10 @@ function addModelCard(model = {}) {
       <label class="field">Model
         <input data-field="model" class="mono" value="${escapeAttr(model.model || "")}" placeholder="上游模型 ID">
       </label>
+      <label class="field">上下文窗口
+        <input data-field="context_window" type="number" min="0" step="1000" class="mono" value="${card.modelDraft.context_window || 0}">
+        <span class="muted tiny" data-field="context_window_hint"></span>
+      </label>
       <details class="modelAdvanced full">
         <summary>模型高级设置</summary>
         <label class="check">
@@ -1138,13 +1171,32 @@ function addModelCard(model = {}) {
   const nameInput = card.querySelector('[data-field="name"]');
   const modelInput = card.querySelector('[data-field="model"]');
   const backendSearchInput = card.querySelector('[data-field="supports_backend_search"]');
+  const contextWindowInput = card.querySelector('[data-field="context_window"]');
+  const contextWindowHint = card.querySelector('[data-field="context_window_hint"]');
+  const refreshContextWindowHint = () => {
+    const suggestion = suggestContextWindow(modelInput.value.trim() || nameInput.value.trim());
+    contextWindowHint.textContent = suggestion
+      ? `建议 ${suggestion.toLocaleString()}；0 = Grok 默认（约 200k）`
+      : "0 = Grok 默认（约 200k）";
+  };
   const onFieldChange = () => {
     card.querySelector("strong").textContent = nameInput.value.trim() || modelInput.value.trim() || "新模型";
+    const suggestion = suggestContextWindow(modelInput.value.trim() || nameInput.value.trim());
+    if (suggestion && !(Number(contextWindowInput.value) > 0)) {
+      contextWindowInput.value = String(suggestion);
+      card.modelDraft = { ...(card.modelDraft || {}), context_window: suggestion };
+    }
+    refreshContextWindowHint();
     renderModelSelect();
     syncEnabledModelList();
   };
   nameInput.addEventListener("input", onFieldChange);
   modelInput.addEventListener("input", onFieldChange);
+  contextWindowInput.addEventListener("input", () => {
+    card.modelDraft = { ...(card.modelDraft || {}), context_window: Math.max(0, Number(contextWindowInput.value) || 0) };
+    scheduleProviderPreview();
+  });
+  refreshContextWindowHint();
   backendSearchInput.addEventListener("change", () => {
     card.modelDraft = { ...(card.modelDraft || {}), supports_backend_search: backendSearchInput.checked };
     scheduleProviderPreview();
@@ -1238,6 +1290,7 @@ function readForm() {
         ...(row.modelDraft || {}),
         name,
         model,
+        context_window: Math.max(0, Number(row.querySelector('[data-field="context_window"]')?.value) || 0),
         api_key: apiKey,
         supports_reasoning_effort: reasoningEfforts.length > 0,
         reasoning_efforts: reasoningEfforts,
