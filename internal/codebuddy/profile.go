@@ -27,14 +27,15 @@ func NewProfile(baseURL, apiKey string) profiles.Profile {
 	models := make([]profiles.ModelDef, 0, len(KnownModels))
 	for _, id := range KnownModels {
 		models = append(models, profiles.ModelDef{
-			Name:                  id,
-			Model:                 id,
-			BaseURL:               baseURL,
-			APIKey:                apiKey,
-			APIBackend:            "chat_completions",
-			SupportsBackendSearch: false,
-			// Unknown reasoning menus: leave unset so Grok does not force tiers.
-			SupportsReasoningEffort: false,
+			Name:                    id,
+			Model:                   id,
+			BaseURL:                 baseURL,
+			APIKey:                  apiKey,
+			APIBackend:              "chat_completions",
+			SupportsBackendSearch:   false,
+			SupportsReasoningEffort: true,
+			ReasoningEfforts:        append([]string(nil), profiles.CanonicalReasoningEfforts...),
+			ReasoningEffortsSource:  "declared",
 			ContextWindow:           128000,
 			MaxCompletionTokens:     8192,
 			StreamToolCalls:         profiles.BoolPtr(false),

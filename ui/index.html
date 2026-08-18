@@ -22,7 +22,6 @@
       </div>
       <div class="headerRight">
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
-        <button type="button" id="navRoutingBtn" class="btn">模型路由</button>
         <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
         <button type="button" id="navCodeBuddyBtn" class="btn">CodeBuddy</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
@@ -32,8 +31,8 @@
 
     <div id="driftBanner" class="alert warn" hidden style="display:none">
       <div>
-        <strong id="driftTitle">配置与当前模型路由不一致</strong>
-        <span id="driftDetail">config.toml 的路由托管字段与当前模型路由不匹配；重新应用会保留无关 TOML 设置。</span>
+        <strong id="driftTitle">配置与当前默认模型设置不一致</strong>
+        <span id="driftDetail">config.toml 里的 default / web_search / explore / plan 与 Switch 保存的不一致；重新应用会保留无关 TOML 设置。</span>
       </div>
       <div class="inlineActions">
         <button type="button" id="reapplyBtn" class="btn sm primary">确认并重新应用路由</button>
@@ -46,7 +45,7 @@
       <div class="toolbar">
         <div>
           <h1 class="pageTitle">登录方式</h1>
-          <p class="pageDesc">在官方账号与 API 供应商之间切换，拖动调整顺序</p>
+          <p class="pageDesc">管理官方登录与 API 供应商。/m 混合显示各供应商已启用的模型；「设为默认」只改新会话默认</p>
         </div>
         <span id="profileCount" class="muted count">0 个</span>
       </div>
@@ -116,21 +115,18 @@
                   <option value="">（请先启用模型）</option>
                 </select>
               </label>
-              <p class="muted tiny">这里只设置该供应商的默认模型；联网搜索、Explore 和 Plan 请在“模型路由”中统一管理。</p>
+              <p class="muted tiny">这是 Grok 的 default 模型；explore / plan 会跟随它。保存供应商后立即写入 config.toml。</p>
               <label class="field reasoningEffortField">默认推理强度
                 <div class="reasoningEffortControl">
                   <select id="defaultReasoningEffort">
-                    <option value="none">禁用推理 (none)</option>
-                    <option value="minimal">最小 (minimal)</option>
-                    <option value="low">低 (low)</option>
                     <option value="medium">中 (medium)</option>
                     <option value="high">高 (high)</option>
                     <option value="xhigh">超高 (xhigh)</option>
-                    <option value="max">最大 (max，仅部分模型)</option>
+                    <option value="max">最大 (max)</option>
+                    <option value="none">禁用推理 (none)</option>
                   </select>
-                  <button type="button" id="detectReasoningEffortsBtn" class="btn sm">检测支持档位</button>
                 </div>
-                <span id="reasoningEffortStatus" class="muted tiny" role="status">选择默认模型后，将按该模型能力显示推理档位。</span>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、none。上游若不支持所选档位，可能静默忽略。</span>
               </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
@@ -183,47 +179,7 @@
       </form>
     </main>
 
-    <!-- MODEL ROUTING -->
-    <main id="viewRouting" class="view routingView" hidden>
-      <div class="pageHead">
-        <div><h1 class="pageTitle">模型路由</h1><p class="pageDesc">查看统一模型目录，并为不同任务选择默认路由</p></div>
-        <div class="inlineActions">
-          <button type="button" id="refreshRoutingBtn" class="btn">刷新</button>
-          <button type="button" id="backFromRoutingBtn" class="btn">返回</button>
-        </div>
-      </div>
 
-      <section class="formCard routingPolicyCard">
-        <div class="rowBetween">
-          <div><h2 class="sectionTitle">路由策略</h2><p class="muted tiny">保存后用于默认对话、联网搜索及子代理任务。</p></div>
-          <button type="button" id="saveRoutingPolicyBtn" class="btn primary">保存策略</button>
-        </div>
-        <div id="routingCompatibilityWarning" class="alert" hidden></div>
-        <div class="routingPolicyGrid">
-          <label class="field">启用供应商<select id="routingProvider" class="mono"></select></label>
-          <label class="field">default<select id="routingDefault" class="mono"><option value="">（未设置）</option></select></label>
-          <label class="field">默认推理强度
-            <select id="routingReasoningEffort" class="mono">
-              <option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option>
-              <option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>
-            </select>
-          </label>
-          <label class="field">web_search<select id="routingWebSearch" class="mono"><option value="">（未设置）</option></select></label>
-          <label class="field">explore<select id="routingExplore" class="mono"><option value="">（未设置）</option></select></label>
-          <label class="field">plan<select id="routingPlan" class="mono"><option value="">（未设置）</option></select></label>
-        </div>
-        <p id="routingStatus" class="muted tiny" role="status">加载中…</p>
-      </section>
-
-      <section class="formCard">
-        <div class="rowBetween">
-          <div><h2 class="sectionTitle">统一模型目录</h2><p class="muted tiny">按供应商分组展示模型 route、upstream ID、backend 与推理能力来源。</p></div>
-          <span id="routingModelCount" class="muted tiny">0 个</span>
-        </div>
-        <div id="routingCatalog" class="routingCatalog"><p class="muted tiny">加载中…</p></div>
-      </section>
-
-    </main>
 
     <!-- CODEBUDDY / WORKBUDDY -->
     <main id="viewCodeBuddy" class="view codeBuddyView" hidden>
@@ -317,10 +273,10 @@
         <button type="button" id="backFromSubscriptionProxyBtn" class="btn">返回</button>
       </div>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">代理服务</h2><p id="subscriptionServiceDetail" class="muted tiny">加载中…</p></div><span id="subscriptionServiceBadge" class="badge">未知</span></div><div class="subscriptionConnection"><div><span>Base URL</span><code id="subscriptionBaseUrl">—</code></div><div><span>推理 Key</span><code id="subscriptionApiKey">—</code></div></div><div class="inlineActions"><button id="subscriptionStartBtn" class="btn primary" type="button">启动</button><button id="subscriptionStopBtn" class="btn danger" type="button">停止</button><button id="subscriptionRestartBtn" class="btn" type="button">重启</button><button id="subscriptionRefreshBtn" class="btn ghost" type="button">刷新</button></div></section>
-      <section><h2 class="sectionTitle subscriptionSectionTitle">第 1 步：添加订阅账号</h2><p class="muted tiny subscriptionStepHint">账号是订阅代理访问官方服务的登录凭据；添加成功后，还需要选择模型并创建对应供应商，才能在“模型路由”中使用。</p><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
+      <section><h2 class="sectionTitle subscriptionSectionTitle">第 1 步：添加订阅账号</h2><p class="muted tiny subscriptionStepHint">账号是订阅代理访问官方服务的登录凭据；添加成功后，选择模型并创建供应商，再在供应商里设置默认模型。</p><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">已添加账号</h2><p class="muted tiny">禁用会保留凭据但停止使用；删除会移除本地保存的订阅凭据。</p></div><span id="subscriptionAccountCount" class="muted tiny">0 个</span></div><div id="subscriptionAccounts" class="subscriptionAccounts"></div></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">第 2 步：选择模型</h2><p class="muted tiny">只勾选希望暴露给 Grok Build 的模型，然后保存。</p></div><button type="button" id="saveSubscriptionModelsBtn" class="btn primary">保存模型选择</button></div><div id="subscriptionModels" class="subscriptionModels"></div></section>
-      <section class="formCard"><div><h2 class="sectionTitle">第 3 步：创建 / 更新供应商</h2><p class="muted tiny">每个按钮只同步对应类型的已登录账号和已保存模型。完成后到“模型路由”选择它，不会自动改变当前路由。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 Codex 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 Gemini 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 Grok 供应商</button></div><p id="subscriptionProviderHint" class="muted tiny">请先完成账号登录和模型选择。</p></section>
+      <section class="formCard"><div><h2 class="sectionTitle">第 3 步：创建 / 更新供应商</h2><p class="muted tiny">每个按钮只同步对应类型的已登录账号和已保存模型。创建后编辑该供应商，把它的默认模型设成你要给 Grok 用的模型。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 Codex 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 Gemini 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 Grok 供应商</button></div><p id="subscriptionProviderHint" class="muted tiny">请先完成账号登录和模型选择。</p></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">诊断</h2><p class="muted tiny">检查服务、账号与模型路由。</p></div><button type="button" id="runSubscriptionDiagnosticsBtn" class="btn">运行诊断</button></div><pre id="subscriptionDiagnostics" class="subscriptionDiagnostics mono">尚未运行诊断。</pre></section>
     </main>
 
@@ -441,7 +397,7 @@
             <button type="button" id="saveConfigBtn" class="btn sm primary">保存到文件</button>
           </div>
         </div>
-        <p class="muted tiny">这是 grok <strong>当前生效</strong>的唯一配置文件（不是「每个供应商各一份」）。各供应商档案在列表里；启用某个供应商后，其 URL/Key/模型会写进此文件。</p>
+        <p class="muted tiny">这是 grok <strong>当前生效</strong>的唯一配置文件（不是「每个供应商各一份」）。各供应商已启用的模型会一并写入此文件供 /m 挑选。</p>
         <textarea id="configEditor" class="configTextarea mono" spellcheck="false" rows="18" placeholder="config.toml 内容"></textarea>
         <p id="configEditorStatus" class="muted tiny"></p>
       </section>

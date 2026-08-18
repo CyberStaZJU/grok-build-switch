@@ -41,12 +41,22 @@ var KnownModels = []string{
 	"auto",
 }
 
+// ModelOffer is one CodeBuddy model as shown to Grok (/m / config alias) and
+// the upstream id forwarded to CodeBuddy chat.
+type ModelOffer struct {
+	ID       string // advertised id (may include "@Provider" disambiguation)
+	Upstream string // bare CodeBuddy model id
+}
+
 // Handler proxies OpenAI-compatible /v1 requests to CodeBuddy.
 type Handler struct {
 	Upstream string
 	// FallbackKey is used when the client did not send Authorization.
 	FallbackKey string
 	Client      *http.Client
+	// Offers is the enabled catalog advertised on GET /v1/models. Empty means
+	// the full KnownModels list (bare ids) for a fresh provider.
+	Offers []ModelOffer
 }
 
 func (h *Handler) upstream() string {
@@ -85,6 +95,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) enabledOffers() []ModelOffer {
+	if len(h.Offers) > 0 {
+		out := make([]ModelOffer, 0, len(h.Offers))
+		seen := map[string]bool{}
+		for _, offer := range h.Offers {
+			id := strings.TrimSpace(offer.ID)
+			upstream := strings.TrimSpace(offer.Upstream)
+			if upstream == "" {
+				upstream = id
+			}
+			if id == "" || seen[id] || !IsKnownModel(upstream) {
+				continue
+			}
+			seen[id] = true
+			out = append(out, ModelOffer{ID: id, Upstream: upstream})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	out := make([]ModelOffer, 0, len(KnownModels))
+	for _, id := range KnownModels {
+		out = append(out, ModelOffer{ID: id, Upstream: id})
+	}
+	return out
+}
+
+func (h *Handler) resolveUpstream(id string) (string, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", false
+	}
+	for _, offer := range h.enabledOffers() {
+		if offer.ID == id || offer.Upstream == id {
+			return offer.Upstream, true
+		}
+	}
+	return "", false
+}
+
 func (h *Handler) serveModels(w http.ResponseWriter) {
 	type model struct {
 		ID      string `json:"id"`
@@ -92,9 +142,10 @@ func (h *Handler) serveModels(w http.ResponseWriter) {
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
 	}
-	out := make([]model, 0, len(KnownModels))
-	for _, id := range KnownModels {
-		out = append(out, model{ID: id, Object: "model", Created: 1700000000, OwnedBy: "codebuddy"})
+	offers := h.enabledOffers()
+	out := make([]model, 0, len(offers))
+	for _, offer := range offers {
+		out = append(out, model{ID: offer.ID, Object: "model", Created: 1700000000, OwnedBy: "codebuddy"})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": out})
 }
@@ -119,6 +170,13 @@ func (h *Handler) serveChat(w http.ResponseWriter, r *http.Request) {
 	if _, ok := payload["model"]; !ok {
 		payload["model"] = DefaultModel
 	}
+	modelID, _ := payload["model"].(string)
+	upstream, ok := h.resolveUpstream(modelID)
+	if !ok {
+		http.Error(w, fmt.Sprintf("model %q is not enabled in CodeBuddy profile", modelID), http.StatusBadRequest)
+		return
+	}
+	payload["model"] = upstream
 	body, err := json.Marshal(payload)
 	if err != nil {
 		http.Error(w, "encode failed", http.StatusInternalServerError)

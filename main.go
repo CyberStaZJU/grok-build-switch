@@ -110,6 +110,7 @@ func main() {
 	// optional field during startup migration so an upgrade cannot prevent the
 	// local service from launching; interactive updates remain strictly rejected.
 	hydratedRouting, _ = routing.RepairUnsupportedWebSearch(hydratedRouting)
+	hydratedRouting, _ = routing.RepairUnsupportedReasoningEffort(hydratedRouting)
 	if err := sw.ApplyRouting(hydratedRouting); err != nil {
 		fatal(fmt.Errorf("应用启动路由配置失败: %w", err))
 	}

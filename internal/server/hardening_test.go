@@ -74,8 +74,6 @@ func TestCoreManagementEndpointsRejectUnknownTrailingAndOversizeJSON(t *testing.
 			return s.handleSettings
 		case "models-fetch":
 			return s.handleFetchModels
-		case "reasoning":
-			return s.handleReasoningEfforts
 		case "connection":
 			return s.handleConnectionTest
 		case "config":
@@ -84,7 +82,7 @@ func TestCoreManagementEndpointsRejectUnknownTrailingAndOversizeJSON(t *testing.
 			return s.handleConfigPreview
 		}
 	}
-	tests := []string{"profiles", "settings", "models-fetch", "reasoning", "connection", "config", "config-preview"}
+	tests := []string{"profiles", "settings", "models-fetch", "connection", "config", "config-preview"}
 	for _, name := range tests {
 		tc := struct {
 			name   string

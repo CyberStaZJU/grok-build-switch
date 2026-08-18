@@ -10,10 +10,11 @@ import (
 	"grok_switch/internal/routing"
 )
 
-// ProfileForRouting composes every provider model into the legacy config shape
-// used by the TOML writer. Route names are already conflict-free aliases.
-// Note: web_search and subagents.models are NOT stored on the profile — they
-// are owned exclusively by the routing policy (see applyRoutingPolicyToDoc).
+// ProfileForRouting composes every custom provider's enabled models into the
+// legacy config shape. /m therefore shows a mixed catalog; each supplier only
+// contributes models enabled on its profile (e.g. CodeBuddy without hy3-preview).
+// web_search / explore / plan remain routing-policy owned. Official default
+// still strips [model.*] via ApplyOfficialRoutingText.
 func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 	if err := snapshot.Validate(); err != nil {
 		return profiles.Profile{}, err
@@ -30,9 +31,6 @@ func ProfileForRouting(snapshot routing.Snapshot) (profiles.Profile, error) {
 		DefaultReasoningEffort: policy.DefaultReasoningEffort,
 		Models:                 make([]profiles.ModelDef, 0, len(snapshot.ModelRoutes)),
 	}
-	// Keep the complete custom model catalog for old conversations pinned to
-	// aliases from previously active custom providers. Only auth/routing pins are
-	// single-provider; model definitions remain combined until official is active.
 	for _, route := range snapshot.ModelRoutes {
 		provider, _ := snapshot.Provider(route.ProviderID)
 		profile.Models = append(profile.Models, profiles.ModelDef{
@@ -118,9 +116,8 @@ func PreviewRouting(path string, snapshot routing.Snapshot) ([]byte, error) {
 	return full, nil
 }
 
-// ApplyOfficialRoutingText removes custom provider definitions while retaining
-// the user's selected official Grok model pins. Official model IDs do not need
-// [model.*] definitions: the logged-in Grok CLI resolves them from grok.com.
+// ApplyOfficialRoutingText removes custom [model.*] definitions and writes the
+// selected official Grok pins. /m then shows the official catalog only.
 func ApplyOfficialRoutingText(data []byte, policy routing.RoutingPolicy) []byte {
 	clean := UseOfficialAuthText(data)
 	values := map[string]string{}
@@ -245,8 +242,12 @@ func currentMatchesRouting(path string, snapshot routing.Snapshot, strictDefault
 		if err != nil {
 			return false, err
 		}
-		official := ApplyOfficialRoutingText(data, snapshot.ActivePolicy())
-		return string(data) == string(official), nil
+		// Semantic pin match. Leftover custom [model.*] or models_base_url means
+		// official apply has not cleaned the active-provider-only catalog yet.
+		if officialConfigHasCustomResidue(data) {
+			return false, nil
+		}
+		return officialPolicyMatches(path, snapshot.ActivePolicy(), strictDefaults)
 	}
 	profile, err := ProfileForRouting(snapshot)
 	if err != nil {
@@ -297,6 +298,65 @@ func routingPolicyMatches(path string, policy routing.RoutingPolicy) (bool, erro
 		return false, nil
 	}
 	return true, nil
+}
+
+// officialPolicyMatches compares official managed pins by parsed TOML values,
+// ignoring quote style and incidental blank lines.
+func officialPolicyMatches(path string, policy routing.RoutingPolicy, strictDefaults bool) (bool, error) {
+	doc, err := readDoc(path)
+	if err != nil {
+		return false, err
+	}
+	models := tableAt(doc, "models")
+	if stringAt(models, "default") != strings.TrimSpace(policy.Default) {
+		return false, nil
+	}
+	if stringAt(models, "web_search") != strings.TrimSpace(policy.WebSearch) {
+		return false, nil
+	}
+	if strictDefaults {
+		wantEffort := strings.TrimSpace(policy.DefaultReasoningEffort)
+		if wantEffort == "none" {
+			wantEffort = ""
+		}
+		if stringAt(models, "default_reasoning_effort") != wantEffort {
+			return false, nil
+		}
+	}
+	subModels := tableAt(tableAt(doc, "subagents"), "models")
+	if stringAt(subModels, "explore") != strings.TrimSpace(policy.Subagents.Explore) {
+		return false, nil
+	}
+	if stringAt(subModels, "plan") != strings.TrimSpace(policy.Subagents.Plan) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// officialConfigHasCustomResidue reports leftover custom provider wiring that
+// official apply would strip ([model.*], endpoints.models_base_url).
+func officialConfigHasCustomResidue(data []byte) bool {
+	lines := splitLines(string(trimUTF8BOM(data)))
+	for i := 0; i < len(lines); {
+		header := parseHeader(lines[i])
+		if header == "" {
+			i++
+			continue
+		}
+		if header == "model" || strings.HasPrefix(header, "model.") {
+			return true
+		}
+		end := skipSection(lines, i+1)
+		if header == "endpoints" {
+			for _, line := range lines[i+1 : end] {
+				if assignmentKey(line) == "models_base_url" {
+					return true
+				}
+			}
+		}
+		i = end
+	}
+	return false
 }
 
 func policyWithConfigAliases(snapshot routing.Snapshot) routing.RoutingPolicy {

@@ -1,6 +1,6 @@
 # Grok Build Switch — 维护者文档
 
-> 面向维护者的当前架构、产品边界与数据安全约定。最后更新：2026-08-04。
+> 面向维护者的当前架构、产品边界与数据安全约定。最后更新：2026-08-18。
 
 ---
 
@@ -21,7 +21,7 @@ Grok Build Switch 是一个 macOS 桌面应用，用于管理 Grok CLI 官方登
 
 - Grok CLI 官方登录与官方路由；
 - 普通 Profile；
-- default、web_search、explore、plan 统一模型路由；
+- 供应商默认模型写入 routing（explore / plan 跟随 default；无独立路由页）；
 - token/cache 用量观察；
 - CLIProxyAPI 订阅代理；
 - `config.toml` 查看、校验与编辑；
@@ -76,9 +76,10 @@ HTTP request
 - `routing.json` schema v2 保存唯一 `active_provider_id`、稳定的 `provider_id:model` 引用和每个供应商的记忆策略；
 - default、web_search、explore、plan 必须全部属于启用供应商，不能重新引入跨供应商会话图；v1 跨供应商可选字段仅迁移进各自供应商的策略记忆；
 - 自定义非空 web_search 还必须是 `responses` 后端且明确支持后端搜索；UI 过滤不是安全边界，服务端拒绝无能力路由且不得产生持久化副作用；
-- 有自定义供应商时必须存在启用项；启用供应商不能删除，需先启用另一个供应商；
+- 自定义供应商默认全部进入混合路由目录，不必再逐个“启用”；可删除任一自定义供应商（含当前 default 所属），也可删除官方登录（清 `auth.json` 并回落到自定义路由）；
+- 不再提供独立「模型路由」页。Grok 的 default / explore / plan 都跟随供应商里设置的默认模型与推理强度（Grok Build 没有 explore/plan 独立 effort 配置）；
 - 自定义供应商切换保留 `config.toml` 的组合自定义模型目录，以兼容旧会话固定的旧别名；
-- 官方供应商是互斥特例：使用 Grok CLI 官方登录，切换时清除自定义模型定义和认证，不允许混合；
+- `/m` 混合显示各自定义供应商**已启用**的模型；官方 default 时清空自定义 `[model.*]`（档案仍保留）；「设为默认」只改 default；
 - 路由更新只处理配置与模型选择；普通 Profile UI 只管理基础连接信息和常用模型；
 - UI 不超出当前产品范围。
 
@@ -165,7 +166,7 @@ HTTP request
 
 ## 7. 前端约定
 
-- 当前 UI 聚焦官方登录、普通 Profile、统一模型路由、用量观察、订阅代理、CodeBuddy、配置编辑、LAN 和 SSH。
+- 当前 UI 聚焦官方登录、普通 Profile（含 default 模型与推理强度）、用量观察、订阅代理、CodeBuddy、配置编辑、LAN 和 SSH；不再提供独立「模型路由」页。
 - 菜单栏与 Wails 必须提供一致的当前能力。
 - UI 入口、状态卡和表单只覆盖当前产品范围。
 - 非原生搜索模型不得被描述为自动获得额外搜索工具。

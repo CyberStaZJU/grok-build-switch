@@ -229,9 +229,9 @@ func TestPairedLANMutationsAndCredentialProbesAreLoopbackOnly(t *testing.T) {
 		{http.MethodDelete, "/api/profiles/id"},
 		{http.MethodPut, "/api/settings"},
 		{http.MethodPost, "/api/official/activate"},
+		{http.MethodDelete, "/api/official"},
 		{http.MethodPost, "/api/import"},
 		{http.MethodPost, "/api/models/fetch"},
-		{http.MethodPost, "/api/models/reasoning-efforts"},
 		{http.MethodPost, "/api/connection/test"},
 		{http.MethodGet, "/api/cache-stats"},
 	} {

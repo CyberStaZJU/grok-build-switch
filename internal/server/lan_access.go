@@ -88,8 +88,8 @@ func loopbackOnlyRequest(r *http.Request) bool {
 	if requestPath == "/api/subscription-proxy" || strings.HasPrefix(requestPath, "/api/subscription-proxy/") {
 		return true
 	}
-	if requestPath == "/api/official/activate" || requestPath == "/api/import" ||
-		requestPath == "/api/models/fetch" || requestPath == "/api/models/reasoning-efforts" ||
+	if requestPath == "/api/official/activate" || requestPath == "/api/official" || requestPath == "/api/import" ||
+		requestPath == "/api/models/fetch" ||
 		requestPath == "/api/connection/test" || requestPath == "/api/cache-stats" {
 		return true
 	}

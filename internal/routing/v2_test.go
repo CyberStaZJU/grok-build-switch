@@ -135,6 +135,52 @@ func TestProjectWithSnapshotRepairsInactiveProviderUnsupportedWebSearch(t *testi
 	}
 }
 
+func TestRepairUnsupportedReasoningEffortClampsEmptyMenu(t *testing.T) {
+	snapshot := Snapshot{
+		Version:          CurrentVersion,
+		ActiveProviderID: "cb",
+		Providers:        []Provider{{ID: "cb"}},
+		ModelRoutes: []ModelRoute{{
+			ID: "cb:flash", Name: "deepseek-v4-flash@CodeBuddy / WorkBuddy", ProviderID: "cb",
+		}},
+		ProviderPolicies: map[string]RoutingPolicy{
+			"cb": {Default: "cb:flash", DefaultReasoningEffort: "low"},
+		},
+	}
+	got, changed := RepairUnsupportedReasoningEffort(snapshot)
+	if !changed {
+		t.Fatal("expected empty-menu reasoning repair")
+	}
+	if got.ProviderPolicies["cb"].DefaultReasoningEffort != "none" {
+		t.Fatalf("effort = %q, want none", got.ProviderPolicies["cb"].DefaultReasoningEffort)
+	}
+	if got.Policy.DefaultReasoningEffort != "none" {
+		t.Fatalf("active policy effort = %q, want none", got.Policy.DefaultReasoningEffort)
+	}
+}
+
+func TestRepairUnsupportedReasoningEffortFallsBackInsideMenu(t *testing.T) {
+	snapshot := Snapshot{
+		Version:          CurrentVersion,
+		ActiveProviderID: "one",
+		Providers:        []Provider{{ID: "one"}},
+		ModelRoutes: []ModelRoute{{
+			ID: "one:m", Name: "m", ProviderID: "one",
+			ReasoningEfforts: []string{"medium", "high"},
+		}},
+		ProviderPolicies: map[string]RoutingPolicy{
+			"one": {Default: "one:m", DefaultReasoningEffort: "minimal"},
+		},
+	}
+	got, changed := RepairUnsupportedReasoningEffort(snapshot)
+	if !changed {
+		t.Fatal("expected menu fallback")
+	}
+	if got.ProviderPolicies["one"].DefaultReasoningEffort != "none" {
+		t.Fatalf("effort = %q, want none", got.ProviderPolicies["one"].DefaultReasoningEffort)
+	}
+}
+
 func TestPersistedEqualDetectsInactiveProviderPolicyRepairs(t *testing.T) {
 	left := Snapshot{
 		Version:          CurrentVersion,

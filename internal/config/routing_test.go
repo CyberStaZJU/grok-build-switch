@@ -109,8 +109,6 @@ func TestCurrentMatchesRoutingIgnoresSyntheticProfileKeyOrder(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	// Provider order intentionally differs from the alphabetical route order.
-	// The projected profile derives its aggregate APIKey from z-route, while
-	// TOML import reads a-route first. Only per-model keys are meaningful here.
 	profileList := []profiles.Profile{
 		{
 			ID: "z-provider", Name: "Z", BaseURL: "https://z.example/v1", APIKey: "key-z",
@@ -274,6 +272,53 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestCurrentMatchesRoutingOfficialIgnoresQuoteStyle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	// Double quotes + blank line after [models] — typical Grok-persisted shape.
+	content := `[models]
+default = "grok-4.5"
+default_reasoning_effort = "high"
+web_search = "grok-4.5"
+
+[ui]
+yolo = false
+
+[subagents.models]
+explore = "grok-4.5"
+plan = "grok-4.5"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := routing.Snapshot{
+		Version:          2,
+		ActiveProviderID: routing.OfficialProviderID,
+		Hydrated:         true,
+		ProviderPolicies: map[string]routing.RoutingPolicy{
+			routing.OfficialProviderID: {
+				Official: true, Default: "grok-4.5", DefaultReasoningEffort: "high", WebSearch: "grok-4.5",
+				Subagents: routing.SubagentsPolicy{Explore: "grok-4.5", Plan: "grok-4.5"},
+			},
+		},
+	}
+	matched, err := CurrentMatchesRouting(path, snapshot)
+	if err != nil || !matched {
+		t.Fatalf("quote-style official config should match semantically: matched=%v err=%v", matched, err)
+	}
+	// Leftover custom [model.*] must count as drift for official default.
+	withResidue := content + "\n[model.custom]\nmodel = \"x\"\napi_key = \"k\"\n"
+	if err := os.WriteFile(path, []byte(withResidue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	matched, err = CurrentMatchesRouting(path, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("official config with [model.*] residue must not match")
+	}
 }
 
 func TestApplyOfficialRoutingTextRemovesClearedSubagents(t *testing.T) {

@@ -70,8 +70,8 @@ func TestRoutingDriftUIUsesUnifiedRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
-		"配置与当前模型路由不一致",
-		"路由托管字段与当前模型路由不匹配",
+		"配置与当前默认模型设置不一致",
+		"default / web_search / explore / plan 与 Switch 保存的不一致",
 		"确认并重新应用路由",
 		"保留无关 TOML 设置",
 	} {
@@ -253,9 +253,9 @@ func TestOfficialActivationMessageRespectsSwitchedResult(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		`if (result.switched)`,
-		`official && !profile.logged_in ? "登录"`,
-		`toast("已切换到官方账号。新开 grok 会话生效。", "success")`,
-		`toast("已打开官方登录。完成登录后不会自动启用，请回到此处再次点击“启用”。", "success")`,
+		`!profile.logged_in ? "登录"`,
+		`toast("已将官方模型设为默认；/m 显示官方目录。新开 grok 会话生效。", "success")`,
+		`toast("已打开官方登录。完成登录后不会自动切换，请回到此处再次点击“设为默认”。", "success")`,
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("official activation result handling is missing %q", fragment)
@@ -272,15 +272,26 @@ func TestProviderActivationAndRoutingDropdownContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
-		`profile.is_active ? "disabled" : ""`,
-		`customProviderSwitchWarning(routing.active_provider_id, profile)`,
+		`data-action="activate"`,
+		`设为默认`,
+		`activateCustomProvider(profile, activateButton)`,
 		`officialProviderSwitchWarning(state.status?.active_id)`,
-		`route.api_backend === "responses" && route.supports_backend_search === true`,
-		`id === "routingWebSearch" ? webSearchRoutes : routes`,
-		`const activeProviderID = state.routing?.active_provider_id || ""`,
+		`data-action="delete"`,
+		`/api/official`,
+		`/m 仍混合显示已启用模型`,
 	} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("provider activation/routing contract is missing %q", fragment)
+		}
+	}
+	for _, stale := range []string{
+		"已启用「${profile.name}」",
+		`当前启用的供应商不能删除`,
+		`/m 显示其已启用模型`,
+		`自定义模型目录仍保留`,
+	} {
+		if bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("stale exclusive-enable provider UX remains: %q", stale)
 		}
 	}
 	if bytes.Contains(appData, []byte("登录并启用")) {
@@ -365,31 +376,31 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 			t.Fatalf("profile editor must not duplicate global routing control %s", id)
 		}
 	}
-	for _, id := range []string{"routingDefault", "routingWebSearch", "routingExplore", "routingPlan"} {
-		if control := htmlElementByID(document, id); control == nil || control.Data != "select" {
-			t.Fatalf("global routing select %s not found", id)
+	for _, id := range []string{"routingDefault", "routingWebSearch", "routingExplore", "routingPlan", "navRoutingBtn", "viewRouting"} {
+		if control := htmlElementByID(document, id); control != nil {
+			t.Fatalf("removed routing page control %s must not exist", id)
 		}
 	}
-	if !bytes.Contains(data, []byte("联网搜索、Explore 和 Plan 请在“模型路由”中统一管理")) {
-		t.Fatal("profile editor must direct users to the single routing source of truth")
+	if !bytes.Contains(data, []byte("explore / plan 会跟随它")) {
+		t.Fatal("profile editor must say explore/plan follow the provider default")
 	}
 	appData, err := assets.ReadFile("ui/app.js")
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, expected := range []string{"snapshot.official_models", "snapshot.official_logged_in", "snapshot.active_provider_id", "routingProvider"} {
-		if !bytes.Contains(appData, []byte(expected)) {
-			t.Fatalf("official Grok routing UI behavior missing: %s", expected)
-		}
 	}
 	for _, stale := range []string{`$("webSearchModel")`, `$("subagentsExploreModel")`, `$("subagentsPlanModel")`, `supported.length ? supported : ["low", "medium", "high"]`} {
 		if bytes.Contains(appData, []byte(stale)) {
 			t.Fatalf("profile editor still reads removed or synthetic routing control %s", stale)
 		}
 	}
-	for _, expected := range []string{`route?.supports_reasoning_effort`, `const options = supported.length ? supported : ["none"]`, `select.disabled = supported.length === 0`, `default_reasoning_effort: $("routingReasoningEffort").value || "none"`} {
+	for _, expected := range []string{`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("reasoning capability contract missing: %s", expected)
+		}
+	}
+	for _, stale := range []string{`detectReasoningEfforts`, `/api/models/reasoning-efforts`, `select.disabled = supported.length === 0`} {
+		if bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("stale reasoning probe behavior remains: %s", stale)
 		}
 	}
 }
@@ -408,9 +419,7 @@ func TestFrontendHardeningContracts(t *testing.T) {
 		`attempt > 0 || !csrfRejected(res, data)`,
 		`const confirmed = await customConfirm`,
 		`if (!confirmed) return false`,
-		`user_confirmed_probe: true`,
-		`const options = allowed.length ? allowed : ["none"]`,
-		`const supported = efforts.length ? efforts : ["none"]`,
+		`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`,
 	} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("frontend hardening contract missing: %s", expected)
@@ -422,6 +431,8 @@ func TestFrontendHardeningContracts(t *testing.T) {
 		`const options = allowed.length ? allowed : ["low", "medium", "high"]`,
 		`const supported = efforts.length ? efforts : ["low", "medium", "high"]`,
 		`setReasoningEffortOptions(recommended.length ? recommended : ["low", "medium", "high"]`,
+		`user_confirmed_probe: true`,
+		`/api/models/reasoning-efforts`,
 	} {
 		if bytes.Contains(appData, []byte(stale)) {
 			t.Fatalf("stale frontend behavior remains: %s", stale)
@@ -464,8 +475,8 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 			labels = append(labels, child.FirstChild.Data)
 		}
 	}
-	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-	wantLabels := []string{"禁用推理 (none)", "最小 (minimal)", "低 (low)", "中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max，仅部分模型)"}
+	want := []string{"medium", "high", "xhigh", "max", "none"}
+	wantLabels := []string{"中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max)", "禁用推理 (none)"}
 	if len(values) != len(want) {
 		t.Fatalf("defaultReasoningEffort options = %v, want %v", values, want)
 	}
@@ -480,24 +491,19 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	if !bytes.Contains(appData, []byte(`$("defaultReasoningEffort")`)) {
 		t.Fatal("defaultReasoningEffort client binding not found")
 	}
-	for _, id := range []string{"detectReasoningEffortsBtn", "reasoningEffortStatus"} {
-		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
-			t.Fatalf("%s control not found", id)
-		}
-		if !bytes.Contains(appData, []byte(`$("`+id+`")`)) {
-			t.Fatalf("%s client binding not found", id)
-		}
+	if bytes.Contains(htmlData, []byte(`id="detectReasoningEffortsBtn"`)) || bytes.Contains(appData, []byte("detectReasoningEfforts")) {
+		t.Fatal("detect reasoning efforts control must be removed")
 	}
-	if !bytes.Contains(appData, []byte("/api/models/reasoning-efforts")) {
-		t.Fatal("reasoning effort discovery endpoint not found")
+	if !bytes.Contains(htmlData, []byte(`id="reasoningEffortStatus"`)) {
+		t.Fatal("reasoningEffortStatus hint not found")
 	}
-	for _, fragment := range []string{"fallbackReasoningEffort", "updateRoutingReasoningEfforts", "route.reasoning_efforts", "已按模型能力更新可选档位"} {
+	for _, fragment := range []string{`REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`, "explore / plan 跟随此默认模型"} {
 		if !bytes.Contains(appData, []byte(fragment)) {
-			t.Fatalf("model-aware reasoning effort behavior missing: %s", fragment)
+			t.Fatalf("fixed reasoning effort menu missing: %s", fragment)
 		}
 	}
-	if !bytes.Contains(appData, []byte("上游接受请求，可能静默忽略")) {
-		t.Fatal("accepted reasoning effort disclaimer not found")
+	if bytes.Contains(appData, []byte("/api/models/reasoning-efforts")) || bytes.Contains(appData, []byte("已按模型能力更新可选档位")) {
+		t.Fatal("reasoning effort probe remnants remain")
 	}
 }
 
@@ -575,12 +581,12 @@ func TestSubscriptionProxyPageContract(t *testing.T) {
 			t.Fatalf("client endpoint %s not found", endpoint)
 		}
 	}
-	for _, expected := range []string{"第 1 步：添加订阅账号", "第 2 步：选择模型", "第 3 步：创建 / 更新供应商", "不会自动改变当前路由"} {
+	for _, expected := range []string{"第 1 步：添加订阅账号", "第 2 步：选择模型", "第 3 步：创建 / 更新供应商", "把它的默认模型设成你要给 Grok 用的模型"} {
 		if !bytes.Contains(htmlData, []byte(expected)) {
 			t.Fatalf("subscription workflow guidance missing: %s", expected)
 		}
 	}
-	for _, expected := range []string{"await customConfirm", `JSON.stringify({ provider })`, "已同步；请到“模型路由”选择要使用的模型"} {
+	for _, expected := range []string{"await customConfirm", `JSON.stringify({ provider })`, "已同步；请编辑该供应商并设置默认模型"} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("subscription account/provider behavior missing: %s", expected)
 		}

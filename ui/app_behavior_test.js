@@ -119,10 +119,11 @@ test("SSH filename glob treats question mark as one arbitrary character", () => 
 test("provider switch warnings distinguish custom and official activation", () => {
   const app = loadApp(async () => response(500));
   assert.equal(app.customProviderSwitchWarning("provider-one", { id: "provider-one", name: "One" }), "");
-  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /另一个自定义供应商/);
-  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /Two/);
+  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /default 改为「Two」/);
+  assert.match(app.customProviderSwitchWarning("provider-one", { id: "provider-two", name: "Two" }), /混合显示各供应商已启用的模型/);
   assert.equal(app.officialProviderSwitchWarning("official"), "");
-  assert.match(app.officialProviderSwitchWarning("provider-one"), /移除 config\.toml 中全部自定义模型定义、自定义端点和认证/);
+  assert.match(app.officialProviderSwitchWarning("provider-one"), /默认改为官方 Grok 模型/);
+  assert.match(app.officialProviderSwitchWarning("provider-one"), /只显示官方目录/);
 });
 
 test("web search dropdown routes require responses backend and backend search support", () => {
@@ -152,12 +153,12 @@ test("routing drift banner distinguishes config mismatch and routing repair", ()
   app.setStatus({ config_matches_routing: false, active_routing: { repair_required: false } });
   app.renderDrift();
   assert.equal(banner.hidden, false);
-  assert.match(detail.textContent, /路由托管字段/);
+  assert.match(detail.textContent, /default \/ web_search \/ explore \/ plan/);
   assert.match(detail.textContent, /保留无关 TOML 设置/);
 
   app.setStatus({ config_matches_routing: true, active_routing: { repair_required: true } });
   app.renderDrift();
-  assert.match(title.textContent, /保存的模型路由需要修复/);
+  assert.match(title.textContent, /保存的默认模型设置需要修复/);
   assert.match(detail.textContent, /模型引用已过期/);
 
   app.setStatus({ config_matches_routing: false, active_routing: { repair_required: true } });

@@ -1,6 +1,6 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、产品边界与技术债。最后更新：2026-08-04。
+> 当前状态、产品边界与技术债。最后更新：2026-08-18（官方 default 保留全目录）。
 
 ---
 
@@ -10,7 +10,7 @@
 
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
 - **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。
-- **统一模型路由**：事务性更新 `config.toml` 和 `routing.json`，覆盖 default、web_search、explore 与 plan。
+- **供应商默认模型写入路由**：在供应商编辑页设置 default 模型与推理强度；保存后事务性更新 `config.toml` 与 `routing.json`。explore / plan 跟随该 default（无独立「模型路由」页）。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。
 - **配置编辑**：查看、校验和编辑 Grok CLI 的 `~/.grok/config.toml`。
@@ -38,13 +38,13 @@
 
 ### 2.1 单一启用供应商与路由切换
 
-`routing.json` 当前使用 schema v2：保存唯一 `active_provider_id`，并为每个供应商分别记忆 default、web_search、explore、plan 与默认推理强度。存在供应商时不能全部关闭；官方账号作为特殊供应商参与互斥启用，但不与自定义认证混用。
+`routing.json` 当前使用 schema v2：保存唯一 `active_provider_id`，并为每个供应商分别记忆 default、web_search、explore、plan 与默认推理强度。自定义供应商默认全部进入混合路由目录，不必再逐个启用。官方账号仍是互斥特例，但不与自定义认证混用。产品 UI 已去掉独立「模型路由」页：保存供应商时把其默认模型写入 Grok `default`，并强制 explore / plan 跟随；推理强度固定为 medium / high / xhigh / max / none。
 
-- v1 按 default 路由所属供应商确定启用项；跨供应商的 web_search、explore 与 plan 会分别迁移到其路由所属供应商的策略记忆，不改变启用项。
-- 自定义供应商之间切换时，`config.toml` 保留全部自定义模型定义，旧会话固定的旧别名仍可解析；四类当前路由只能来自启用供应商。
-- 切换官方账号会移除自定义模型定义与认证；浏览器界面在执行前明确提示兼容性影响。
-- 每个供应商再次启用时恢复自己上次保存的路由策略。
-- 启用供应商不能直接删除，必须先启用另一个供应商。
+- v1 按 default 路由所属供应商确定启用项；跨供应商的 web_search、explore 与 plan 会分别迁移到其路由所属供应商的策略记忆。
+- `config.toml` 保留全部自定义模型定义；web_search 仍由后端在具备能力时选用或修复。
+- `/m` 混合显示各供应商已启用的模型（例如 CodeBuddy 只贡献 hy3/flash，反代仍可见）；官方 default 时清除自定义 `[model.*]`（档案仍在）。
+- 可删除任一自定义供应商（含当前 default 所属）；也可删除官方登录（清除 `auth.json` 并回落到自定义 default）。
+- 首页「设为默认」只改 default / effort，不收缩其他供应商的已启用模型。
 
 路由修改执行以下事务：
 

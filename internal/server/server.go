@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -190,10 +191,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/profiles/", s.handleProfileByID)
 	mux.HandleFunc("/api/official/activate", s.handleOfficialActivate)
+	mux.HandleFunc("/api/official", s.handleOfficial)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/models/fetch", s.handleFetchModels)
-	mux.HandleFunc("/api/models/reasoning-efforts", s.handleReasoningEfforts)
 	mux.HandleFunc("/api/connection/test", s.handleConnectionTest)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/config/preview", s.handleConfigPreview)
@@ -388,6 +389,35 @@ func (s *Server) handleOfficialActivate(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) handleOfficial(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w)
+		return
+	}
+	authPath := filepath.Join(s.Paths.GrokHome, "auth.json")
+	if err := os.Remove(authPath); err != nil && !os.IsNotExist(err) {
+		writeError(w, fmt.Errorf("删除官方登录凭据失败: %w", err), http.StatusInternalServerError)
+		return
+	}
+	if s.Routing != nil && s.Profiles != nil {
+		s.routingMu.Lock()
+		stored, storedErr := s.Routing.Snapshot()
+		profileList, listErr := s.Profiles.List()
+		var applyErr error
+		if storedErr == nil && listErr == nil && (stored.IsOfficial() || stored.ActiveProviderID == routing.OfficialProviderID) {
+			stored.ActiveProviderID = ""
+			_, applyErr = s.applyRoutingSnapshotTransaction(profileList, stored)
+		}
+		s.routingMu.Unlock()
+		if applyErr != nil {
+			writeError(w, fmt.Errorf("已删除官方登录，但回落到自定义路由失败: %w", applyErr), http.StatusInternalServerError)
+			return
+		}
+	}
+	s.changed()
+	writeJSON(w, map[string]any{"ok": true, "message": "已删除官方账号登录"})
+}
+
 type profilePublicModelDTO struct {
 	Name                    string   `json:"name"`
 	Model                   string   `json:"model"`
@@ -580,7 +610,7 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		s.routingMu.Lock()
 		created, err := s.Profiles.Create(profile)
 		if err == nil && s.Routing != nil {
-			err = s.applyCurrentRoutingLocked()
+			err = s.adoptProfileDefaultLocked(created)
 		}
 		s.routingMu.Unlock()
 		if err != nil {
@@ -637,7 +667,7 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err := s.Profiles.Update(id, profile)
 		if err == nil && s.Routing != nil {
-			err = s.applyCurrentRoutingLocked()
+			err = s.adoptProfileDefaultLocked(updated)
 		}
 		if err != nil && previousErr == nil {
 			if rollbackErr := s.Profiles.Restore(previous); rollbackErr != nil {
@@ -657,15 +687,6 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, updated)
 	case http.MethodDelete:
 		s.routingMu.Lock()
-		if s.Routing != nil {
-			if stored, snapshotErr := s.Routing.Snapshot(); snapshotErr == nil {
-				if provider, ok := stored.Provider(stored.ActiveProviderID); ok && provider.ProfileID == id {
-					s.routingMu.Unlock()
-					writeError(w, fmt.Errorf("当前启用的供应商不能删除；请先启用另一个供应商"), http.StatusConflict)
-					return
-				}
-			}
-		}
 		previous, previousErr := s.Profiles.Get(id)
 		err := s.Profiles.Delete(id)
 		deleted := err == nil
@@ -898,189 +919,6 @@ func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		s.changed()
 	}
 	writeJSON(w, map[string]any{"models": models})
-}
-
-type reasoningEffortProbeResult struct {
-	Effort string `json:"effort"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
-
-type reasoningEffortsResponse struct {
-	Efforts []string                     `json:"efforts"`
-	Source  string                       `json:"source"`
-	Note    string                       `json:"note"`
-	Results []reasoningEffortProbeResult `json:"results,omitempty"`
-}
-
-var reasoningEffortOrder = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
-
-func (s *Server) handleReasoningEfforts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w)
-		return
-	}
-	var req struct {
-		ProfileID          string `json:"profile_id"`
-		BaseURL            string `json:"base_url"`
-		APIKey             string `json:"api_key"`
-		UpstreamFormat     string `json:"upstream_format"`
-		Model              string `json:"model"`
-		APIBackend         string `json:"api_backend"`
-		UserConfirmedProbe bool   `json:"user_confirmed_probe"`
-	}
-	if err := decodeManagementJSON(w, r, &req); err != nil {
-		writeError(w, err, http.StatusBadRequest)
-		return
-	}
-	var profile profiles.Profile
-	if req.ProfileID != "" && s.Profiles != nil {
-		if stored, err := s.Profiles.Get(req.ProfileID); err == nil {
-			profile = stored
-			if req.BaseURL == "" {
-				req.BaseURL = stored.BaseURL
-			}
-			if req.APIKey == "" {
-				req.APIKey = stored.EffectiveAPIKey()
-			}
-			if req.UpstreamFormat == "" {
-				req.UpstreamFormat = stored.UpstreamFormat
-			}
-		}
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		writeError(w, fmt.Errorf("model is required"), http.StatusBadRequest)
-		return
-	}
-	for _, def := range profile.Models {
-		if def.Model != model && def.Name != model {
-			continue
-		}
-		if req.BaseURL == "" {
-			req.BaseURL = def.BaseURL
-		}
-		if req.APIKey == "" {
-			req.APIKey = def.APIKey
-		}
-		if req.APIBackend == "" {
-			req.APIBackend = def.APIBackend
-		}
-		if def.SupportsReasoningEffort && def.ReasoningEffortsSource == "declared" {
-			if efforts := normalizeReasoningEfforts(def.ReasoningEfforts); len(efforts) > 0 {
-				writeJSON(w, reasoningEffortsResponse{Efforts: efforts, Source: "declared", Note: "使用 Profile 中该模型声明的推理强度，未向上游发送探测请求。"})
-				return
-			}
-		}
-		break
-	}
-	backend := req.APIBackend
-	if backend == "" {
-		backend = profiles.APIBackendForUpstreamFormat(req.UpstreamFormat)
-	}
-	if backend == "messages" {
-		writeJSON(w, reasoningEffortsResponse{Efforts: []string{}, Source: "unknown", Note: "messages 后端没有可安全通用探测的 reasoning_effort 字段，未发送探测请求。"})
-		return
-	}
-	if strings.TrimSpace(req.BaseURL) == "" {
-		writeError(w, fmt.Errorf("base_url is required"), http.StatusBadRequest)
-		return
-	}
-	if err := rejectOfficialAnthropic(req.BaseURL); err != nil {
-		writeError(w, err, http.StatusBadRequest)
-		return
-	}
-	if !req.UserConfirmedProbe {
-		writeError(w, fmt.Errorf("需要明确确认后才能发送推理强度探测请求"), http.StatusBadRequest)
-		return
-	}
-	client := &http.Client{Timeout: 12 * time.Second}
-	results := make([]reasoningEffortProbeResult, 0, len(reasoningEffortOrder))
-	accepted := make([]string, 0, len(reasoningEffortOrder))
-	for _, effort := range reasoningEffortOrder {
-		result := probeReasoningEffort(r.Context(), client, req.BaseURL, req.APIKey, backend, model, effort)
-		results = append(results, result)
-		if result.Status == "accepted" {
-			accepted = append(accepted, effort)
-		}
-	}
-	source := "probe"
-	if len(accepted) == 0 {
-		source = "unknown"
-	}
-	writeJSON(w, reasoningEffortsResponse{Efforts: accepted, Source: source, Note: "accepted 仅表示上游接受了请求；上游仍可能静默忽略 reasoning_effort。", Results: results})
-}
-
-func normalizeReasoningEfforts(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	for _, value := range values {
-		seen[strings.ToLower(strings.TrimSpace(value))] = true
-	}
-	out := make([]string, 0, len(reasoningEffortOrder))
-	for _, effort := range reasoningEffortOrder {
-		if seen[effort] {
-			out = append(out, effort)
-		}
-	}
-	return out
-}
-
-func probeReasoningEffort(ctx context.Context, client *http.Client, baseURL, apiKey, backend, model, effort string) reasoningEffortProbeResult {
-	result := reasoningEffortProbeResult{Effort: effort, Status: "unknown"}
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	body := map[string]any{"model": model, "reasoning_effort": effort}
-	endpoint := baseURL + "/chat/completions"
-	if backend == "responses" {
-		endpoint = baseURL + "/responses"
-		body["input"] = "ping"
-		body["max_output_tokens"] = 1
-	} else {
-		body["messages"] = []map[string]string{{"role": "user", "content": "ping"}}
-		body["max_tokens"] = 1
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		result.Error = "无法编码探测请求"
-		return result
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		result.Error = "无法创建探测请求"
-		return result
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("x-api-key", apiKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		result.Error = "上游网络请求失败或超时"
-		return result
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		result.Status = "accepted"
-		return result
-	}
-	message := strings.TrimSpace(string(raw))
-	if apiKey != "" {
-		message = strings.ReplaceAll(message, apiKey, "[REDACTED]")
-	}
-	lower := strings.ToLower(message)
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
-		(strings.Contains(lower, "unsupported") || strings.Contains(lower, "invalid") || strings.Contains(lower, "unknown")) &&
-		(strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning effort") || strings.Contains(lower, "effort")) {
-		result.Status = "unsupported"
-	}
-	if message == "" {
-		result.Error = resp.Status
-	} else {
-		result.Error = fmt.Sprintf("%s: %s", resp.Status, message)
-	}
-	return result
 }
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {

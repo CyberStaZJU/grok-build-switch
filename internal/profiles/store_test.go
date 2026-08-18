@@ -114,7 +114,7 @@ func TestCreateIDGenerationFailureLeavesBytesUnchanged(t *testing.T) {
 
 func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
-	created, err := store.Create(Profile{Name: "kimi", DefaultReasoningEffort: "low", Models: []ModelDef{{Name: "kimi", Model: "kimi", SupportsReasoningEffort: true, ReasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, ReasoningEffortsSource: "declared"}}})
+	created, err := store.Create(Profile{Name: "kimi", DefaultReasoningEffort: "medium", Models: []ModelDef{{Name: "kimi", Model: "kimi", SupportsReasoningEffort: true, ReasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, ReasoningEffortsSource: "declared"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
 func TestStoreRejectsUnsupportedDefaultReasoningEffort(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
 	_, err := store.Create(Profile{
-		Name: "strict", DefaultModel: "m", DefaultReasoningEffort: "xhigh",
-		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"low", "medium", "high"}, ReasoningEffortsSource: "declared"}},
+		Name: "strict", DefaultModel: "m", DefaultReasoningEffort: "low",
+		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"medium", "high"}, ReasoningEffortsSource: "declared"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
 		t.Fatalf("Create() error = %v", err)
@@ -252,16 +252,16 @@ func TestUpdateValidationFailureLeavesBytesUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profiles.json")
 	store := NewStore(path)
 	created, err := store.Create(Profile{
-		Name: "before", DefaultModel: "m", DefaultReasoningEffort: "low",
-		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"low"}}},
+		Name: "before", DefaultModel: "m", DefaultReasoningEffort: "none",
+		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"medium"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := readBytes(t, path)
 	_, err = store.Update(created.ID, Profile{
-		ID: "client-replacement", Name: "invalid", DefaultModel: "m", DefaultReasoningEffort: "high",
-		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"low"}}},
+		ID: "client-replacement", Name: "invalid", DefaultModel: "m", DefaultReasoningEffort: "low",
+		Models: []ModelDef{{Name: "m", Model: "m", ReasoningEfforts: []string{"medium"}}},
 	})
 	if err == nil {
 		t.Fatal("Update() accepted invalid profile")

@@ -139,7 +139,7 @@ func TestRepairPolicyClearsInvalidWebSearch(t *testing.T) {
 	}
 }
 
-func TestProjectWithPolicyRejectsCrossProviderSubagents(t *testing.T) {
+func TestProjectWithPolicyAllowsCrossProviderSubagents(t *testing.T) {
 	source := []profiles.Profile{
 		{ID: "p1", Name: "Responses", DefaultModel: "main", Models: []profiles.ModelDef{{Name: "main", Model: "main", APIBackend: "responses", SupportsBackendSearch: true}}},
 		{ID: "p2", Name: "ChatCompletions", DefaultModel: "sub", Models: []profiles.ModelDef{{Name: "sub", Model: "sub", APIBackend: "chat_completions"}}},
@@ -148,8 +148,8 @@ func TestProjectWithPolicyRejectsCrossProviderSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.ActivePolicy().Subagents.Explore != "" || snapshot.ActivePolicy().Subagents.Plan != "" {
-		t.Fatalf("cross-provider subagent routes survived: %#v", snapshot.ActivePolicy())
+	if snapshot.ActivePolicy().Subagents.Explore == "" || snapshot.ActivePolicy().Subagents.Plan == "" {
+		t.Fatalf("cross-provider subagent routes should be preserved: %#v", snapshot.ActivePolicy())
 	}
 }
 

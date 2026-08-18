@@ -26,20 +26,20 @@
 
 普通 Profile 用于基础连接和常用模型选择。
 
-## 5. 配置统一模型路由
+## 5. 设置默认模型与推理强度
 
-在模型路由页面分别选择：
+当前版本不再提供独立「模型路由」页。`/m` 混合显示各供应商**已启用**的模型。
 
-- default；
-- web_search；
-- explore；
-- plan。
+在首页点「设为默认」，或在供应商编辑页选择：
 
-保存后，应用会校验选择并更新 `~/.grok/config.toml`。如写入失败，应确认原配置仍可解析，并检查 Profile、模型和文件权限。
+- **默认模型**（写入 Grok `default`；explore / plan 会跟随它）；
+- **推理强度**（medium / high / xhigh / max / none）；并在该供应商的模型卡片上声明支持推理强度，否则 `/m` 无法选档。
+
+「设为默认」只改新会话默认，不会把其他供应商的已启用模型从 `/m` 拿掉。保存后更新 `~/.grok/config.toml` 与 `routing.json`。
 
 ## 6. Max Collaboration（已移除）
 
-当前版本已从模型路由页移除 Max Collaboration。它与 Grok Build 日常用法不适配，不再作为产品入口。请只用上一节的 default / web_search / explore / plan。
+当前版本不再提供 Max Collaboration 入口。它与 Grok Build 日常用法不适配。日常任务请使用供应商编辑页里的默认模型与推理强度。
 
 以下旧步骤仅作追溯。
 
@@ -105,7 +105,7 @@ Max Collaboration 曾是 Grok Build 配置预设，不是 Switch 内部的 agent
 1. 打开订阅代理管理；
 2. 按受支持流程登录订阅账号；
 3. 确认代理状态正常；
-4. 在统一模型路由中选择代理提供的模型。
+4. 在对应供应商编辑页把代理提供的模型设为默认模型。
 
 订阅代理账号、令牌和凭据是保留数据，不属于已移除能力的旧记录清理范围。
 

@@ -164,8 +164,8 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 			return ref, nil
 		}
 		route, ok := currentStored.Route(ref)
-		if !ok || route.ProviderID != activeProviderID {
-			return "", fmt.Errorf("模型 %q 不属于当前供应商", ref)
+		if !ok {
+			return "", fmt.Errorf("模型 %q 不存在", ref)
 		}
 		return route.ID, nil
 	}
@@ -230,6 +230,7 @@ func (s *Server) handleRoutingPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
+	hydrated = applyFollowDefaultSubagents(hydrated)
 	if err := validateActiveWebSearch(hydrated); err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -319,6 +320,8 @@ func (s *Server) applyCurrentRoutingLocked() error {
 	if err != nil {
 		return err
 	}
+	stored, _ = routing.RepairUnsupportedWebSearch(stored)
+	stored, _ = routing.RepairUnsupportedReasoningEffort(stored)
 	_, err = s.applyRoutingSnapshotTransaction(profileList, stored)
 	return err
 }
@@ -359,6 +362,7 @@ func (s *Server) applyRoutingSnapshotTransaction(profileList []profiles.Profile,
 	if err != nil {
 		return routing.Snapshot{}, err
 	}
+	hydrated = applyFollowDefaultSubagents(hydrated)
 	if err := validateActiveWebSearch(hydrated); err != nil {
 		return routing.Snapshot{}, err
 	}
@@ -527,6 +531,64 @@ func (s *Server) routingDTO(snapshot routing.Snapshot) routingSnapshotDTO {
 	}
 }
 
+func (s *Server) adoptProfileDefaultLocked(profile profiles.Profile) error {
+	if s.Routing == nil {
+		return nil
+	}
+	list, err := s.Profiles.List()
+	if err != nil {
+		return err
+	}
+	stored, err := s.Routing.Snapshot()
+	if err != nil {
+		return err
+	}
+	projected := routing.Project(list)
+	if _, ok := projected.Provider(profile.ID); !ok {
+		return s.applyCurrentRoutingLocked()
+	}
+	defaultRef := ""
+	for _, route := range projected.ModelRoutes {
+		if route.ProviderID != profile.ID {
+			continue
+		}
+		if defaultRef == "" {
+			defaultRef = route.ID
+		}
+		if route.ProfileModel == profile.DefaultModel {
+			defaultRef = route.ID
+			break
+		}
+	}
+	policy := stored.ProviderPolicies[profile.ID]
+	if defaultRef != "" {
+		policy.Default = defaultRef
+	}
+	if strings.TrimSpace(profile.DefaultReasoningEffort) != "" {
+		policy.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	}
+	if stored.ProviderPolicies == nil {
+		stored.ProviderPolicies = map[string]routing.RoutingPolicy{}
+	}
+	stored.ActiveProviderID = profile.ID
+	stored.ProviderPolicies[profile.ID] = policy
+	_, err = s.applyRoutingSnapshotTransaction(list, stored)
+	return err
+}
+
+func applyFollowDefaultSubagents(snapshot routing.Snapshot) routing.Snapshot {
+	policy := routing.FollowDefaultSubagents(snapshot.ActivePolicy())
+	if snapshot.ActiveProviderID != "" {
+		if snapshot.ProviderPolicies == nil {
+			snapshot.ProviderPolicies = map[string]routing.RoutingPolicy{}
+		}
+		snapshot.ProviderPolicies[snapshot.ActiveProviderID] = policy
+	}
+	snapshot.Policy = policy
+	snapshot.Policy.Official = snapshot.IsOfficial()
+	return snapshot
+}
+
 func validateActiveWebSearch(snapshot routing.Snapshot) error {
 	policy := snapshot.ActivePolicy()
 	if snapshot.IsOfficial() || strings.TrimSpace(policy.WebSearch) == "" {
@@ -545,37 +607,10 @@ func validateActiveWebSearch(snapshot routing.Snapshot) error {
 func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {
 	policy := snapshot.ActivePolicy()
 	effort := strings.TrimSpace(policy.DefaultReasoningEffort)
-	if effort == "" || effort == "none" {
+	if profiles.IsCanonicalReasoningEffort(effort) {
 		return nil
 	}
-	if snapshot.IsOfficial() {
-		for _, model := range defaultOfficialRoutingModels {
-			if model.Name == policy.Default {
-				if containsReasoningEffort(model.ReasoningEfforts, effort) {
-					return nil
-				}
-				return fmt.Errorf("官方模型 %q 不支持推理强度 %q；可用档位：%s", model.Name, effort, strings.Join(model.ReasoningEfforts, "、"))
-			}
-		}
-		return fmt.Errorf("官方默认模型 %q 不可用", policy.Default)
-	}
-	route, ok := snapshot.Route(policy.Default)
-	if !ok {
-		return fmt.Errorf("默认路由模型 %q 不可用", policy.Default)
-	}
-	if containsReasoningEffort(route.ReasoningEfforts, effort) {
-		return nil
-	}
-	return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", route.Name, effort, strings.Join(route.ReasoningEfforts, "、"))
-}
-
-func containsReasoningEffort(efforts []string, target string) bool {
-	for _, effort := range efforts {
-		if effort == target {
-			return true
-		}
-	}
-	return false
+	return fmt.Errorf("不支持推理强度 %q；可用档位：%s", effort, strings.Join(profiles.CanonicalReasoningEfforts, "、"))
 }
 
 func validateOfficialRoutingPolicy(policy routing.RoutingPolicy) error {

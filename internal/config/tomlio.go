@@ -79,6 +79,8 @@ func UseOfficialAuthToFile(path string) error {
 	return atomicWrite(path, next)
 }
 
+// UseOfficialAuthText removes custom [model.*] and globals that would hijack
+// official Grok auth, so /m shows the official catalog for the official default.
 func UseOfficialAuthText(data []byte) []byte {
 	data = trimUTF8BOM(data)
 	lines := splitLines(string(data))
@@ -104,7 +106,7 @@ func UseOfficialAuthText(data []byte) []byte {
 			// Drop legacy default_model; keep enabled and other user keys.
 			out = append(out, removeAssignments(lines[i:end], "default_model")...)
 		case "subagents.models":
-			// Drop switch-managed type model pins so official auth is clean.
+			// Drop switch-managed type model pins so official pins can be rewritten.
 			out = append(out, removeAssignments(lines[i:end], "explore", "plan")...)
 		default:
 			out = append(out, lines[i:end]...)

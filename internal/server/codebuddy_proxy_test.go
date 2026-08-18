@@ -76,7 +76,21 @@ func TestEnsureCodeBuddyProviderActivatesHy3Default(t *testing.T) {
 }
 
 func TestCodeBuddyProxyModelsLoopback(t *testing.T) {
-	s := &Server{ActualPort: 1}
+	dir := t.TempDir()
+	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	created, err := profileStore.Create(profiles.Profile{
+		Name: codebuddy.ProfileName, Source: codebuddy.SourceTag, APIKey: "ck_proxy",
+		BaseURL: "http://127.0.0.1:1/codebuddy-proxy/v1", DefaultModel: "hy3",
+		Models: []profiles.ModelDef{
+			{Name: "hy3", Model: "hy3"},
+			{Name: "deepseek-v4-flash", Model: "deepseek-v4-flash"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = created
+	s := &Server{ActualPort: 1, Profiles: profileStore}
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/codebuddy-proxy/v1/models", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	rr := httptest.NewRecorder()
@@ -88,9 +102,36 @@ func TestCodeBuddyProxyModelsLoopback(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
+	// Add a second provider that also enables deepseek-v4-flash so the proxy
+	// must advertise the @CodeBuddy alias instead of a bare duplicate id.
+	if _, err := profileStore.Create(profiles.Profile{
+		Name: "DeepSeek", APIKey: "ds", BaseURL: "https://api.deepseek.com", DefaultModel: "deepseek-v4-flash",
+		Models: []profiles.ModelDef{{Name: "deepseek-v4-flash", Model: "deepseek-v4-flash"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1/codebuddy-proxy/v1/models", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr = httptest.NewRecorder()
+	s.handleCodeBuddyProxy(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
 	data, _ := body["data"].([]any)
-	if len(data) == 0 {
-		t.Fatal("expected models")
+	if len(data) != 2 {
+		t.Fatalf("proxy advertised %d models, want 2 subset: %#v", len(data), data)
+	}
+	ids := map[string]bool{}
+	for _, item := range data {
+		row, _ := item.(map[string]any)
+		id, _ := row["id"].(string)
+		ids[id] = true
+	}
+	if !ids["hy3"] || !ids["deepseek-v4-flash@CodeBuddy / WorkBuddy"] || ids["deepseek-v4-flash"] || ids["hy3-preview"] {
+		t.Fatalf("proxy catalog = %#v, want aliased deepseek + bare hy3 only", ids)
 	}
 }
 
@@ -233,5 +274,34 @@ func TestProfileUpdatePreservesCodeBuddySource(t *testing.T) {
 	}
 	if got.Source != codebuddy.SourceTag {
 		t.Fatalf("source cleared on UI update: %q", got.Source)
+	}
+	// Startup/ensure must not recreate the full KnownModels catalog.
+	trimmed := got
+	trimmed.Models = []profiles.ModelDef{
+		{Name: "hy3", Model: "hy3", BaseURL: got.BaseURL, APIKey: "ck_preserve", APIBackend: "chat_completions"},
+		{Name: "deepseek-v4-flash", Model: "deepseek-v4-flash", BaseURL: got.BaseURL, APIKey: "ck_preserve", APIBackend: "chat_completions"},
+	}
+	trimmed.AvailableModels = []string{"hy3", "deepseek-v4-flash"}
+	trimmed.DefaultModel = "hy3"
+	trimmed.DefaultReasoningEffort = "max"
+	if _, err := profileStore.Update(created.ID, trimmed); err != nil {
+		t.Fatal(err)
+	}
+	ensured, err := s.EnsureCodeBuddyProvider("ck_preserve", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ensured.Models) != 2 {
+		t.Fatalf("ensure expanded models to %d: %#v", len(ensured.Models), ensured.Models)
+	}
+	names := map[string]bool{}
+	for _, model := range ensured.Models {
+		names[model.Name] = true
+		if !model.SupportsReasoningEffort || len(model.ReasoningEfforts) == 0 {
+			t.Fatalf("ensure dropped reasoning metadata: %#v", model)
+		}
+	}
+	if !names["hy3"] || !names["deepseek-v4-flash"] {
+		t.Fatalf("ensure lost user subset: %#v", ensured.Models)
 	}
 }

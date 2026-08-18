@@ -61,6 +61,39 @@ func TestRoutingGETIncludesOfficialModelsWhenLoggedIn(t *testing.T) {
 	}
 }
 
+func TestOfficialDeleteRemovesAuthAndLeavesCustomRouting(t *testing.T) {
+	s := newRoutingTestServer(t)
+	if err := os.MkdirAll(s.Paths.GrokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(s.Paths.GrokHome, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"type":"xai","access_token":"delete-me"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleOfficial(response, loopbackRequest(http.MethodDelete, "/api/official", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Fatalf("auth.json still present: %v", err)
+	}
+	after, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ActiveProviderID == routing.OfficialProviderID {
+		t.Fatal("official routing remained active after delete")
+	}
+	if before.ActiveProviderID != routing.OfficialProviderID && after.ActiveProviderID == "" && before.ActiveProviderID != "" {
+		t.Fatalf("custom routing was cleared unexpectedly: before=%q after=%q", before.ActiveProviderID, after.ActiveProviderID)
+	}
+}
+
 func TestOfficialActivateWithoutLoginLeavesStateUnchanged(t *testing.T) {
 	s := newRoutingTestServer(t)
 	beforeConfig, err := os.ReadFile(s.Switcher.ConfigPath)
@@ -306,7 +339,7 @@ func TestRoutingGETExposesExplicitSpeedRelationships(t *testing.T) {
 	standard := "subscription/codex/gpt-5.6-terra"
 	profile, err := s.Profiles.Create(profiles.Profile{
 		Name: "Trusted Codex", Source: "subscription-proxy:codex", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1",
-		DefaultModel: standard, DefaultReasoningEffort: "low",
+		DefaultModel: standard, DefaultReasoningEffort: "medium",
 		Models: []profiles.ModelDef{
 			{Name: standard, Model: standard, SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard, SupportsReasoningEffort: true, ReasoningEfforts: []string{"low"}, ReasoningEffortsSource: "declared"},
 			{Name: standard + "-fast", Model: standard + "-fast", SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard, SupportsReasoningEffort: true, ReasoningEfforts: []string{"low"}, ReasoningEffortsSource: "declared"},
@@ -511,8 +544,8 @@ func TestRoutingPolicyPUTCanClearSubagentRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Policy.Subagents.Explore != "" || stored.Policy.Subagents.Plan != "" {
-		t.Fatalf("subagent routes were not cleared: %#v", stored.Policy.Subagents)
+	if stored.Policy.Subagents.Explore != stored.Policy.Default || stored.Policy.Subagents.Plan != stored.Policy.Default {
+		t.Fatalf("explore/plan should follow default, got %#v default=%q", stored.Policy.Subagents, stored.Policy.Default)
 	}
 }
 
@@ -586,7 +619,6 @@ func TestRoutingPolicySwitchesProvidersAndKeepsCombinedConfig(t *testing.T) {
 	if stored.Policy.Default != wantDefault.Name {
 		t.Fatalf("default = %q, want route %#v", stored.Policy.Default, wantDefault)
 	}
-	// Verify routing config matches.
 	_, hydrated, routingErr := s.currentRouting()
 	if routingErr != nil {
 		t.Fatal(routingErr)
@@ -606,7 +638,7 @@ func TestRoutingPolicySwitchesProvidersAndKeepsCombinedConfig(t *testing.T) {
 	}
 }
 
-func TestProfileDeleteRejectsActiveProvider(t *testing.T) {
+func TestProfileDeleteAllowsActiveProvider(t *testing.T) {
 	s := newRoutingTestServer(t)
 	stored, err := s.Routing.Snapshot()
 	if err != nil {
@@ -616,11 +648,27 @@ func TestProfileDeleteRejectsActiveProvider(t *testing.T) {
 	if !ok {
 		t.Fatal("active provider missing")
 	}
-	request := loopbackRequest(http.MethodDelete, "/api/profiles/"+provider.ProfileID, "")
+	deletedID := provider.ProfileID
+	request := loopbackRequest(http.MethodDelete, "/api/profiles/"+deletedID, "")
 	response := httptest.NewRecorder()
 	s.handleProfileByID(response, request)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "先启用另一个供应商") {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if _, err := s.Profiles.Get(deletedID); !os.IsNotExist(err) {
+		t.Fatalf("deleted profile still readable: %v", err)
+	}
+	after, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ActiveProviderID == stored.ActiveProviderID {
+		t.Fatal("active provider still points at deleted profile")
+	}
+	if after.ActiveProviderID != "" {
+		if _, ok := after.Provider(after.ActiveProviderID); !ok {
+			t.Fatalf("fallback active provider %q missing", after.ActiveProviderID)
+		}
 	}
 }
 
@@ -764,7 +812,7 @@ func TestRoutingPolicyPUTRejectsUnsupportedReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := loopbackRequest(http.MethodPut, "/api/routing/policy", `{"default":"`+catalog.ModelRoutes[0].Name+`","default_reasoning_effort":"xhigh"}`)
+	request := loopbackRequest(http.MethodPut, "/api/routing/policy", `{"default":"`+catalog.ModelRoutes[0].Name+`","default_reasoning_effort":"low"}`)
 	response := httptest.NewRecorder()
 	s.handleRoutingPolicy(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "不支持推理强度") {

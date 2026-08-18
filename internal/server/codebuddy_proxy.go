@@ -24,16 +24,20 @@ func (s *Server) handleCodeBuddyProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "仅允许本机访问", http.StatusForbidden)
 		return
 	}
-	// Resolve fallback key from the managed profile if the client omitted auth.
+	// Resolve fallback key and advertised ids (with @Provider when names clash).
 	fallback := ""
+	var offers []codebuddy.ModelOffer
 	if s.Profiles != nil {
 		if list, err := s.Profiles.List(); err == nil {
-			if profile, ok := selectCodeBuddyProfile(list); ok && strings.TrimSpace(profile.APIKey) != "" {
-				fallback = profile.APIKey
+			if profile, ok := selectCodeBuddyProfile(list); ok {
+				if strings.TrimSpace(profile.APIKey) != "" {
+					fallback = profile.APIKey
+				}
+				offers = codeBuddyModelOffers(profile, list)
 			}
 		}
 	}
-	h := &codebuddy.Handler{FallbackKey: fallback}
+	h := &codebuddy.Handler{FallbackKey: fallback, Offers: offers}
 	h.ServeHTTP(w, r)
 }
 
@@ -63,6 +67,9 @@ func (s *Server) EnsureCodeBuddyRoutes() error {
 			}
 			if profile.Models[i].StreamToolCalls == nil || *profile.Models[i].StreamToolCalls {
 				profile.Models[i].StreamToolCalls = profiles.BoolPtr(false)
+				profileChanged = true
+			}
+			if codebuddyEnsureReasoning(&profile.Models[i]) {
 				profileChanged = true
 			}
 		}
@@ -126,6 +133,20 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	if existing, ok := selectCodeBuddyProfile(list); ok {
 		desired.ID = existing.ID
 		desired.CreatedAt = existing.CreatedAt
+		// Keep the user-edited enabled model subset (e.g. only hy3 + flash).
+		// Startup ensure must not recreate the full KnownModels catalog.
+		if len(existing.Models) > 0 {
+			desired.Models = restampCodeBuddyModels(existing.Models, baseURL, apiKey)
+			desired.AvailableModels = codeBuddyModelNames(desired.Models)
+			if codeBuddyHasModel(desired.Models, existing.DefaultModel) && strings.TrimSpace(opts.DefaultModel) == "" {
+				desired.DefaultModel = existing.DefaultModel
+			} else if !codeBuddyHasModel(desired.Models, desired.DefaultModel) {
+				desired.DefaultModel = desired.Models[0].Name
+			}
+			if effort := strings.TrimSpace(existing.DefaultReasoningEffort); effort != "" {
+				desired.DefaultReasoningEffort = effort
+			}
+		}
 		updated, updateErr := s.Profiles.Update(existing.ID, desired)
 		if updateErr != nil {
 			return profiles.Profile{}, updateErr
@@ -169,16 +190,24 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	if err != nil {
 		return profile, err
 	}
-	defaultRef := profile.ID + ":" + defaultModel
+	activeDefault := strings.TrimSpace(profile.DefaultModel)
+	if activeDefault == "" {
+		activeDefault = defaultModel
+	}
+	defaultRef := profile.ID + ":" + activeDefault
 	stored.ActiveProviderID = profile.ID
 	if stored.ProviderPolicies == nil {
 		stored.ProviderPolicies = map[string]routing.RoutingPolicy{}
 	}
 	// Clean default-only policy for this provider; web_search is not supported.
-	stored.ProviderPolicies[profile.ID] = routing.RoutingPolicy{
+	policy := routing.RoutingPolicy{
 		Default:          defaultRef,
 		WebSearchCapable: false,
 	}
+	if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" {
+		policy.DefaultReasoningEffort = effort
+	}
+	stored.ProviderPolicies[profile.ID] = policy
 	if _, err := s.applyRoutingSnapshotTransaction(profileList, stored); err != nil {
 		return profile, err
 	}
@@ -248,6 +277,112 @@ func sortCodeBuddyProfilesByCreated(list []profiles.Profile) {
 		}
 		return ti.Before(tj)
 	})
+}
+
+func codebuddyEnsureReasoning(model *profiles.ModelDef) bool {
+	if model == nil {
+		return false
+	}
+	changed := false
+	if !model.SupportsReasoningEffort {
+		model.SupportsReasoningEffort = true
+		changed = true
+	}
+	if len(model.ReasoningEfforts) == 0 {
+		model.ReasoningEfforts = append([]string(nil), profiles.CanonicalReasoningEfforts...)
+		changed = true
+	}
+	if strings.TrimSpace(model.ReasoningEffortsSource) == "" || model.ReasoningEffortsSource == "default" {
+		model.ReasoningEffortsSource = "declared"
+		changed = true
+	}
+	return changed
+}
+
+func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) []profiles.ModelDef {
+	out := make([]profiles.ModelDef, 0, len(models))
+	for _, model := range models {
+		next := model
+		next.BaseURL = baseURL
+		next.APIKey = apiKey
+		if strings.TrimSpace(next.APIBackend) == "" {
+			next.APIBackend = "chat_completions"
+		}
+		codebuddyEnsureReasoning(&next)
+		if next.StreamToolCalls == nil || *next.StreamToolCalls {
+			next.StreamToolCalls = profiles.BoolPtr(false)
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func codeBuddyModelNames(models []profiles.ModelDef) []string {
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			name = strings.TrimSpace(model.Model)
+		}
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// codeBuddyModelOffers builds /v1/models ids that match routing/config aliases
+// so Grok /m does not also show a bare duplicate like "deepseek-v4-flash".
+func codeBuddyModelOffers(profile profiles.Profile, all []profiles.Profile) []codebuddy.ModelOffer {
+	nameCounts := map[string]int{}
+	for _, item := range all {
+		for _, model := range profiles.Normalize(item).Models {
+			local := strings.TrimSpace(model.Name)
+			if local == "" {
+				local = strings.TrimSpace(model.Model)
+			}
+			if local != "" {
+				nameCounts[local]++
+			}
+		}
+	}
+	providerName := strings.TrimSpace(profile.Name)
+	if providerName == "" {
+		providerName = codebuddy.ProfileName
+	}
+	offers := make([]codebuddy.ModelOffer, 0, len(profile.Models))
+	for _, model := range profile.Models {
+		local := strings.TrimSpace(model.Name)
+		if local == "" {
+			local = strings.TrimSpace(model.Model)
+		}
+		upstream := strings.TrimSpace(model.Model)
+		if upstream == "" {
+			upstream = local
+		}
+		if local == "" || upstream == "" {
+			continue
+		}
+		id := local
+		if nameCounts[local] > 1 {
+			id = local + "@" + providerName
+		}
+		offers = append(offers, codebuddy.ModelOffer{ID: id, Upstream: upstream})
+	}
+	return offers
+}
+
+func codeBuddyHasModel(models []profiles.ModelDef, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, model := range models {
+		if strings.TrimSpace(model.Name) == name || strings.TrimSpace(model.Model) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadCodeBuddyAPIKey resolves a key from env, managed profile, or optional

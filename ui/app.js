@@ -27,9 +27,9 @@ let toastTimer = null;
 let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
 let subscriptionLoginBusy = false;
-const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"];
 const REASONING_EFFORT_LABELS = {
-  none: "禁用推理 (none)", minimal: "最小 (minimal)", low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max，仅部分模型)",
+  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", none: "禁用推理 (none)",
 };
 
 function normalizeReasoningEffort(effort) {
@@ -131,14 +131,14 @@ function renderDrift() {
   const title = $("driftTitle");
   const detail = $("driftDetail");
   if (configMismatch && repairRequired) {
-    if (title) title.textContent = "配置与保存的模型路由都需要修复";
-    if (detail) detail.textContent = "config.toml 的路由托管字段不匹配，且保存的模型引用已过期；重新应用会修复引用并保留无关 TOML 设置。";
+    if (title) title.textContent = "配置与保存的默认模型设置都需要修复";
+    if (detail) detail.textContent = "config.toml 的托管字段不匹配，且保存的模型引用已过期；重新应用会修复引用并保留无关 TOML 设置。";
   } else if (repairRequired) {
-    if (title) title.textContent = "保存的模型路由需要修复";
-    if (detail) detail.textContent = "部分模型引用已过期；重新应用会按当前供应商目录修复路由记录，并保留无关 TOML 设置。";
+    if (title) title.textContent = "保存的默认模型设置需要修复";
+    if (detail) detail.textContent = "部分模型引用已过期；重新应用会按当前供应商目录修复，并保留无关 TOML 设置。";
   } else {
-    if (title) title.textContent = "配置与当前模型路由不一致";
-    if (detail) detail.textContent = "config.toml 的路由托管字段与当前模型路由不匹配；重新应用会保留无关 TOML 设置。";
+    if (title) title.textContent = "配置与当前默认模型设置不一致";
+    if (detail) detail.textContent = "config.toml 里的 default / web_search / explore / plan 与 Switch 保存的不一致；重新应用会保留无关 TOML 设置。";
   }
 }
 
@@ -261,13 +261,13 @@ function customPrompt(message, defaultValue) {
 }
 
 function customProviderSwitchWarning(currentProviderID, targetProvider) {
-  if (!currentProviderID || currentProviderID === targetProvider.id || currentProviderID === OFFICIAL_PROVIDER_KEY) return "";
-  return `当前启用的是另一个自定义供应商。切换到「${targetProvider.name}」会立即改写 default、web_search、Explore 和 Plan；旧会话固定的自定义模型别名仍会保留。是否继续？`;
+  if (!currentProviderID || currentProviderID === targetProvider.id) return "";
+  return `将把 Grok 的 default 改为「${targetProvider.name}」的默认模型；explore / plan 会跟随。/m 仍混合显示各供应商已启用的模型。是否继续？`;
 }
 
 function officialProviderSwitchWarning(currentProviderID) {
   if (!currentProviderID || currentProviderID === OFFICIAL_PROVIDER_KEY) return "";
-  return "切换到官方账号会立即移除 config.toml 中全部自定义模型定义、自定义端点和认证。切回自定义供应商时会从 Profile 重建目录，但当前自定义路由会被官方路由替换。是否继续？";
+  return "将把默认改为官方 Grok 模型；/m 将只显示官方目录，自定义 [model.*] 会从当前 config 移除（供应商档案仍保留）。是否继续？";
 }
 
 function capableWebSearchRoutes(routes, official = false) {
@@ -438,7 +438,6 @@ function showView(name) {
   const home = $("viewHome");
   const edit = $("viewEdit");
   const settings = $("viewSettings");
-  const routing = $("viewRouting");
   const subscriptionProxy = $("viewSubscriptionProxy");
   const codeBuddy = $("viewCodeBuddy");
   const ssh = $("viewSSH");
@@ -453,10 +452,6 @@ function showView(name) {
   if (settings) {
     settings.hidden = name !== "settings";
     settings.style.display = name === "settings" ? "" : "none";
-  }
-  if (routing) {
-    routing.hidden = name !== "routing";
-    routing.style.display = name === "routing" ? "" : "none";
   }
   if (subscriptionProxy) {
     subscriptionProxy.hidden = name !== "subscriptionProxy";
@@ -478,7 +473,6 @@ function showView(name) {
   if ($("headerSubtitle")) {
     $("headerSubtitle").textContent =
       name === "settings" ? "设置"
-        : name === "routing" ? "模型路由"
           : name === "subscriptionProxy" ? "订阅代理"
             : name === "codeBuddy" ? "CodeBuddy"
               : name === "ssh" ? "SSH 远程文件"
@@ -491,9 +485,6 @@ function showView(name) {
   }
   if (name === "ssh") {
     loadSSHConnections().catch((err) => toast(err.message, "error"));
-  }
-  if (name === "routing") {
-    loadRoutingView().catch(() => {});
   }
   if (name === "subscriptionProxy") {
     loadSubscriptionProxy().catch((err) => toast(err.message, "error"));
@@ -600,29 +591,25 @@ function renderProfiles() {
 				</div>
 				<div class="providerFlags">
 					${profile.pinned ? '<span class="pinBadge">已置顶</span>' : ""}
-					${profile.is_active ? '<span class="badge">当前启用</span>' : ""}
+					${profile.is_active ? `<span class="badge">${official ? "官方默认" : "当前默认"}</span>` : ""}
 				</div>
 			</div>
 			<div class="providerActions">
 				<button type="button" class="btn sm ghost" data-action="pin">${profile.pinned ? "取消置顶" : "置顶"}</button>
-        <button type="button" class="btn sm primary" data-action="activate" ${profile.is_active ? "disabled" : ""}>${official && !profile.logged_in ? "登录" : profile.is_active ? "已启用" : "启用"}</button>
-				${official ? "" : '<button type="button" class="btn sm" data-action="edit">编辑</button><button type="button" class="btn sm ghost" data-action="copy">复制</button><button type="button" class="btn sm ghost" data-action="export">导出</button><button type="button" class="btn sm danger" data-action="delete">删除</button>'}
+        <button type="button" class="btn sm primary" data-action="activate" ${profile.is_active ? "disabled" : ""}>${official ? (!profile.logged_in ? "登录" : profile.is_active ? "已是默认" : "设为默认") : (profile.is_active ? "已是默认" : "设为默认")}</button>
+				${official ? "" : '<button type="button" class="btn sm" data-action="edit">编辑</button><button type="button" class="btn sm ghost" data-action="copy">复制</button><button type="button" class="btn sm ghost" data-action="export">导出</button>'}
+        ${(official && profile.logged_in) || !official ? '<button type="button" class="btn sm danger" data-action="delete">删除</button>' : ""}
 			</div>
 		`;
 
 		el.querySelector('[data-action="pin"]').onclick = () => toggleProviderPin(profile.key);
-    el.querySelector('[data-action="activate"]').onclick = () => {
-      const activateButton = el.querySelector('[data-action="activate"]');
-      if (official) return activateOfficial(activateButton);
-      return run(async () => {
-        const routing = await api("/api/routing");
-        const warning = customProviderSwitchWarning(routing.active_provider_id, profile);
-        if (warning && !(await customConfirm(warning, { okLabel: "确认切换" }))) return false;
-        const policy = routing.provider_policies?.[profile.id] || {};
-        await api("/api/routing/policy", { method: "PUT", body: JSON.stringify({ active_provider_id: profile.id, ...policy }) });
-        await refreshAll();
-      }, { button: activateButton, busyLabel: "启用中…", success: `已启用「${profile.name}」` });
-    };
+    const activateButton = el.querySelector('[data-action="activate"]');
+    if (activateButton) {
+      activateButton.onclick = () => {
+        if (official) return activateOfficial(activateButton);
+        return activateCustomProvider(profile, activateButton);
+      };
+    }
 		bindProviderDrag(el, profile.key);
 
 		if (!official) {
@@ -633,7 +620,9 @@ function renderProfiles() {
 				$("name").focus();
 			};
 			el.querySelector('[data-action="export"]').onclick = () => exportProfile(profile);
-			const deleteBtn = el.querySelector('[data-action="delete"]');
+		}
+    const deleteBtn = el.querySelector('[data-action="delete"]');
+    if (deleteBtn) {
 			let deleteConfirmTimer = 0;
 			deleteBtn.onclick = () => {
 				if (deleteBtn.dataset.confirmDelete !== "1") {
@@ -650,10 +639,14 @@ function renderProfiles() {
 				}
 				clearTimeout(deleteConfirmTimer);
 				run(async () => {
-					await api(`/api/profiles/${profile.id}`, { method: "DELETE" });
+          if (official) {
+            await api("/api/official", { method: "DELETE" });
+          } else {
+					  await api(`/api/profiles/${profile.id}`, { method: "DELETE" });
+          }
 					await refreshAll();
 					showView("home");
-				}, { button: deleteBtn, busyLabel: "删除中…", success: "已删除" });
+				}, { button: deleteBtn, busyLabel: "删除中…", success: official ? "已删除官方登录" : "已删除" });
 			};
 		}
 
@@ -722,10 +715,26 @@ async function reorderProviderCards(sourceKey, targetKey) {
 	}, { success: "卡片顺序已保存" });
 }
 
+async function activateCustomProvider(profile, button) {
+  await run(async () => {
+    const routing = await api("/api/routing");
+    const warning = customProviderSwitchWarning(routing.active_provider_id, profile);
+    if (warning && !(await customConfirm(warning, { okLabel: "设为默认" }))) return false;
+    const policy = routing.provider_policies?.[profile.id] || {};
+    const body = { active_provider_id: profile.id };
+    if (policy.default) body.default = policy.default;
+    if (policy.default_reasoning_effort) body.default_reasoning_effort = policy.default_reasoning_effort;
+    if (policy.web_search) body.web_search = policy.web_search;
+    await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(body) });
+    await refreshAll();
+    showView("home");
+  }, { button, busyLabel: "应用中…", success: `已将「${profile.name}」设为默认；/m 仍混合显示已启用模型` });
+}
+
 async function activateOfficial(button) {
   const warning = state.status?.official_logged_in ? officialProviderSwitchWarning(state.status?.active_id) : "";
   if (warning) {
-    const confirmed = await customConfirm(warning, { okLabel: "切换到官方", danger: true });
+    const confirmed = await customConfirm(warning, { okLabel: "设为默认" });
     if (!confirmed) return;
   }
 	await run(async () => {
@@ -733,14 +742,14 @@ async function activateOfficial(button) {
 		await refreshAll();
 		showView("home");
 		if (result.switched) {
-			toast("已切换到官方账号。新开 grok 会话生效。", "success");
+			toast("已将官方模型设为默认；/m 显示官方目录。新开 grok 会话生效。", "success");
 		} else {
-			toast("已打开官方登录。完成登录后不会自动启用，请回到此处再次点击“启用”。", "success");
+			toast("已打开官方登录。完成登录后不会自动切换，请回到此处再次点击“设为默认”。", "success");
 		}
 		return false;
 	}, {
 		button,
-		busyLabel: state.status?.official_logged_in ? "切换中…" : "登录中…",
+		busyLabel: state.status?.official_logged_in ? "应用中…" : "登录中…",
 	});
 }
 
@@ -789,7 +798,7 @@ function openEdit(profile) {
 
 function fillForm(profile) {
   $("formTitle").textContent = profile.id ? "编辑供应商" : "添加供应商";
-  $("formHint").textContent = profile.id ? "修改供应商信息后保存；实际使用的模型由“模型路由”统一管理" : "名称、服务地址与 API Key 即可开始；保存后到“模型路由”选择要使用的模型";
+  $("formHint").textContent = profile.id ? "修改后保存，会把该供应商的默认模型写入 Grok default；explore / plan 跟随它" : "名称、服务地址与 API Key 即可开始；保存后用这里的默认模型作为 Grok default";
   $("profileId").value = profile.id || "";
   $("name").value = profile.name || "";
   $("baseUrl").value = profile.base_url || "";
@@ -975,100 +984,26 @@ function fallbackReasoningEffort(efforts) {
   return efforts[0] || "";
 }
 
-function setReasoningEffortOptions(supported = REASONING_EFFORTS, statuses = {}) {
+function setReasoningEffortOptions() {
   const select = $("defaultReasoningEffort");
   if (!select) return;
-  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "";
-  const allowed = unique(supported.filter((effort) => REASONING_EFFORTS.includes(effort)));
-  const options = allowed.length ? allowed : ["none"];
-  select.replaceChildren(...options.map((effort) => {
+  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "none";
+  select.replaceChildren(...REASONING_EFFORTS.map((effort) => {
     const option = document.createElement("option");
     option.value = effort;
-    const suffix = statuses[effort] === "accepted" ? " — 已检测" : "";
-    option.textContent = `${REASONING_EFFORT_LABELS[effort]}${suffix}`;
+    option.textContent = REASONING_EFFORT_LABELS[effort];
     return option;
   }));
-  select.value = options.includes(current) ? current : fallbackReasoningEffort(options);
+  select.value = current;
 }
 
 function updateReasoningEffortMetadata() {
   const status = $("reasoningEffortStatus");
-  if (!status) return;
-  status.classList.remove("ok", "warn", "fail");
-  const selected = $("defaultModel")?.value || "";
-  const card = defaultModelCard();
-  const efforts = card ? JSON.parse(card.dataset.reasoningEfforts || "[]") : [];
-  const supported = efforts.length ? efforts : ["none"];
-  setReasoningEffortOptions(supported);
-  if (!selected) {
-    status.textContent = "选择默认模型后，将按该模型能力显示推理档位。";
-  } else if (efforts.length) {
-    status.textContent = `当前模型可用档位：${supported.join("、")}。`;
-    status.classList.add("ok");
-  } else {
-    status.textContent = "模型未声明推理能力，默认禁用；如需探测，请点击检测并确认会向上游发送最多 6 个最小请求。";
-  }
-}
-
-async function detectReasoningEfforts() {
-  const current = readForm();
-  if (!current.default_model) throw new Error("请先选择默认模型");
-  const card = defaultModelCard();
-  const model = card?.querySelector('[data-field="model"]')?.value.trim() || current.default_model;
-  const baseURL = card?.modelDraft?.base_url || current.base_url;
-  const apiBackend = card?.modelDraft?.api_backend || apiBackendFor(current.upstream_format);
-  const confirmed = await customConfirm(`将向 ${baseURL || "上游服务"} 为模型 ${model} 发送最多 6 个最小请求，逐项探测 reasoning_effort。是否继续？`, {
-    okLabel: "发送最多 6 个探测请求",
-  });
-  if (!confirmed) return false;
-  const requestContext = `${current.id}\n${current.default_model}\n${model}\n${baseURL}\n${apiBackend}`;
-  const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "正在发送最多 6 个最小请求检测支持档位…";
+    status.textContent = "可选：medium、high、xhigh、max、none。explore / plan 跟随此默认模型。";
   }
-  try {
-    const data = await api("/api/models/reasoning-efforts", {
-      method: "POST",
-      body: JSON.stringify({
-        profile_id: current.id, base_url: baseURL, api_key: current.api_key,
-        upstream_format: current.upstream_format, model, api_backend: apiBackend,
-        user_confirmed_probe: true,
-      }),
-    });
-    const latest = readForm();
-    const latestCard = defaultModelCard();
-    const latestModel = latestCard?.querySelector('[data-field="model"]')?.value.trim() || latest.default_model;
-    const latestBaseURL = latestCard?.modelDraft?.base_url || latest.base_url;
-    const latestBackend = latestCard?.modelDraft?.api_backend || apiBackendFor(latest.upstream_format);
-    if (`${latest.id}\n${latest.default_model}\n${latestModel}\n${latestBaseURL}\n${latestBackend}` !== requestContext) return false;
-    const statuses = Object.fromEntries((data.results || []).map((item) => [item.effort, item.status]));
-    const recommended = data.source === "declared"
-      ? (data.efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort))
-      : (data.results || []).filter((item) => item.status === "accepted").map((item) => item.effort);
-    if (recommended.length && latestCard) {
-      latestCard.dataset.reasoningEfforts = JSON.stringify(recommended);
-      latestCard.dataset.reasoningEffortsSource = data.source === "declared" ? "declared" : "probe";
-    }
-    setReasoningEffortOptions(recommended.length ? recommended : ["none"], statuses);
-    const details = data.source === "declared"
-      ? [`模型明确声明支持：${recommended.join("、") || "未提供档位"}`]
-      : (data.results || []).map((item) => {
-      if (item.status === "accepted") return `${item.effort}：上游接受请求，可能静默忽略`;
-      if (item.status === "unsupported") return `${item.effort}：不支持`;
-      return `${item.effort}：未知`;
-    });
-    if (status) {
-      status.textContent = [details.join("；"), data.note].filter(Boolean).join("。") || "检测完成，已按模型能力更新可选档位。";
-      status.classList.add(recommended.length ? "ok" : "warn");
-    }
-  } catch (err) {
-    if (status) {
-      status.textContent = `检测失败：${err.message || String(err)}；继续使用模型已保存的能力档位。`;
-      status.classList.add("fail");
-    }
-    throw err;
-  }
+  setReasoningEffortOptions();
 }
 
 function syncEnabledModelList(preferredDefault) {
@@ -1410,7 +1345,7 @@ function renderSubscriptionProxy(data) {
   });
   const readyProviders = [...accountProviders].filter((provider) => selectedProviders.has(provider));
   $("subscriptionProviderHint").textContent = readyProviders.length
-    ? `可同步：${readyProviders.map((provider) => provider === "gemini" ? "Gemini" : provider === "grok" ? "Grok" : "Codex").join("、")}。创建后请到“模型路由”选择模型。`
+    ? `可同步：${readyProviders.map((provider) => provider === "gemini" ? "Gemini" : provider === "grok" ? "Grok" : "Codex").join("、")}。创建后到供应商里设置默认模型即可。`
     : "请先完成账号登录，并为对应类型勾选和保存至少一个模型。";
   bindSubscriptionDynamicHandlers();
   if (data?.login_session) renderSubscriptionLoginSession(data.login_session);
@@ -1453,7 +1388,7 @@ function renderCodeBuddy(data) {
   if ($("codeBuddyActionHint")) {
     $("codeBuddyActionHint").textContent = status.active
       ? `当前 default 模型：${status.default_model || "hy3"}。新开 grok 会话生效。`
-      : "保存并启用后，可在「模型路由」确认 active provider 与 default。";
+      : "保存后会把这里选择的模型写成 Grok default。";
   }
 
   const models = Array.isArray(status.models) && status.models.length
@@ -2014,7 +1949,7 @@ async function saveSSHConnection() {
 // Navigation
 $("navHomeBtn").onclick = () => showView("home");
 $("navSettingsBtn").onclick = () => showView("settings");
-$("navRoutingBtn").onclick = () => showView("routing");
+
 $("navSubscriptionProxyBtn").onclick = () => showView("subscriptionProxy");
 if ($("navCodeBuddyBtn")) $("navCodeBuddyBtn").onclick = () => showView("codeBuddy");
 $("navSSHBtn").onclick = () => showView("ssh");
@@ -2120,7 +2055,7 @@ document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => button
   await refreshAll();
   await loadSubscriptionProxy();
   const profile = result?.providers?.[0];
-  toast(`${profile?.name || "订阅代理供应商"}已同步；请到“模型路由”选择要使用的模型`, "success");
+  toast(`${profile?.name || "订阅代理供应商"}已同步；请编辑该供应商并设置默认模型`, "success");
 }, { button, busyLabel: "同步中…" }));
 $("runSubscriptionDiagnosticsBtn").onclick = () => run(async () => { const result = await api("/api/subscription-proxy/diagnostics", { method: "POST" }); $("subscriptionDiagnostics").textContent = JSON.stringify(result, null, 2); }, { button: $("runSubscriptionDiagnosticsBtn"), busyLabel: "诊断中…" });
 $("backFromEditBtn").onclick = () => showView("home");
@@ -2161,7 +2096,7 @@ $("reapplyBtn").onclick = () => run(async () => {
 }, {
   button: $("reapplyBtn"),
   busyLabel: "重新应用中…",
-  success: "当前模型路由已重新应用",
+  success: "当前默认模型设置已重新应用",
 });
 $("openConfigFromDriftBtn").onclick = () => showView("settings");
 
@@ -2219,9 +2154,6 @@ if ($("layoutListBtn")) {
 // Edit form
 $("cancelBtn").onclick = () => fillForm(newProfileDraft());
 $("upstreamFormat").onchange = syncModelBackends;
-$("detectReasoningEffortsBtn").onclick = () => run(detectReasoningEfforts, {
-  button: $("detectReasoningEffortsBtn"), busyLabel: "检测中…",
-});
 $("copyProfileBtn").onclick = () => {
   const current = readForm();
   if (!current.name && !current.base_url) {
@@ -2377,131 +2309,6 @@ document.addEventListener("keydown", (event) => {
     showView("home");
   }
 });
-
-// ——— Routing View ———
-
-function routeCapabilityLabel(route = {}) {
-  const efforts = Array.isArray(route.reasoning_efforts) ? route.reasoning_efforts : [];
-  if (!route.supports_reasoning_effort && !efforts.length) return "无推理档位";
-  if (!efforts.length) return "支持推理";
-  return efforts.join(" / ");
-}
-
-async function loadRoutingView() {
-  const routingStatus = $("routingStatus");
-  const catalog = $("routingCatalog");
-  if (routingStatus) routingStatus.textContent = "加载中…";
-  if (catalog) catalog.innerHTML = '<p class="muted tiny">加载中…</p>';
-  const routingSnapshot = await api("/api/routing");
-  renderRouting(routingSnapshot);
-}
-
-function renderRouting(snapshot) {
-  if (!snapshot) return;
-  // Provider selection replaces the old opt.dataset.official mixed catalog.
-  // updateRoutingReasoningEfforts is now scoped inside renderProviderPolicy.
-  state.routing = snapshot;
-  const providers = snapshot.providers || [];
-  const activeProviderID = snapshot.active_provider_id || "";
-  const providerSelect = $("routingProvider");
-  providerSelect.replaceChildren();
-  if (snapshot.official_logged_in) {
-    const option = document.createElement("option");
-    option.value = OFFICIAL_PROVIDER_KEY;
-    option.textContent = "官方账号（grok.com）";
-    providerSelect.append(option);
-  }
-  for (const provider of providers) {
-    const option = document.createElement("option");
-    option.value = provider.id;
-    option.textContent = provider.name;
-    providerSelect.append(option);
-  }
-  providerSelect.value = activeProviderID;
-
-  const renderProviderPolicy = (providerID) => {
-    const official = providerID === OFFICIAL_PROVIDER_KEY;
-    const policy = snapshot.provider_policies?.[providerID] || (providerID === activeProviderID ? snapshot.policy : {}) || {};
-    const routes = official ? (snapshot.official_models || []) : (snapshot.model_routes || []).filter((route) => route.provider_id === providerID);
-    const webSearchRoutes = capableWebSearchRoutes(routes, official);
-    const warning = $("routingCompatibilityWarning");
-    warning.hidden = false;
-    warning.textContent = official
-      ? "切换到官方账号会移除 config.toml 中的自定义模型定义和自定义认证；切回自定义供应商时会从 Profile 目录重建完整自定义模型目录。"
-      : "只允许从当前供应商选择 default、web_search、explore 和 plan。切换自定义供应商时，config.toml 仍保留所有自定义模型定义，以兼容旧会话固定的旧别名。";
-    const values = { routingDefault: policy.default || "", routingWebSearch: policy.web_search || "", routingExplore: policy.subagents?.explore || "", routingPlan: policy.subagents?.plan || "" };
-    for (const [id, value] of Object.entries(values)) {
-      const select = $(id);
-      select.innerHTML = id === "routingDefault" ? "" : '<option value="">（未设置）</option>';
-      const selectRoutes = id === "routingWebSearch" ? webSearchRoutes : routes;
-      for (const route of selectRoutes) {
-        const option = document.createElement("option");
-        option.value = route.id;
-        option.dataset.routeName = route.name;
-        option.textContent = `${route.name} — ${route.model || route.profile_model}`;
-        select.append(option);
-      }
-      select.value = value;
-    }
-    const updateEfforts = () => {
-      const route = routes.find((item) => item.id === $("routingDefault").value);
-      const supported = route?.supports_reasoning_effort ? (route.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort) && effort !== "none") : [];
-      const options = supported.length ? supported : ["none"];
-      const select = $("routingReasoningEffort");
-      select.disabled = supported.length === 0;
-      select.replaceChildren(...options.map((effort) => { const option = document.createElement("option"); option.value = effort; option.textContent = REASONING_EFFORT_LABELS[effort]; return option; }));
-      select.value = options.includes(policy.default_reasoning_effort) ? policy.default_reasoning_effort : fallbackReasoningEffort(options);
-    };
-    $("routingDefault").onchange = updateEfforts;
-    updateEfforts();
-  };
-  providerSelect.onchange = () => {
-    renderProviderPolicy(providerSelect.value);
-    if (providerSelect.value !== activeProviderID) {
-    } else {
-    }
-  };
-  renderProviderPolicy(activeProviderID);
-
-  const modelRoutes = snapshot.model_routes || [];
-  $("routingStatus").textContent = `更新于 ${snapshot.updated_at ? new Date(snapshot.updated_at).toLocaleTimeString("zh-CN") : "—"} · ${providers.length} 个自定义供应商 · ${modelRoutes.length} 个模型`;
-  $("routingModelCount").textContent = `${modelRoutes.length} 个`;
-  const byProvider = {};
-  for (const route of modelRoutes) (byProvider[route.provider_id] ||= []).push(route);
-  $("routingCatalog").innerHTML = modelRoutes.length ? Object.entries(byProvider).map(([providerID, routes]) => {
-    const provider = providers.find((item) => item.id === providerID);
-    return `<section class="routingCatalogGroup"><div class="routingCatalogHead"><strong>${escapeHtml(provider?.name || providerID)}</strong><span class="muted tiny">${routes.length} 个模型</span></div><div class="routingCatalogModels">${routes.map((route) => `<div class="routingCatalogModel"><div class="routingCatalogModelInfo"><strong>${escapeHtml(route.name)}</strong><code>${escapeHtml(route.model)}</code><span class="muted tiny">backend: ${escapeHtml(route.api_backend || "")}</span></div><div class="routingCatalogModelMeta">${route.supports_backend_search ? '<span class="badge active">搜索</span>' : '<span class="badge">无搜索</span>'}${route.supports_reasoning_effort ? `<span class="badge ${false ? "active" : ""}">${escapeHtml(routeCapabilityLabel(route))}</span>` : ""}</div></div>`).join("")}</div></section>`;
-  }).join("") : '<div class="routingUnavailable"><strong>暂无可用模型</strong><p>请先添加至少一个包含模型的供应商。</p></div>';
-}
-
-function saveRoutingPolicy() {
-  const providerID = $("routingProvider").value;
-  const payload = {
-    active_provider_id: providerID,
-    default: $("routingDefault").value,
-    default_reasoning_effort: $("routingReasoningEffort").value || "none",
-    web_search: $("routingWebSearch").value,
-    subagents: { explore: $("routingExplore").value, plan: $("routingPlan").value },
-  };
-  run(async () => {
-    const activeProviderID = state.routing?.active_provider_id || "";
-    if (providerID !== activeProviderID) {
-      const provider = state.routing?.providers?.find((item) => item.id === providerID);
-      const warning = providerID === OFFICIAL_PROVIDER_KEY
-        ? officialProviderSwitchWarning(activeProviderID)
-        : customProviderSwitchWarning(activeProviderID, provider || { id: providerID, name: providerID });
-      if (warning && !(await customConfirm(warning, { okLabel: providerID === OFFICIAL_PROVIDER_KEY ? "切换到官方" : "确认切换", danger: providerID === OFFICIAL_PROVIDER_KEY }))) return false;
-    }
-    await api("/api/routing/policy", { method: "PUT", body: JSON.stringify(payload) });
-    await refreshAll();
-    await loadRoutingView();
-  }, { button: $("saveRoutingPolicyBtn"), busyLabel: "保存中…", success: "已启用供应商并保存其路由策略" });
-}
-
-// ——— Routing Event Handlers ———
-$("refreshRoutingBtn").onclick = () => run(loadRoutingView, { button: $("refreshRoutingBtn"), busyLabel: "刷新中…" });
-$("backFromRoutingBtn").onclick = () => showView("home");
-$("saveRoutingPolicyBtn").onclick = () => saveRoutingPolicy();
 
 showView("home");
 refreshAll().catch((err) => toast(err.message, "error"));

@@ -101,16 +101,19 @@ func (c *darwinTrayProviderClient) snapshot(ctx context.Context) (routingSnapsho
 		return routingSnapshot{}, err
 	}
 
-	models := make([]routingModel, 0, len(routingResp.ModelRoutes))
+	// Menu catalog mirrors /m: official models when official, else all enabled custom routes.
+	models := make([]routingModel, 0, len(routingResp.ModelRoutes)+len(routingResp.OfficialModels))
 	if status.OfficialActive {
 		for _, m := range routingResp.OfficialModels {
 			models = append(models, routingModel{ID: m.ID, Name: m.Name})
 		}
 	} else {
 		for _, m := range routingResp.ModelRoutes {
-			if m.ProviderID == routingResp.ActiveProviderID {
-				models = append(models, routingModel{ID: m.ID, Name: m.Name})
+			name := m.Name
+			if strings.TrimSpace(name) == "" {
+				name = m.ID
 			}
+			models = append(models, routingModel{ID: m.ID, Name: name})
 		}
 	}
 

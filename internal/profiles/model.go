@@ -170,25 +170,34 @@ func ValidateModelVariants(p Profile) error {
 	return nil
 }
 
-// ValidateDefaultReasoningEffort ensures the profile-level default is accepted
-// by the selected default model. Grok Build treats each model's advertised
-// reasoning menu as authoritative rather than accepting every canonical tier.
+// CanonicalReasoningEfforts is the fixed user-facing menu. Models no longer
+// advertise a probed subset; upstream may silently ignore an unsupported tier.
+var CanonicalReasoningEfforts = []string{"medium", "high", "xhigh", "max", "none"}
+
+// IsCanonicalReasoningEffort reports whether effort is empty or one of the
+// fixed menu values.
+func IsCanonicalReasoningEffort(effort string) bool {
+	effort = strings.TrimSpace(effort)
+	if effort == "" {
+		return true
+	}
+	for _, item := range CanonicalReasoningEfforts {
+		if item == effort {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateDefaultReasoningEffort ensures the profile-level default is one of
+// the fixed menu values. Per-model advertised menus are metadata only.
 func ValidateDefaultReasoningEffort(p Profile) error {
 	p = Normalize(p)
 	effort := strings.TrimSpace(p.DefaultReasoningEffort)
-	if effort == "" || effort == "none" || strings.TrimSpace(p.DefaultModel) == "" {
+	if IsCanonicalReasoningEffort(effort) {
 		return nil
 	}
-	for _, model := range p.Models {
-		if model.Name != p.DefaultModel && model.Model != p.DefaultModel {
-			continue
-		}
-		if containsString(model.ReasoningEfforts, effort) || (model.SupportsReasoningEffort && len(model.ReasoningEfforts) == 0) {
-			return nil
-		}
-		return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", p.DefaultModel, effort, strings.Join(model.ReasoningEfforts, "、"))
-	}
-	return fmt.Errorf("默认模型 %q 不在已启用模型列表中", p.DefaultModel)
+	return fmt.Errorf("不支持推理强度 %q；可用档位：%s", effort, strings.Join(CanonicalReasoningEfforts, "、"))
 }
 
 // ValidateEndpoints rejects Profiles that would route Grok directly to an

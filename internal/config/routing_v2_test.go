@@ -10,7 +10,7 @@ import (
 	"grok_switch/internal/routing"
 )
 
-func TestCustomSwitchKeepsCombinedDefinitionsAndClearsOptionalKeys(t *testing.T) {
+func TestCustomSwitchKeepsCombinedEnabledDefinitions(t *testing.T) {
 	items := []profiles.Profile{
 		{ID: "one", Name: "One", DefaultModel: "a", BaseURL: "https://one.example/v1", APIKey: "one-key", Models: []profiles.ModelDef{{Name: "a", Model: "upstream-a"}}},
 		{ID: "two", Name: "Two", DefaultModel: "b", BaseURL: "https://two.example/v1", APIKey: "two-key", Models: []profiles.ModelDef{{Name: "b", Model: "upstream-b"}}},

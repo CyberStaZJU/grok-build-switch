@@ -68,7 +68,7 @@ Browser management UI / Wails / macOS menu bar
 |:---|:---|
 | 官方 Grok CLI | 使用官方登录流程，验证登录状态并应用官方模型路由 |
 | 普通 Profile | 管理供应商、Base URL、API Key、上游格式和常用模型 |
-| 统一模型路由 | 管理 default、web_search、explore 和 plan |
+| 供应商默认模型 | 在供应商编辑页设置 default 与推理强度；explore / plan 跟随（无独立路由页） |
 | 用量观察 | 聚合近期 prompt/cached/completion/reasoning token、turn 和缓存命中率；不推算美元成本 |
 | 订阅代理 | 管理内嵌 CLIProxyAPI 的生命周期、登录和代理路由 |
 | `config.toml` 编辑 | 查看、校验并编辑 Grok CLI 当前配置 |
@@ -88,23 +88,15 @@ Profile 用于保存一个上游所需的基础信息：
 
 Profile 保持普通、可理解的基础模型选择界面。
 
-### 3.2 统一模型路由
+### 3.2 默认模型写入路由
 
-统一路由包含：
+产品 UI 不再提供独立「模型路由」页。用户在供应商编辑页选择默认模型与推理强度（medium / high / xhigh / max / none）；保存后服务端把该选择写入 `default`，并强制 `subagents.explore` / `subagents.plan` 跟随。`web_search` 仍由路由事务在具备能力时处理。
 
-```text
-official
-default
-web_search
-subagents.explore
-subagents.plan
-```
-
-路由更新执行严格校验、目标配置预览、原子写入和失败回滚。该流程只处理配置与模型选择。
+底层仍事务性更新 `config.toml` 与 `routing.json`（严格校验、预览、原子写入、失败回滚），只处理配置与模型选择。
 
 ### 3.3 Max Collaboration（已移除）
 
-Max Collaboration 已从当前产品移除：模型路由页不再提供该控制面，也不再作为与 Grok Build 适配的推荐路径。历史设计文档与博客仅用于追溯。
+Max Collaboration 已从当前产品移除，不再作为与 Grok Build 适配的推荐路径。历史设计文档与博客仅用于追溯。
 
 该预设曾提供四个独立语义角色：
 
@@ -209,12 +201,12 @@ Switch 只做配置和路由控制面。真实 agent、消息、workflow 运行�
 2. 填写名称、Base URL、API Key 和上游格式；
 3. 获取或填写模型列表；
 4. 保存 Profile；
-5. 在统一模型路由中选择 default、web_search、explore 和 plan；
+5. 在供应商编辑页选择默认模型与推理强度（explore / plan 会跟随）；
 6. 保存并检查 `~/.grok/config.toml`。
 
 ### 5.3 配置 Max Collaboration（已移除）
 
-当前版本不再提供该配置入口。普通任务请只使用统一模型路由的 default / web_search / explore / plan。
+当前版本不再提供该配置入口。普通任务请在供应商编辑页设置默认模型与推理强度。
 
 旧步骤仅作追溯：
 

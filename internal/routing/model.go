@@ -65,6 +65,17 @@ type RoutingPolicy struct {
 	Official bool `json:"-"`
 }
 
+// FollowDefaultSubagents pins explore/plan to the default route. Grok Build
+// has no supported per-type reasoning-effort keys for those built-ins, so
+// independent explore/plan routing would not carry a distinct effort.
+func FollowDefaultSubagents(policy RoutingPolicy) RoutingPolicy {
+	if ref := strings.TrimSpace(policy.Default); ref != "" {
+		policy.Subagents.Explore = ref
+		policy.Subagents.Plan = ref
+	}
+	return policy
+}
+
 type Snapshot struct {
 	Version          int                      `json:"version"`
 	ActiveProviderID string                   `json:"active_provider_id,omitempty"`
@@ -136,7 +147,7 @@ func (s Snapshot) WebSearchCapable() bool {
 		return true
 	}
 	route, ok := s.Route(policy.WebSearch)
-	return ok && (s.ActiveProviderID == "" || route.ProviderID == s.ActiveProviderID) && route.APIBackend == "responses" && route.SupportsBackendSearch
+	return ok && route.APIBackend == "responses" && route.SupportsBackendSearch
 }
 
 func (s Snapshot) SubagentWebSearchCapable(subagent string) bool {
@@ -152,7 +163,7 @@ func (s Snapshot) SubagentWebSearchCapable(subagent string) bool {
 		return true
 	}
 	route, ok := s.Route(name)
-	return ok && (s.ActiveProviderID == "" || route.ProviderID == s.ActiveProviderID) && route.APIBackend == "responses" && route.SupportsBackendSearch
+	return ok && route.APIBackend == "responses" && route.SupportsBackendSearch
 }
 
 func (s Snapshot) Validate() error {
@@ -236,12 +247,9 @@ func (s Snapshot) Validate() error {
 			if ref == "" {
 				continue
 			}
-			route, ok := routes[ref]
+			_, ok := routes[ref]
 			if !ok {
 				return fmt.Errorf("routing policy %s references unknown model %q", label, ref)
-			}
-			if route.ProviderID != providerID {
-				return fmt.Errorf("routing policy %s model %q belongs to provider %q, not active provider %q", label, ref, route.ProviderID, providerID)
 			}
 		}
 	}
@@ -455,6 +463,38 @@ func ProjectWithSnapshot(source []profiles.Profile, previous Snapshot) (Snapshot
 // cannot satisfy the schema-v2 backend contract. It is intended for explicit
 // startup migration, not interactive policy updates, which must reject invalid
 // selections instead of silently changing them.
+// RepairUnsupportedReasoningEffort clamps remembered default reasoning tiers
+// that the current model catalog no longer advertises. This is a startup
+// migration so a rebuilt catalog (empty menu, removed min/low, etc.) cannot
+// prevent launch; interactive policy updates still reject invalid combos.
+func RepairUnsupportedReasoningEffort(snapshot Snapshot) (Snapshot, bool) {
+	out := cloneSnapshot(snapshot)
+	changed := false
+	for providerID, policy := range out.ProviderPolicies {
+		if providerID == OfficialProviderID {
+			continue
+		}
+		next, did := clampPolicyReasoningEffort(policy)
+		if !did {
+			continue
+		}
+		out.ProviderPolicies[providerID] = next
+		changed = true
+	}
+	out.Policy = out.ProviderPolicies[out.ActiveProviderID]
+	out.Policy.Official = out.IsOfficial()
+	return out, changed
+}
+
+func clampPolicyReasoningEffort(policy RoutingPolicy) (RoutingPolicy, bool) {
+	effort := strings.TrimSpace(policy.DefaultReasoningEffort)
+	if profiles.IsCanonicalReasoningEffort(effort) {
+		return policy, false
+	}
+	policy.DefaultReasoningEffort = "none"
+	return policy, true
+}
+
 func RepairUnsupportedWebSearch(snapshot Snapshot) (Snapshot, bool) {
 	out := cloneSnapshot(snapshot)
 	changed := false
@@ -463,7 +503,7 @@ func RepairUnsupportedWebSearch(snapshot Snapshot) (Snapshot, bool) {
 			continue
 		}
 		route, ok := out.Route(policy.WebSearch)
-		if !ok || route.ProviderID != providerID || route.APIBackend != "responses" || !route.SupportsBackendSearch {
+		if !ok || route.APIBackend != "responses" || !route.SupportsBackendSearch {
 			policy.WebSearch = ""
 			policy.WebSearchCapable = true
 			out.ProviderPolicies[providerID] = policy
@@ -478,7 +518,7 @@ func RepairUnsupportedWebSearch(snapshot Snapshot) (Snapshot, bool) {
 func repairProviderPolicy(snapshot Snapshot, providerID string, policy, defaults RoutingPolicy) RoutingPolicy {
 	valid := func(ref string) string {
 		route, ok := snapshot.Route(ref)
-		if ok && route.ProviderID == providerID {
+		if ok {
 			return route.ID
 		}
 		return ""
