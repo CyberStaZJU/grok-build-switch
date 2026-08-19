@@ -137,11 +137,20 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 		// Startup ensure must not recreate the full KnownModels catalog.
 		if len(existing.Models) > 0 {
 			desired.Models = restampCodeBuddyModels(existing.Models, baseURL, apiKey)
+			if len(desired.Models) == 0 {
+				desired.Models = []profiles.ModelDef{codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey)}
+			}
+			if strings.TrimSpace(opts.DefaultModel) != "" && !codeBuddyHasModel(desired.Models, desired.DefaultModel) {
+				desired.Models = append(desired.Models, codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey))
+			}
 			desired.AvailableModels = codeBuddyModelNames(desired.Models)
 			if codeBuddyHasModel(desired.Models, existing.DefaultModel) && strings.TrimSpace(opts.DefaultModel) == "" {
-				desired.DefaultModel = existing.DefaultModel
+				desired.DefaultModel = canonicalCodeBuddyModelID(existing.DefaultModel)
 			} else if !codeBuddyHasModel(desired.Models, desired.DefaultModel) {
 				desired.DefaultModel = desired.Models[0].Name
+				if codeBuddyHasModel(desired.Models, codebuddy.DefaultModel) {
+					desired.DefaultModel = codebuddy.DefaultModel
+				}
 			}
 			if effort := strings.TrimSpace(existing.DefaultReasoningEffort); effort != "" {
 				desired.DefaultReasoningEffort = effort
@@ -301,8 +310,19 @@ func codebuddyEnsureReasoning(model *profiles.ModelDef) bool {
 
 func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) []profiles.ModelDef {
 	out := make([]profiles.ModelDef, 0, len(models))
+	seen := map[string]bool{}
 	for _, model := range models {
+		upstream := canonicalCodeBuddyModelID(model.Model)
+		if upstream == "" {
+			upstream = canonicalCodeBuddyModelID(model.Name)
+		}
+		if upstream == "" || seen[upstream] {
+			continue
+		}
+		seen[upstream] = true
 		next := model
+		next.Name = upstream
+		next.Model = upstream
 		next.BaseURL = baseURL
 		next.APIKey = apiKey
 		if strings.TrimSpace(next.APIBackend) == "" {
@@ -315,6 +335,30 @@ func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) 
 		out = append(out, next)
 	}
 	return out
+}
+
+func codeBuddyModelDefinition(id, baseURL, apiKey string) profiles.ModelDef {
+	id = canonicalCodeBuddyModelID(id)
+	for _, model := range codebuddy.NewProfile(baseURL, apiKey).Models {
+		if model.Name == id {
+			return model
+		}
+	}
+	return profiles.ModelDef{}
+}
+
+func canonicalCodeBuddyModelID(id string) string {
+	id = strings.TrimSpace(id)
+	if codebuddy.IsKnownModel(id) {
+		return id
+	}
+	if i := strings.LastIndex(id, "@"); i > 0 {
+		bare := strings.TrimSpace(id[:i])
+		if codebuddy.IsKnownModel(bare) {
+			return bare
+		}
+	}
+	return ""
 }
 
 func codeBuddyModelNames(models []profiles.ModelDef) []string {
@@ -373,12 +417,12 @@ func codeBuddyModelOffers(profile profiles.Profile, all []profiles.Profile) []co
 }
 
 func codeBuddyHasModel(models []profiles.ModelDef, name string) bool {
-	name = strings.TrimSpace(name)
+	name = canonicalCodeBuddyModelID(name)
 	if name == "" {
 		return false
 	}
 	for _, model := range models {
-		if strings.TrimSpace(model.Name) == name || strings.TrimSpace(model.Model) == name {
+		if canonicalCodeBuddyModelID(model.Name) == name || canonicalCodeBuddyModelID(model.Model) == name {
 			return true
 		}
 	}

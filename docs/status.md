@@ -1,6 +1,6 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、产品边界与技术债。最后更新：2026-08-18（官方 default 保留全目录）。
+> 当前状态、产品边界与技术债。最后更新：2026-08-19（CodeBuddy Profile 修复与上下文窗口更新）。
 
 ---
 
@@ -9,7 +9,7 @@
 ### 1.1 保留并维护的能力
 
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
-- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。
+- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash/deepseek-v4-pro）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。CodeBuddy 的 DeepSeek v4 Flash/Pro 使用 1,000,000 的配置窗口，为已验证的 1,048,576 网关上限保留系统提示、工具调用和输出余量。
 - **供应商默认模型写入路由**：在供应商编辑页设置 default 模型与推理强度；保存后事务性更新 `config.toml` 与 `routing.json`。explore / plan 跟随该 default（无独立「模型路由」页）。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。
@@ -80,7 +80,7 @@
 
 订阅代理保存流程现在会优先识别当前 server-owned Profile；升级旧版本时，只会接管名称、Base URL 和全部模型 alias 都精确匹配且唯一的未标记 legacy Profile，多个候选则 fail closed。2026-08-04 已按用户授权删除一个不活动的重复旧 Codex subscription Profile，保留唯一活动供应商，并补充防复发测试。
 
-2026-08-04 已完成隔离的本地发布候选验证：默认/Wails 测试与构建、关键包 race、`go vet`、前端 Node 测试均通过；外部 build-state 中的全新 arm64 `.app`/DMG 通过 ad-hoc 签名、bundle 内容、macOS 15.0 minimum target、DMG SHA-256 与隔离 HOME/DataDir/Grok Home 的四个只读核心端点 smoke。最新全量 race 与独立 `check-work` 正在发布前重跑。Developer ID 签名和公证当前被本机缺少有效 `Developer ID Application` 身份及可用 `notarytool` profile 阻塞；不得把 ad-hoc 签名描述为正式签名或公证。
+2026-08-04 已完成隔离的本地发布候选验证：默认/Wails 测试与构建、关键包 race、`go vet`、前端 Node 测试均通过；外部 build-state 中的全新 arm64 `.app`/DMG 通过 ad-hoc 签名、bundle 内容、macOS 15.0 minimum target、DMG SHA-256 与隔离 HOME/DataDir/Grok Home 的四个只读核心端点 smoke。2026-08-19 的 CodeBuddy 修复发布前再次通过前端 Node 测试、`go test ./...`、`go vet ./...`、`go test -race ./internal/codebuddy ./internal/profiles ./internal/server` 与 `go test -tags wailsgui .`；待提交代码和轻量文档的常见密钥格式及私有 home 路径扫描无发现。最新**全量** race 与独立 `check-work` 仍是正式安装包发布前待办。Developer ID 签名和公证当前被本机缺少有效 `Developer ID Application` 身份及可用 `notarytool` profile 阻塞；不得把 ad-hoc 签名描述为正式签名或公证。
 
 ### 2.3 安全与上游边界
 

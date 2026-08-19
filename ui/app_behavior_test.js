@@ -117,6 +117,8 @@ test("suggestContextWindow resolves known leaves and leaves unknown models unset
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.5"), 500000);
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.6"), 500000);
   assert.equal(app.suggestContextWindow("hy3"), 128000);
+  assert.equal(app.suggestContextWindow("deepseek-v4-flash"), 1000000);
+  assert.equal(app.suggestContextWindow("deepseek-v4-pro"), 1000000);
   assert.equal(app.suggestContextWindow("unknown-model"), 0);
   assert.equal(app.suggestContextWindow("grok-4.5-mini"), 0);
   assert.equal(app.suggestContextWindow(""), 0);

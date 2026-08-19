@@ -20,9 +20,10 @@ var knownContextWindows = map[string]int64{
 	"grok-4.6": 500000,
 	// Kimi（名称声明 256k）
 	"k3-256k": 262144,
-	// CodeBuddy（与 internal/codebuddy/profile.go 一致）
+	// CodeBuddy（DeepSeek v4 网关上限 1,048,576，配置保留输出余量）
 	"hy3":               128000,
-	"deepseek-v4-flash": 128000,
+	"deepseek-v4-flash": 1000000,
+	"deepseek-v4-pro":   1000000,
 }
 
 // KnownContextWindow returns the default context window for a well-known

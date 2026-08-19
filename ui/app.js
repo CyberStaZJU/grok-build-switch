@@ -49,7 +49,8 @@ const CONTEXT_WINDOW_SUGGESTIONS = {
   "grok-4.6": 500000,
   "k3-256k": 262144,
   "hy3": 128000,
-  "deepseek-v4-flash": 128000,
+  "deepseek-v4-flash": 1000000,
+  "deepseek-v4-pro": 1000000,
 };
 
 function suggestContextWindow(alias) {

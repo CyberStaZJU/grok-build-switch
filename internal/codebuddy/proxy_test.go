@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestNewProfileUsesKnownContextWindows(t *testing.T) {
+	profile := NewProfile("http://127.0.0.1:17878/codebuddy-proxy/v1", "ck_test")
+	windows := map[string]int64{}
+	for _, model := range profile.Models {
+		windows[model.Name] = model.ContextWindow
+	}
+	if windows["hy3"] != 128000 {
+		t.Fatalf("hy3 context = %d", windows["hy3"])
+	}
+	for _, id := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		if windows[id] != 1000000 {
+			t.Fatalf("%s context = %d", id, windows[id])
+		}
+	}
+}
+
 func TestNewProfileDisablesStreamToolCalls(t *testing.T) {
 	profile := NewProfile("http://127.0.0.1:17878/codebuddy-proxy/v1", "ck_test")
 	if len(profile.Models) == 0 {

@@ -26,6 +26,10 @@ func IsKnownModel(id string) bool {
 func NewProfile(baseURL, apiKey string) profiles.Profile {
 	models := make([]profiles.ModelDef, 0, len(KnownModels))
 	for _, id := range KnownModels {
+		contextWindow := profiles.KnownContextWindow(id)
+		if contextWindow == 0 {
+			contextWindow = 128000
+		}
 		models = append(models, profiles.ModelDef{
 			Name:                    id,
 			Model:                   id,
@@ -36,7 +40,7 @@ func NewProfile(baseURL, apiKey string) profiles.Profile {
 			SupportsReasoningEffort: true,
 			ReasoningEfforts:        append([]string(nil), profiles.CanonicalReasoningEfforts...),
 			ReasoningEffortsSource:  "declared",
-			ContextWindow:           128000,
+			ContextWindow:           contextWindow,
 			MaxCompletionTokens:     8192,
 			StreamToolCalls:         profiles.BoolPtr(false),
 		})

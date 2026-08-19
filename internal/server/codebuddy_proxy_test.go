@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -234,6 +235,86 @@ func TestEnsureCodeBuddyProviderDoesNotCreateWhenTaggedExists(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("profile count = %d", len(list))
+	}
+}
+
+func TestEnsureCodeBuddyProviderRepairsProviderQualifiedModelIDs(t *testing.T) {
+	dir := t.TempDir()
+	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
+	if _, err := routingStore.Initialize(profileStore); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{ActualPort: 19095, Paths: paths.Paths{GrokConfig: configPath, DataDir: dir}, Profiles: profileStore, Routing: routingStore, Switcher: sw}
+	created, err := s.EnsureCodeBuddyProvider("ck_repair", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := created
+	broken.Models = []profiles.ModelDef{
+		{Name: "hy3", Model: "hy3"},
+		{Name: "deepseek-v4-flash@CodeBuddy / WorkBuddy", Model: "deepseek-v4-flash@CodeBuddy / WorkBuddy"},
+	}
+	broken.AvailableModels = []string{"hy3"}
+	if _, err := profileStore.Update(created.ID, broken); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := s.EnsureCodeBuddyProvider("ck_repair", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := codeBuddyModelNames(repaired.Models); !reflect.DeepEqual(got, []string{"hy3", "deepseek-v4-flash"}) {
+		t.Fatalf("models = %#v", got)
+	}
+	if !reflect.DeepEqual(repaired.AvailableModels, []string{"hy3", "deepseek-v4-flash"}) {
+		t.Fatalf("available_models = %#v", repaired.AvailableModels)
+	}
+}
+
+func TestEnsureCodeBuddyProviderAddsExplicitDefaultToSubset(t *testing.T) {
+	dir := t.TempDir()
+	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
+	if _, err := routingStore.Initialize(profileStore); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{ActualPort: 19095, Paths: paths.Paths{GrokConfig: configPath, DataDir: dir}, Profiles: profileStore, Routing: routingStore, Switcher: sw}
+	created, err := s.EnsureCodeBuddyProvider("ck_add", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trimmed := created
+	trimmed.Models = []profiles.ModelDef{{Name: "hy3", Model: "hy3"}}
+	trimmed.AvailableModels = []string{"hy3"}
+	if _, err := profileStore.Update(created.ID, trimmed); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := s.EnsureCodeBuddyProviderOpts(CodeBuddyEnsureOptions{APIKey: "ck_add", DefaultModel: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DefaultModel != "deepseek-v4-pro" {
+		t.Fatalf("default_model = %q", updated.DefaultModel)
+	}
+	if got := codeBuddyModelNames(updated.Models); !reflect.DeepEqual(got, []string{"hy3", "deepseek-v4-pro"}) {
+		t.Fatalf("models = %#v", got)
+	}
+	for _, model := range updated.Models {
+		if model.Name == "deepseek-v4-pro" && model.ContextWindow != 1000000 {
+			t.Fatalf("deepseek-v4-pro context_window = %d", model.ContextWindow)
+		}
 	}
 }
 
