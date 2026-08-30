@@ -628,7 +628,7 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 			if physicalID, trusted := modelvariants.TrustedCodexPhysicalFromStandardAlias(alias); trusted {
 				standard, _ := modelvariants.CodexStandardAlias(physicalID)
 				fast, _ := modelvariants.CodexFastAlias(physicalID)
-				efforts := modelvariants.TrustedCodexReasoningEfforts()
+				efforts := modelvariants.TrustedCodexReasoningEffortsForPhysicalModel(physicalID)
 				p.AvailableModels = append(p.AvailableModels, standard, fast)
 				p.Models = append(p.Models,
 					trustedSubscriptionModel(standard, standard, baseURL, key, profiles.SpeedTierStandard, standard, efforts),

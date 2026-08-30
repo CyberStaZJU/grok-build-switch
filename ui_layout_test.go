@@ -169,7 +169,6 @@ func TestMaxCollaborationUIRemoved(t *testing.T) {
 	}
 }
 
-
 func TestCacheStatisticsUIContract(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {
@@ -393,7 +392,7 @@ func TestProfileEditorDoesNotDuplicateGlobalRoutingControls(t *testing.T) {
 			t.Fatalf("profile editor still reads removed or synthetic routing control %s", stale)
 		}
 	}
-	for _, expected := range []string{`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`} {
+	for _, expected := range []string{`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "ultra", "none"]`} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("reasoning capability contract missing: %s", expected)
 		}
@@ -419,7 +418,7 @@ func TestFrontendHardeningContracts(t *testing.T) {
 		`attempt > 0 || !csrfRejected(res, data)`,
 		`const confirmed = await customConfirm`,
 		`if (!confirmed) return false`,
-		`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`,
+		`const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "ultra", "none"]`,
 	} {
 		if !bytes.Contains(appData, []byte(expected)) {
 			t.Fatalf("frontend hardening contract missing: %s", expected)
@@ -475,8 +474,8 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 			labels = append(labels, child.FirstChild.Data)
 		}
 	}
-	want := []string{"medium", "high", "xhigh", "max", "none"}
-	wantLabels := []string{"中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max)", "禁用推理 (none)"}
+	want := []string{"medium", "high", "xhigh", "max", "ultra", "none"}
+	wantLabels := []string{"中 (medium)", "高 (high)", "超高 (xhigh)", "最大 (max)", "极致 (ultra)", "禁用推理 (none)"}
 	if len(values) != len(want) {
 		t.Fatalf("defaultReasoningEffort options = %v, want %v", values, want)
 	}
@@ -497,7 +496,7 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	if !bytes.Contains(htmlData, []byte(`id="reasoningEffortStatus"`)) {
 		t.Fatal("reasoningEffortStatus hint not found")
 	}
-	for _, fragment := range []string{`REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"]`, "explore / plan 跟随此默认模型"} {
+	for _, fragment := range []string{`REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "ultra", "none"]`, "explore / plan 跟随此默认模型"} {
 		if !bytes.Contains(appData, []byte(fragment)) {
 			t.Fatalf("fixed reasoning effort menu missing: %s", fragment)
 		}
@@ -518,8 +517,8 @@ func TestCodeBuddyPageContract(t *testing.T) {
 	}
 	for _, id := range []string{
 		"navCodeBuddyBtn", "viewCodeBuddy", "backFromCodeBuddyBtn",
-		"codeBuddyRefreshBtn", "codeBuddyTestBtn", "codeBuddyApiKey",
-		"codeBuddyDefaultModel", "codeBuddySaveBtn", "codeBuddySaveActivateBtn",
+		"codeBuddyRefreshBtn", "codeBuddySyncModelsBtn", "codeBuddyTestBtn", "codeBuddyApiKey",
+		"codeBuddyDefaultModel", "codeBuddyCatalogDetail", "codeBuddySaveBtn", "codeBuddySaveActivateBtn",
 		"codeBuddyActivateBtn", "codeBuddyStatusBadge", "codeBuddyBaseUrl",
 	} {
 		if !bytes.Contains(htmlData, []byte(`id="`+id+`"`)) {
@@ -531,6 +530,7 @@ func TestCodeBuddyPageContract(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		`api("/api/codebuddy"`,
+		`sync_catalog: !!syncCatalog`,
 		`api("/api/codebuddy/test"`,
 		`api("/api/codebuddy/activate"`,
 		`function loadCodeBuddy(`,

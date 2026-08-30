@@ -90,7 +90,7 @@ Profile 保持普通、可理解的基础模型选择界面。
 
 ### 3.2 默认模型写入路由
 
-产品 UI 不再提供独立「模型路由」页。用户在供应商编辑页选择默认模型与推理强度（medium / high / xhigh / max / none）；保存后服务端把该选择写入 `default`，并强制 `subagents.explore` / `subagents.plan` 跟随。`web_search` 仍由路由事务在具备能力时处理。
+产品 UI 不再提供独立「模型路由」页。用户在供应商编辑页选择默认模型与推理强度（medium / high / xhigh / max / ultra / none；`ultra` 当前用于 Codex `gpt-5.6-sol` Standard/Fast）；保存后服务端把该选择写入 `default`，并强制 `subagents.explore` / `subagents.plan` 跟随。`web_search` 仍由路由事务在具备能力时处理。
 
 底层仍事务性更新 `config.toml` 与 `routing.json`（严格校验、预览、原子写入、失败回滚），只处理配置与模型选择。
 

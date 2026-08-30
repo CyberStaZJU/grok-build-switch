@@ -806,6 +806,63 @@ func TestValidateRoutingReasoningEffortAllowsNoneForCustomAndOfficial(t *testing
 	}
 }
 
+func TestValidateRoutingReasoningEffortAllowsUltraOnlyWhenDeclared(t *testing.T) {
+	snapshot := routing.Snapshot{
+		ActiveProviderID: "codex",
+		Providers:        []routing.Provider{{ID: "codex"}},
+		ModelRoutes: []routing.ModelRoute{{
+			ID: "codex:sol", Name: "subscription/codex/gpt-5.6-sol", ProviderID: "codex",
+			SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "ultra"}, ReasoningEffortsSource: "declared",
+		}},
+		Policy: routing.RoutingPolicy{Default: "codex:sol", DefaultReasoningEffort: "ultra"},
+	}
+	if err := validateRoutingReasoningEffort(snapshot); err != nil {
+		t.Fatalf("declared ultra rejected: %v", err)
+	}
+	for _, route := range []routing.ModelRoute{
+		{ID: "codex:terra", Name: "subscription/codex/gpt-5.6-terra", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared"},
+		{ID: "codex:luna-fast", Name: "subscription/codex/gpt-5.6-luna-fast", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared"},
+	} {
+		snapshot.ModelRoutes = []routing.ModelRoute{route}
+		snapshot.Policy.Default = route.ID
+		if err := validateRoutingReasoningEffort(snapshot); err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
+			t.Fatalf("route %q ultra validation error = %v", route.Name, err)
+		}
+	}
+}
+
+func TestRoutingPolicyPUTRejectsTerraUltraWithoutChangingState(t *testing.T) {
+	s := newRoutingTestServer(t)
+	terra := "subscription/codex/gpt-5.6-terra"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Codex", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1", APIKey: "key",
+		AvailableModels: []string{terra}, DefaultModel: terra, DefaultReasoningEffort: "medium",
+		Models: []profiles.ModelDef{{Name: terra, Model: terra, APIBackend: "chat_completions", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyCurrentRouting(); err != nil {
+		t.Fatal(err)
+	}
+	beforeStore, err := os.ReadFile(s.Routing.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(s.Paths.GrokConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := loopbackRequest(http.MethodPut, "/api/routing/policy", `{"active_provider_id":"`+profile.ID+`","default":"`+profile.ID+`:`+terra+`","default_reasoning_effort":"ultra"}`)
+	response := httptest.NewRecorder()
+	s.handleRoutingPolicy(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "不支持推理强度") {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Routing.Path(), beforeStore)
+	assertFileBytesEqual(t, s.Paths.GrokConfig, beforeConfig)
+}
+
 func TestRoutingPolicyPUTRejectsUnsupportedReasoningEffort(t *testing.T) {
 	s := newRoutingTestServer(t)
 	catalog, _, err := s.currentRouting()

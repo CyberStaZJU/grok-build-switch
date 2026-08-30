@@ -27,13 +27,31 @@ let toastTimer = null;
 let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
 let subscriptionLoginBusy = false;
-const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"];
+const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "ultra", "none"];
 const REASONING_EFFORT_LABELS = {
-  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", none: "禁用推理 (none)",
+  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", ultra: "极致 (ultra)", none: "禁用推理 (none)",
 };
 
 function normalizeReasoningEffort(effort) {
   return REASONING_EFFORTS.includes(effort) ? effort : "none";
+}
+
+function preservedDefaultReasoningEffort(effort) {
+  const value = String(effort || "").trim();
+  return value || "none";
+}
+
+function reasoningEffortOptions(effort) {
+  const current = preservedDefaultReasoningEffort(effort);
+  const options = REASONING_EFFORTS.map((value) => ({ value, label: REASONING_EFFORT_LABELS[value] }));
+  if (!REASONING_EFFORTS.includes(current)) {
+    options.unshift({ value: current, label: `${current}（已保存，由模型声明）` });
+  }
+  return { current, options };
+}
+
+function preservedReasoningEfforts(efforts) {
+  return [...new Set((efforts || []).map((effort) => String(effort || "").trim()).filter(Boolean))];
 }
 
 // Mirrors internal/profiles/context_defaults.go — keep both tables in sync.
@@ -41,13 +59,17 @@ function normalizeReasoningEffort(effort) {
 // when config.toml omits context_window, so known models get an explicit
 // default here. Exact leaf matches only; values stay editable per model.
 const CONTEXT_WINDOW_SUGGESTIONS = {
-  "gpt-5.6-terra": 272000,
-  "gpt-5.6-sol": 272000,
-  "gpt-5.6-luna": 272000,
+  "gpt-5.6-terra": 320000,
+  "gpt-5.6-sol": 320000,
+  "gpt-5.6-luna": 320000,
   "gemini-3.7-flash-high": 1048576,
   "grok-4.5": 500000,
   "grok-4.6": 500000,
   "k3-256k": 262144,
+  "hy4-preview": 1000000,
+  "glm-5.3": 1000000,
+  "glm-5.3-flash": 1000000,
+  "kimi-k3-2": 1000000,
   "hy3": 128000,
   "deepseek-v4-flash": 1000000,
   "deepseek-v4-pro": 1000000,
@@ -833,7 +855,7 @@ function fillForm(profile) {
   $("baseUrl").value = profile.base_url || "";
   $("profileApiKey").value = profile.api_key || firstModelKey(profile) || "";
   $("upstreamFormat").value = upstreamFormatValue(profile.upstream_format);
-  $("defaultReasoningEffort").value = normalizeReasoningEffort(profile.default_reasoning_effort);
+  setReasoningEffortOptions(preservedDefaultReasoningEffort(profile.default_reasoning_effort));
   state.availableModels = unique([
     ...(profile.available_models || []),
     ...(profile.models || []).map((model) => model.name || model.model),
@@ -867,7 +889,7 @@ function stripSecrets(profile, includeKey) {
     upstream_format: profile.upstream_format,
     base_url: profile.base_url,
     default_model: profile.default_model,
-    default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
+    default_reasoning_effort: preservedDefaultReasoningEffort(profile.default_reasoning_effort),
     available_models: profile.available_models || [],
     models: (profile.models || []).map((m) => {
       const item = {
@@ -878,7 +900,7 @@ function stripSecrets(profile, includeKey) {
         extra_headers: m.extra_headers || {},
         supports_backend_search: !!m.supports_backend_search,
         supports_reasoning_effort: !!m.supports_reasoning_effort || !!m.reasoning_efforts?.length,
-        reasoning_efforts: m.reasoning_efforts?.filter((effort) => REASONING_EFFORTS.includes(effort)) || [],
+        reasoning_efforts: preservedReasoningEfforts(m.reasoning_efforts),
         reasoning_efforts_source: m.reasoning_efforts_source || "default",
         context_window: m.context_window || 0,
         max_completion_tokens: m.max_completion_tokens || 0,
@@ -925,7 +947,7 @@ function importProfileJSON(text) {
     base_url: profile.base_url || "",
     api_key: profile.api_key || "",
     default_model: profile.default_model || "",
-    default_reasoning_effort: normalizeReasoningEffort(profile.default_reasoning_effort),
+    default_reasoning_effort: preservedDefaultReasoningEffort(profile.default_reasoning_effort),
     available_models: profile.available_models || [],
     models: profile.models || [],
   });
@@ -1013,14 +1035,14 @@ function fallbackReasoningEffort(efforts) {
   return efforts[0] || "";
 }
 
-function setReasoningEffortOptions() {
+function setReasoningEffortOptions(preferred) {
   const select = $("defaultReasoningEffort");
   if (!select) return;
-  const current = REASONING_EFFORTS.includes(select.value) ? select.value : "none";
-  select.replaceChildren(...REASONING_EFFORTS.map((effort) => {
+  const { current, options } = reasoningEffortOptions(preferred ?? select.value);
+  select.replaceChildren(...options.map((item) => {
     const option = document.createElement("option");
-    option.value = effort;
-    option.textContent = REASONING_EFFORT_LABELS[effort];
+    option.value = item.value;
+    option.textContent = item.label;
     return option;
   }));
   select.value = current;
@@ -1030,7 +1052,7 @@ function updateReasoningEffortMetadata() {
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "可选：medium、high、xhigh、max、none。explore / plan 跟随此默认模型。";
+    status.textContent = "可选：medium、high、xhigh、max、ultra、none。ultra 当前用于 Codex gpt-5.6-sol Standard/Fast；explore / plan 跟随此默认模型。";
   }
   setReasoningEffortOptions();
 }
@@ -1138,7 +1160,7 @@ function addModelCard(model = {}) {
     context_window: Number(model.context_window || 0) || contextWindowSuggestion,
     max_completion_tokens: Number(model.max_completion_tokens || 0),
   };
-  card.dataset.reasoningEfforts = JSON.stringify((model.reasoning_efforts || []).filter((effort) => REASONING_EFFORTS.includes(effort)));
+  card.dataset.reasoningEfforts = JSON.stringify(preservedReasoningEfforts(model.reasoning_efforts));
   card.dataset.reasoningEffortsSource = model.reasoning_efforts_source || "default";
   card.innerHTML = `
     <div class="modelCardTop">
@@ -1282,7 +1304,7 @@ function readForm() {
     api_key: apiKey,
     available_models: state.availableModels,
     default_model: $("defaultModel")?.value?.trim() || "",
-    default_reasoning_effort: $("defaultReasoningEffort")?.value || "none",
+    default_reasoning_effort: preservedDefaultReasoningEffort($("defaultReasoningEffort")?.value),
     models: rows.map((row) => {
       const name = row.querySelector('[data-field="name"]')?.value.trim() || "";
       const model = row.querySelector('[data-field="model"]')?.value.trim() || "";
@@ -1439,6 +1461,12 @@ function renderCodeBuddy(data) {
     $("codeBuddyKeyMasked").textContent = status.api_key_masked || (status.has_api_key ? "已设置" : "未设置");
   }
   if ($("codeBuddyNote")) $("codeBuddyNote").textContent = status.note || "";
+  if ($("codeBuddyCatalogDetail")) {
+    const source = status.catalog_source === "workbuddy_local_catalog" ? "WorkBuddy 本机最新目录" : "Switch 内置兜底目录";
+    const updated = status.catalog_updated_at ? new Date(status.catalog_updated_at).toLocaleString() : "无时间信息";
+    const count = Array.isArray(status.models) ? status.models.length : 0;
+    $("codeBuddyCatalogDetail").textContent = `${source} · ${count} 个模型 · ${updated}`;
+  }
   if ($("codeBuddyActionHint")) {
     $("codeBuddyActionHint").textContent = status.active
       ? `当前 default 模型：${status.default_model || "hy3"}。新开 grok 会话生效。`
@@ -1447,8 +1475,8 @@ function renderCodeBuddy(data) {
 
   const models = Array.isArray(status.models) && status.models.length
     ? status.models
-    : ["hy3", "hy3-preview-agent", "glm-5.2", "deepseek-v4-flash", "kimi-k2.5", "auto"];
-  const selected = status.default_model || "hy3";
+    : ["auto", "hy4-preview", "hy3", "glm-5.3", "glm-5.3-flash", "kimi-k3-2"];
+  const selected = models.includes(status.default_model) ? status.default_model : models[0];
   const select = $("codeBuddyDefaultModel");
   if (select) {
     select.innerHTML = models.map((id) =>
@@ -1480,10 +1508,11 @@ async function loadCodeBuddy() {
   renderCodeBuddy(await api("/api/codebuddy"));
 }
 
-async function saveCodeBuddy({ activate }) {
+async function saveCodeBuddy({ activate, syncCatalog = false }) {
   const body = {
-    default_model: $("codeBuddyDefaultModel")?.value || "hy3",
+    default_model: $("codeBuddyDefaultModel")?.value || state.codeBuddy?.models?.[0] || "hy3",
     activate: !!activate,
+    sync_catalog: !!syncCatalog,
   };
   const typed = $("codeBuddyApiKey")?.value?.trim();
   if (typed) body.api_key = typed;
@@ -2023,6 +2052,13 @@ if ($("backFromCodeBuddyBtn")) $("backFromCodeBuddyBtn").onclick = () => showVie
 if ($("codeBuddyRefreshBtn")) {
   $("codeBuddyRefreshBtn").onclick = () => run(loadCodeBuddy, { button: $("codeBuddyRefreshBtn"), busyLabel: "刷新中…" });
 }
+if ($("codeBuddySyncModelsBtn")) {
+  $("codeBuddySyncModelsBtn").onclick = () => run(() => saveCodeBuddy({ activate: !!state.codeBuddy?.active, syncCatalog: true }), {
+    button: $("codeBuddySyncModelsBtn"),
+    busyLabel: "同步中…",
+    success: "已同步最新模型目录到 CodeBuddy 供应商",
+  });
+}
 if ($("toggleCodeBuddyKey")) {
   $("toggleCodeBuddyKey").onclick = () => {
     const input = $("codeBuddyApiKey");
@@ -2069,7 +2105,7 @@ if ($("codeBuddyActivateBtn")) {
   $("codeBuddyActivateBtn").onclick = () => run(async () => {
     const result = await api("/api/codebuddy/activate", {
       method: "POST",
-      body: JSON.stringify({ default_model: $("codeBuddyDefaultModel")?.value || "hy3" }),
+      body: JSON.stringify({ default_model: $("codeBuddyDefaultModel")?.value || state.codeBuddy?.models?.[0] || "hy3" }),
     });
     if (result?.status) renderCodeBuddy(result.status);
     await refreshAll().catch(() => {});

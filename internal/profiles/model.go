@@ -172,7 +172,7 @@ func ValidateModelVariants(p Profile) error {
 
 // CanonicalReasoningEfforts is the fixed user-facing menu. Models no longer
 // advertise a probed subset; upstream may silently ignore an unsupported tier.
-var CanonicalReasoningEfforts = []string{"medium", "high", "xhigh", "max", "none"}
+var CanonicalReasoningEfforts = []string{"medium", "high", "xhigh", "max", "ultra", "none"}
 
 // IsCanonicalReasoningEffort reports whether effort is empty or one of the
 // fixed menu values.
@@ -189,11 +189,54 @@ func IsCanonicalReasoningEffort(effort string) bool {
 	return false
 }
 
-// ValidateDefaultReasoningEffort ensures the profile-level default is one of
-// the fixed menu values. Per-model advertised menus are metadata only.
+// ModelSupportsReasoningEffort validates an effort against exact trusted Codex
+// metadata, then declared/probed model metadata, and finally the canonical menu
+// for ordinary models without an authoritative capability list.
+func ModelSupportsReasoningEffort(model ModelDef, effort string) bool {
+	effort = strings.TrimSpace(effort)
+	if effort == "" || effort == "none" {
+		return true
+	}
+	aliases := []string{strings.TrimSpace(model.Name), strings.TrimSpace(model.Model)}
+	trustedPhysicalID := ""
+	for _, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+		physicalID, trusted := modelvariants.TrustedCodexPhysicalFromStandardAlias(alias)
+		if !trusted {
+			physicalID, trusted = modelvariants.TrustedCodexPhysicalFromFastAlias(alias)
+		}
+		if !trusted {
+			continue
+		}
+		if trustedPhysicalID != "" && trustedPhysicalID != physicalID {
+			return false
+		}
+		trustedPhysicalID = physicalID
+	}
+	if trustedPhysicalID != "" {
+		return containsString(modelvariants.TrustedCodexReasoningEffortsForPhysicalModel(trustedPhysicalID), effort)
+	}
+	if model.ReasoningEffortsSource == "declared" || model.ReasoningEffortsSource == "probe" {
+		return model.SupportsReasoningEffort && containsString(model.ReasoningEfforts, effort)
+	}
+	return IsCanonicalReasoningEffort(effort)
+}
+
+// ValidateDefaultReasoningEffort accepts the fixed editor menu and preserves
+// additional efforts explicitly declared by the selected model.
 func ValidateDefaultReasoningEffort(p Profile) error {
 	p = Normalize(p)
 	effort := strings.TrimSpace(p.DefaultReasoningEffort)
+	for _, model := range p.Models {
+		if model.Name == p.DefaultModel || model.Model == p.DefaultModel {
+			if ModelSupportsReasoningEffort(model, effort) {
+				return nil
+			}
+			return fmt.Errorf("模型 %q 不支持推理强度 %q", p.DefaultModel, effort)
+		}
+	}
 	if IsCanonicalReasoningEffort(effort) {
 		return nil
 	}

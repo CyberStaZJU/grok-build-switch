@@ -11,6 +11,7 @@ Grok Build Switch 是面向 macOS 的本地菜单栏/桌面工具，用于管理
 - **单一启用供应商路由**：官方或自定义供应商互斥启用；每个供应商记忆自己的 `default`、`web_search`、`subagents.explore` 与 `subagents.plan`，自定义切换保留组合模型目录以兼容旧会话别名
 - **用量观察**：只读聚合近期 prompt、cached prompt、completion 与 reasoning token 及缓存命中率；不把订阅用量虚构为美元成本
 - **订阅代理**：通过内嵌 CLIProxyAPI 接入和管理受支持的第三方订阅；Switch 以 canonical ownership ledger、认证 marker、跨进程锁和 recovery journal 合并完整 YAML，仅对 exact-registry Fast aliases 注入 priority；未知并发状态 fail closed，不覆盖无关用户配置
+- **CodeBuddy / WorkBuddy**：通过 Switch 本机代理直连 CodeBuddy 推理端点，并可显式同步 WorkBuddy 本机已缓存、供 CLI 使用且支持工具调用的最新模型目录
 - **配置编辑**：查看、校验并编辑 `~/.grok/config.toml`
 - **远程访问**：支持 LAN 配对访问和 SSH 连接管理
 - **桌面入口**：提供 macOS 菜单栏与 Wails 桌面窗口
@@ -55,7 +56,7 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 - [当前状态](docs/status.md)
 - [维护者说明](docs/agent.md)
 
-在线文档站：[https://1parado.github.io/grok-build-switch/](https://1parado.github.io/grok-build-switch/)
+在线文档站：[https://cyberstazju.github.io/grok-build-switch/](https://cyberstazju.github.io/grok-build-switch/)
 
 ## 数据与安全
 

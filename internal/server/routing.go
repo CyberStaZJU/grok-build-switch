@@ -607,10 +607,27 @@ func validateActiveWebSearch(snapshot routing.Snapshot) error {
 func validateRoutingReasoningEffort(snapshot routing.Snapshot) error {
 	policy := snapshot.ActivePolicy()
 	effort := strings.TrimSpace(policy.DefaultReasoningEffort)
-	if profiles.IsCanonicalReasoningEffort(effort) {
+	if effort == "" || effort == "none" {
 		return nil
 	}
-	return fmt.Errorf("不支持推理强度 %q；可用档位：%s", effort, strings.Join(profiles.CanonicalReasoningEfforts, "、"))
+	if snapshot.IsOfficial() {
+		if profiles.IsCanonicalReasoningEffort(effort) {
+			return nil
+		}
+		return fmt.Errorf("不支持推理强度 %q；可用档位：%s", effort, strings.Join(profiles.CanonicalReasoningEfforts, "、"))
+	}
+	route, ok := snapshot.Route(policy.Default)
+	if !ok || route.ProviderID != snapshot.ActiveProviderID {
+		return fmt.Errorf("默认模型 %q 不属于当前供应商", policy.Default)
+	}
+	model := profiles.ModelDef{
+		Name: route.ProfileModel, Model: route.Model, SupportsReasoningEffort: route.SupportsReasoningEffort,
+		ReasoningEfforts: route.ReasoningEfforts, ReasoningEffortsSource: route.ReasoningEffortsSource,
+	}
+	if profiles.ModelSupportsReasoningEffort(model, effort) {
+		return nil
+	}
+	return fmt.Errorf("模型 %q 不支持推理强度 %q；可用档位：%s", route.Name, effort, strings.Join(route.ReasoningEfforts, "、"))
 }
 
 func validateOfficialRoutingPolicy(policy routing.RoutingPolicy) error {

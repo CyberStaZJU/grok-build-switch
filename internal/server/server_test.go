@@ -197,6 +197,120 @@ func TestNormalProfileUpdateRejectsSubscriptionOwnedProfile(t *testing.T) {
 	assertFileBytesEqual(t, s.Profiles.Path(), before)
 }
 
+func TestSubscriptionProfileUpdatePreservesDeclaredLowWhileChangingContextWindow(t *testing.T) {
+	s := newRoutingTestServer(t)
+	standard := "subscription/codex/gpt-5.6-terra"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: "http://127.0.0.1:17878/subscription-proxy/v1", APIKey: "profile-key",
+		AvailableModels: []string{standard}, DefaultModel: standard, DefaultReasoningEffort: "low",
+		Models: []profiles.ModelDef{{Name: standard, Model: standard, APIBackend: "chat_completions", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high"}, ReasoningEffortsSource: "declared", ContextWindow: 320000}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := profileMutationFromProfile(profile)
+	mutation.Models[0].ContextWindow = 321000
+	payload, err := json.Marshal(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := s.Profiles.Get(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DefaultReasoningEffort != "low" || updated.Models[0].ContextWindow != 321000 {
+		t.Fatalf("updated profile = %#v", updated)
+	}
+}
+
+func TestSubscriptionProfileUpdateAllowsContextWindowAndDeclaredReasoningEffort(t *testing.T) {
+	s := newRoutingTestServer(t)
+	standard := "subscription/codex/gpt-5.6-sol"
+	fast := standard + "-fast"
+	baseURL := "http://127.0.0.1:17878/subscription-proxy/v1"
+	efforts := []string{"medium", "high", "xhigh", "max", "ultra"}
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: "profile-key",
+		AvailableModels: []string{standard, fast}, DefaultModel: standard, DefaultReasoningEffort: "medium",
+		Models: []profiles.ModelDef{
+			{Name: standard, Model: standard, BaseURL: baseURL, APIKey: "model-key", APIBackend: "chat_completions", ExtraHeaders: map[string]string{"X-Test": "header"}, SupportsReasoningEffort: true, ReasoningEfforts: efforts, ReasoningEffortsSource: "declared", SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard, ContextWindow: 320000, MaxCompletionTokens: 4096},
+			{Name: fast, Model: fast, BaseURL: baseURL, APIKey: "model-key", APIBackend: "chat_completions", SupportsReasoningEffort: true, ReasoningEfforts: efforts, ReasoningEffortsSource: "declared", SpeedTier: profiles.SpeedTierFast, StandardAnchor: standard, ContextWindow: 320000},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mutation := profileMutationFromProfile(profile)
+	mutation.DefaultReasoningEffort = "ultra"
+	mutation.Models[0].ContextWindow = 321000
+	mutation.Models[1].ContextWindow = 322000
+	payload, err := json.Marshal(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := s.Profiles.Get(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DefaultReasoningEffort != "ultra" {
+		t.Fatalf("default reasoning effort = %q, want ultra", updated.DefaultReasoningEffort)
+	}
+	if updated.Models[0].ContextWindow != 321000 || updated.Models[1].ContextWindow != 322000 {
+		t.Fatalf("context windows = %d/%d", updated.Models[0].ContextWindow, updated.Models[1].ContextWindow)
+	}
+	if updated.Source != "subscription-proxy:codex" || updated.Models[0].SpeedTier != profiles.SpeedTierStandard || updated.Models[1].SpeedTier != profiles.SpeedTierFast || updated.Models[1].StandardAnchor != standard {
+		t.Fatalf("managed metadata was not preserved: %#v", updated)
+	}
+	if updated.Models[0].ExtraHeaders["X-Test"] != "header" || updated.Models[0].MaxCompletionTokens != 4096 {
+		t.Fatalf("model metadata changed: %#v", updated.Models[0])
+	}
+}
+
+func TestSubscriptionProfileUpdateRejectsUndeclaredReasoningEffort(t *testing.T) {
+	s := newRoutingTestServer(t)
+	standard := "subscription/codex/gpt-5.6-terra"
+	baseURL := "http://127.0.0.1:17878/subscription-proxy/v1"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Trusted", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: "profile-key",
+		AvailableModels: []string{standard}, DefaultModel: standard, DefaultReasoningEffort: "medium",
+		Models: []profiles.ModelDef{{
+			Name: standard, Model: standard, BaseURL: baseURL, APIKey: "model-key", APIBackend: "chat_completions",
+			SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "xhigh", "max"}, ReasoningEffortsSource: "declared",
+			SpeedTier: profiles.SpeedTierStandard, StandardAnchor: standard, ContextWindow: 320000,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.Profiles.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := profileMutationFromProfile(profile)
+	mutation.DefaultReasoningEffort = "ultra"
+	payload, err := json.Marshal(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "默认推理强度") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertFileBytesEqual(t, s.Profiles.Path(), before)
+}
+
 func TestOfficialAnthropicProfileMutationsLeaveRoutingAndConfigUnchanged(t *testing.T) {
 	s := newRoutingTestServer(t)
 	beforeProfiles, err := os.ReadFile(s.Profiles.Path())

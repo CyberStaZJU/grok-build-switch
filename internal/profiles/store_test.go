@@ -112,7 +112,7 @@ func TestCreateIDGenerationFailureLeavesBytesUnchanged(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
+func TestReasoningEffortMetadataRoundTrip(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
 	created, err := store.Create(Profile{Name: "kimi", DefaultReasoningEffort: "medium", Models: []ModelDef{{Name: "kimi", Model: "kimi", SupportsReasoningEffort: true, ReasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, ReasoningEffortsSource: "declared"}}})
 	if err != nil {
@@ -125,6 +125,54 @@ func TestReasoningEffortMaxMetadataRoundTrip(t *testing.T) {
 	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 	if !stringSlicesEqual(got.Models[0].ReasoningEfforts, want) || got.Models[0].ReasoningEffortsSource != "declared" {
 		t.Fatalf("model metadata = %#v", got.Models[0])
+	}
+}
+
+func TestStoreAcceptsUltraDefaultReasoningEffort(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	created, err := store.Create(Profile{
+		Name: "sol", DefaultModel: "subscription/codex/gpt-5.6-sol", DefaultReasoningEffort: "ultra",
+		Models: []ModelDef{{Name: "subscription/codex/gpt-5.6-sol", Model: "subscription/codex/gpt-5.6-sol", ReasoningEfforts: []string{"medium", "high", "ultra"}, ReasoningEffortsSource: "declared"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.DefaultReasoningEffort != "ultra" {
+		t.Fatalf("DefaultReasoningEffort = %q, want ultra", created.DefaultReasoningEffort)
+	}
+}
+
+func TestTrustedCodexReasoningEffortCannotBeBypassedByRenaming(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	for _, alias := range []string{"subscription/codex/gpt-5.6-terra", "subscription/codex/gpt-5.6-luna-fast"} {
+		_, err := store.Create(Profile{
+			Name: "renamed", DefaultModel: "custom-name", DefaultReasoningEffort: "ultra",
+			Models: []ModelDef{{Name: "custom-name", Model: alias, SupportsReasoningEffort: true, ReasoningEfforts: []string{"ultra"}, ReasoningEffortsSource: "declared"}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
+			t.Fatalf("renamed %q ultra error = %v", alias, err)
+		}
+	}
+	created, err := store.Create(Profile{
+		Name: "renamed-sol", DefaultModel: "custom-sol", DefaultReasoningEffort: "ultra",
+		Models: []ModelDef{{Name: "custom-sol", Model: "subscription/codex/gpt-5.6-sol-fast", SupportsReasoningEffort: true, ReasoningEfforts: []string{"ultra"}, ReasoningEffortsSource: "declared"}},
+	})
+	if err != nil || created.DefaultReasoningEffort != "ultra" {
+		t.Fatalf("renamed Sol ultra = %#v, error=%v", created, err)
+	}
+}
+
+func TestStorePreservesDeclaredNoncanonicalDefaultReasoningEffort(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "profiles.json"))
+	created, err := store.Create(Profile{
+		Name: "legacy-low", DefaultModel: "m", DefaultReasoningEffort: "low",
+		Models: []ModelDef{{Name: "m", Model: "m", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high"}, ReasoningEffortsSource: "declared"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.DefaultReasoningEffort != "low" {
+		t.Fatalf("DefaultReasoningEffort = %q, want low", created.DefaultReasoningEffort)
 	}
 }
 

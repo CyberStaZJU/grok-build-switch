@@ -26,7 +26,7 @@
 
 普通 Profile 用于基础连接和常用模型选择。
 
-每个模型卡片都有「上下文窗口」字段：常见模型（Kimi `k3-256k`、Codex `gpt-5.6-*`、Gemini `gemini-3.7-flash-high`、订阅 Grok `grok-4.5/4.6`、CodeBuddy `hy3` / `deepseek-v4-flash`）会自动填入建议值，可直接修改；填 `0` 表示不写进 `config.toml`，由 Grok 使用自己的默认（自定义模型约 200k）。上游 `/v1/models` 不返回上下文长度，拉取模型后建议核对一次该字段，否则 `/m` 切到该模型时 Grok 的上下文用量上限和 auto-compact 阈值都按错误窗口计算。
+每个模型卡片都有「上下文窗口」字段：常见模型（Kimi `k3-256k`、Codex `gpt-5.6-*`、Gemini `gemini-3.7-flash-high`、订阅 Grok `grok-4.5/4.6`、CodeBuddy `hy4-preview` / `glm-5.3` / `glm-5.3-flash` / `kimi-k3-2` / `hy3` / `deepseek-v4-flash`）会自动填入建议值，可直接修改；填 `0` 表示不写进 `config.toml`，由 Grok 使用自己的默认（自定义模型约 200k）。上游 `/v1/models` 不返回上下文长度，拉取模型后建议核对一次该字段，否则 `/m` 切到该模型时 Grok 的上下文用量上限和 auto-compact 阈值都按错误窗口计算。
 
 ## 5. 设置默认模型与推理强度
 
@@ -35,7 +35,7 @@
 在首页点「设为默认」，或在供应商编辑页选择：
 
 - **默认模型**（写入 Grok `default`；explore / plan 会跟随它）；
-- **推理强度**（medium / high / xhigh / max / none）；并在该供应商的模型卡片上声明支持推理强度，否则 `/m` 无法选档。
+- **推理强度**（medium / high / xhigh / max / ultra / none；`ultra` 当前用于 Codex `gpt-5.6-sol` Standard/Fast）；并在该供应商的模型卡片上声明支持推理强度，否则 `/m` 无法选档。
 
 「设为默认」只改新会话默认，不会把其他供应商的已启用模型从 `/m` 拿掉。保存后更新 `~/.grok/config.toml` 与 `routing.json`。
 
@@ -138,11 +138,12 @@ Switch 可将腾讯 CodeBuddy/WorkBuddy 订阅接入 Grok Build harness（不经
 
 1. 打开管理页，点顶栏 **CodeBuddy**。
 2. 粘贴个人 API Key（[copilot.tencent.com/profile](https://copilot.tencent.com/profile/)，形如 `ck_…`）。
-3. 选择默认模型（推荐 `hy3`）。
-4. **测试连通** → **保存并启用**。
-5. 新开 `grok` 会话即走该供应商；`default` 为所选模型。
+3. 点 **刷新模型目录**，显式把 WorkBuddy 本机已同步、供 CLI 使用且支持工具调用的模型目录更新到托管供应商；普通启动不会扩张现有模型子集。
+4. 选择所需默认模型；无本机目录或目录损坏时，页面会明确使用 Switch 内置兜底目录。
+5. **测试连通** → **保存并启用**。
+6. 新开 `grok` 会话即走该供应商；`default` 为所选模型。
 
-状态页会显示 masked Key、进程内代理 Base URL，以及是否为当前 active provider。
+状态页会显示 masked Key、进程内代理 Base URL、模型目录来源和更新时间，以及是否为当前 active provider。`/v2/chat/completions` 只提供推理，不提供模型枚举；Switch 不调用未确认的远程目录接口。
 
 ### CLI（可选）
 

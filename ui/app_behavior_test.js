@@ -15,6 +15,9 @@ this.appTest = {
   csrfToken,
   newProfileDraft,
   normalizeReasoningEffort,
+  preservedDefaultReasoningEffort,
+  reasoningEffortOptions,
+  preservedReasoningEfforts,
   customPrompt,
   customProviderSwitchWarning,
   officialProviderSwitchWarning,
@@ -58,7 +61,10 @@ function loadApp(fetchImpl, elements = {}, confirmImpl = () => true) {
   const context = {
     console,
     fetch: fetchImpl,
-    document: { getElementById(id) { return elements[id] || null; } },
+    document: {
+      getElementById(id) { return elements[id] || null; },
+      createElement() { return { value: "", textContent: "", disabled: false }; },
+    },
     localStorage: { getItem() { return null; } },
     window: { confirm: confirmImpl },
     customConfirm: async (...args) => confirmImpl(...args),
@@ -111,11 +117,15 @@ test("suggestContextWindow resolves known leaves and leaves unknown models unset
   const app = loadApp(async () => response(500));
   assert.equal(app.suggestContextWindow("k3-256k"), 262144);
   assert.equal(app.suggestContextWindow("K3-256K"), 262144);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 272000);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 272000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 320000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 320000);
   assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.7-flash-high"), 1048576);
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.5"), 500000);
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.6"), 500000);
+  assert.equal(app.suggestContextWindow("hy4-preview"), 1000000);
+  assert.equal(app.suggestContextWindow("glm-5.3"), 1000000);
+  assert.equal(app.suggestContextWindow("glm-5.3-flash"), 1000000);
+  assert.equal(app.suggestContextWindow("kimi-k3-2"), 1000000);
   assert.equal(app.suggestContextWindow("hy3"), 128000);
   assert.equal(app.suggestContextWindow("deepseek-v4-flash"), 1000000);
   assert.equal(app.suggestContextWindow("deepseek-v4-pro"), 1000000);
@@ -324,9 +334,23 @@ test("cache statistics render empty and missing-log states", async () => {
 test("new profiles default to disabled reasoning without preset metadata", () => {
   const app = loadApp(async () => response(500));
   const draft = app.newProfileDraft();
+  assert.equal(app.normalizeReasoningEffort("ultra"), "ultra");
   assert.equal(app.normalizeReasoningEffort("unknown"), "none");
+  assert.equal(app.preservedDefaultReasoningEffort("low"), "low");
+  assert.equal(app.preservedDefaultReasoningEffort(" "), "none");
+  assert.deepEqual([...app.preservedReasoningEfforts(["low", "medium", "low", " ", ""])], ["low", "medium"]);
   assert.equal(draft.default_reasoning_effort, "none");
   assert.equal(Object.hasOwn(draft, "template"), false);
+});
+
+test("reasoning selector preserves a saved model-declared low effort", () => {
+  const app = loadApp(async () => response(500));
+  const result = app.reasoningEffortOptions("low");
+  assert.equal(result.current, "low");
+  assert.equal(result.options[0].value, "low");
+  assert.match(result.options[0].label, /已保存/);
+  assert.equal(result.options.some((option) => option.value === "ultra"), true);
+  assert.equal(result.options.filter((option) => option.value === "medium").length, 1);
 });
 
 test("failed and empty CSRF token acquisitions are not cached", async () => {

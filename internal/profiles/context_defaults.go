@@ -9,10 +9,10 @@ import "strings"
 // stay editable per model. Keep in sync with CONTEXT_WINDOW_SUGGESTIONS in
 // ui/app.js.
 var knownContextWindows = map[string]int64{
-	// Codex 订阅代理（GPT-5.6 系列，272k）
-	"gpt-5.6-terra": 272000,
-	"gpt-5.6-sol":   272000,
-	"gpt-5.6-luna":  272000,
+	// Codex 订阅代理（GPT-5.6 系列，320k）
+	"gpt-5.6-terra": 320000,
+	"gpt-5.6-sol":   320000,
+	"gpt-5.6-luna":  320000,
 	// Gemini 订阅代理（Gemini 系列 1M）
 	"gemini-3.7-flash-high": 1048576,
 	// Grok 订阅代理（对齐官方路由 grok-4.5 的 500k）
@@ -20,7 +20,11 @@ var knownContextWindows = map[string]int64{
 	"grok-4.6": 500000,
 	// Kimi（名称声明 256k）
 	"k3-256k": 262144,
-	// CodeBuddy（DeepSeek v4 网关上限 1,048,576，配置保留输出余量）
+	// CodeBuddy（WorkBuddy 产品目录声明 1M；配置使用 1,000,000）
+	"hy4-preview":       1000000,
+	"glm-5.3":           1000000,
+	"glm-5.3-flash":     1000000,
+	"kimi-k3-2":         1000000,
 	"hy3":               128000,
 	"deepseek-v4-flash": 1000000,
 	"deepseek-v4-pro":   1000000,

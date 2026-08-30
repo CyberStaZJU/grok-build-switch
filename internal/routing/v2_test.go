@@ -181,6 +181,33 @@ func TestRepairUnsupportedReasoningEffortFallsBackInsideMenu(t *testing.T) {
 	}
 }
 
+func TestRepairUnsupportedReasoningEffortUsesConcreteRouteCapabilities(t *testing.T) {
+	snapshot := Snapshot{
+		Version:          CurrentVersion,
+		ActiveProviderID: "codex",
+		Providers:        []Provider{{ID: "codex"}},
+		ModelRoutes: []ModelRoute{
+			{ID: "codex:terra", Name: "subscription/codex/gpt-5.6-terra", ProfileModel: "subscription/codex/gpt-5.6-terra", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high", "max"}, ReasoningEffortsSource: "declared"},
+			{ID: "codex:sol", Name: "subscription/codex/gpt-5.6-sol", ProfileModel: "subscription/codex/gpt-5.6-sol", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high", "max", "ultra"}, ReasoningEffortsSource: "declared"},
+		},
+		ProviderPolicies: map[string]RoutingPolicy{"codex": {Default: "codex:terra", DefaultReasoningEffort: "ultra"}},
+	}
+	got, changed := RepairUnsupportedReasoningEffort(snapshot)
+	if !changed || got.ProviderPolicies["codex"].DefaultReasoningEffort != "none" {
+		t.Fatalf("Terra ultra repair = %#v changed=%v", got.ProviderPolicies["codex"], changed)
+	}
+	snapshot.ProviderPolicies["codex"] = RoutingPolicy{Default: "codex:sol", DefaultReasoningEffort: "ultra"}
+	got, changed = RepairUnsupportedReasoningEffort(snapshot)
+	if changed || got.ProviderPolicies["codex"].DefaultReasoningEffort != "ultra" {
+		t.Fatalf("Sol ultra was repaired: %#v changed=%v", got.ProviderPolicies["codex"], changed)
+	}
+	snapshot.ProviderPolicies["codex"] = RoutingPolicy{Default: "codex:terra", DefaultReasoningEffort: "low"}
+	got, changed = RepairUnsupportedReasoningEffort(snapshot)
+	if changed || got.ProviderPolicies["codex"].DefaultReasoningEffort != "low" {
+		t.Fatalf("declared low was repaired: %#v changed=%v", got.ProviderPolicies["codex"], changed)
+	}
+}
+
 func TestPersistedEqualDetectsInactiveProviderPolicyRepairs(t *testing.T) {
 	left := Snapshot{
 		Version:          CurrentVersion,

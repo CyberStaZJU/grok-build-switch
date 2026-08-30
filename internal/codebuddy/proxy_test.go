@@ -34,6 +34,30 @@ func TestNewProfileDisablesStreamToolCalls(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyOffersFailClosed(t *testing.T) {
+	h := &Handler{Offers: []ModelOffer{}}
+	if got := h.enabledOffers(); len(got) != 0 {
+		t.Fatalf("enabled offers = %#v, want empty", got)
+	}
+	if _, ok := h.resolveUpstream("hy3"); ok {
+		t.Fatal("explicit empty offers resolved fallback model")
+	}
+}
+
+func TestOffersOutsideTrustedCatalogFailClosed(t *testing.T) {
+	h := &Handler{
+		AllowedModels: []string{"hy3"},
+		Offers:        []ModelOffer{{ID: "hy3", Upstream: "hy3"}, {ID: "removed", Upstream: "removed-model"}},
+	}
+	offers := h.enabledOffers()
+	if len(offers) != 1 || offers[0].Upstream != "hy3" {
+		t.Fatalf("enabled offers = %#v", offers)
+	}
+	if _, ok := h.resolveUpstream("removed"); ok {
+		t.Fatal("offer outside trusted catalog was resolved")
+	}
+}
+
 func TestSanitizeSSELineEmptyFinishReason(t *testing.T) {
 	in := `data: {"choices":[{"delta":{"content":"pong"},"finish_reason":""}]}`
 	out := sanitizeSSELine(in, nil)

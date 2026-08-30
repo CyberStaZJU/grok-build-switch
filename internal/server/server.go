@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"grok_switch/internal/autostart"
+	"grok_switch/internal/codebuddy"
 	grokconfig "grok_switch/internal/config"
 	"grok_switch/internal/httpjson"
 	"grok_switch/internal/paths"
@@ -212,6 +214,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/codebuddy-proxy/v1", s.handleCodeBuddyProxy)
 	mux.HandleFunc("/codebuddy-proxy/v1/", s.handleCodeBuddyProxy)
 	mux.HandleFunc("/api/codebuddy", s.handleCodeBuddyAPI)
+	mux.HandleFunc("/api/codebuddy/models", s.handleCodeBuddyModels)
 	mux.HandleFunc("/api/codebuddy/test", s.handleCodeBuddyTest)
 	mux.HandleFunc("/api/codebuddy/activate", s.handleCodeBuddyActivate)
 	if s.SSH != nil {
@@ -542,6 +545,59 @@ func (dto profileMutationDTO) profile() profiles.Profile {
 	return profile
 }
 
+// managedProfileEditableUpdate permits local tuning of context windows and,
+// for subscription proxy profiles, the default reasoning effort. Ownership and
+// all other managed catalog metadata remain controlled by their dedicated flow.
+func managedProfileEditableUpdate(previous, requested profiles.Profile, allowReasoningEffort bool) (profiles.Profile, bool) {
+	previous = profiles.Normalize(previous)
+	requested = profiles.Normalize(requested)
+	if requested.Name != previous.Name ||
+		requested.UpstreamFormat != previous.UpstreamFormat ||
+		requested.BaseURL != previous.BaseURL ||
+		requested.APIKey != previous.APIKey ||
+		requested.DefaultModel != previous.DefaultModel ||
+		(!allowReasoningEffort && requested.DefaultReasoningEffort != previous.DefaultReasoningEffort) ||
+		!reflect.DeepEqual(requested.AvailableModels, previous.AvailableModels) ||
+		len(requested.Models) != len(previous.Models) {
+		return profiles.Profile{}, false
+	}
+	if allowReasoningEffort && !managedModelSupportsEffort(previous, requested.DefaultReasoningEffort) {
+		return profiles.Profile{}, false
+	}
+	updated := previous
+	updated.DefaultReasoningEffort = requested.DefaultReasoningEffort
+	for i := range previous.Models {
+		if !subscriptionModelMetadataEqual(requested.Models[i], previous.Models[i]) {
+			return profiles.Profile{}, false
+		}
+		updated.Models[i].ContextWindow = requested.Models[i].ContextWindow
+	}
+	return updated, true
+}
+
+func managedModelSupportsEffort(profile profiles.Profile, effort string) bool {
+	for _, model := range profile.Models {
+		if model.Name == profile.DefaultModel || model.Model == profile.DefaultModel {
+			return profiles.ModelSupportsReasoningEffort(model, effort)
+		}
+	}
+	return strings.TrimSpace(effort) == "" || strings.TrimSpace(effort) == "none"
+}
+
+func subscriptionModelMetadataEqual(requested, current profiles.ModelDef) bool {
+	return requested.Name == current.Name &&
+		requested.Model == current.Model &&
+		requested.BaseURL == current.BaseURL &&
+		requested.APIKey == current.APIKey &&
+		requested.APIBackend == current.APIBackend &&
+		reflect.DeepEqual(requested.ExtraHeaders, current.ExtraHeaders) &&
+		requested.SupportsBackendSearch == current.SupportsBackendSearch &&
+		requested.SupportsReasoningEffort == current.SupportsReasoningEffort &&
+		reflect.DeepEqual(requested.ReasoningEfforts, current.ReasoningEfforts) &&
+		requested.ReasoningEffortsSource == current.ReasoningEffortsSource &&
+		requested.MaxCompletionTokens == current.MaxCompletionTokens
+}
+
 func cloneStringMap(source map[string]string) map[string]string {
 	if source == nil {
 		return nil
@@ -658,9 +714,22 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		s.routingMu.Lock()
 		previous, previousErr := s.Profiles.Get(id)
 		if previousErr == nil && strings.HasPrefix(previous.Source, "subscription-proxy:") {
-			s.routingMu.Unlock()
-			writeError(w, fmt.Errorf("订阅代理供应商只能通过订阅代理页面更新"), http.StatusConflict)
-			return
+			subscriptionUpdated, ok := managedProfileEditableUpdate(previous, profile, true)
+			if !ok {
+				s.routingMu.Unlock()
+				writeError(w, fmt.Errorf("订阅代理供应商仅允许在此调整上下文窗口和默认推理强度；其他设置请通过订阅代理页面更新"), http.StatusConflict)
+				return
+			}
+			profile = subscriptionUpdated
+		}
+		if previousErr == nil && previous.Source == codebuddy.SourceTag {
+			codeBuddyUpdated, ok := managedProfileEditableUpdate(previous, profile, false)
+			if !ok {
+				s.routingMu.Unlock()
+				writeError(w, fmt.Errorf("CodeBuddy 托管供应商仅允许在此调整上下文窗口；模型目录、密钥和默认模型请通过 CodeBuddy 页面更新"), http.StatusConflict)
+				return
+			}
+			profile = codeBuddyUpdated
 		}
 		// profileMutationDTO does not round-trip Source. Preserve managed ownership
 		// markers so startup ensure/reconcile does not create duplicate providers.

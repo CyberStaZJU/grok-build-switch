@@ -304,6 +304,7 @@ func Project(source []profiles.Profile) Snapshot {
 			aliasRouteIDs[localName] = routeID
 			snapshot.ModelRoutes = append(snapshot.ModelRoutes, ModelRoute{
 				ID: routeID, Name: routeName, ProviderID: providerID, ProfileModel: localName,
+				Model:                 model.Model,
 				SpeedTier:             model.SpeedTier,
 				SupportsBackendSearch: model.SupportsBackendSearch, SupportsReasoningEffort: model.SupportsReasoningEffort,
 				ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...), ReasoningEffortsSource: model.ReasoningEffortsSource,
@@ -474,7 +475,8 @@ func RepairUnsupportedReasoningEffort(snapshot Snapshot) (Snapshot, bool) {
 		if providerID == OfficialProviderID {
 			continue
 		}
-		next, did := clampPolicyReasoningEffort(policy)
+		route, ok := out.Route(policy.Default)
+		next, did := clampPolicyReasoningEffort(policy, route, ok)
 		if !did {
 			continue
 		}
@@ -486,9 +488,20 @@ func RepairUnsupportedReasoningEffort(snapshot Snapshot) (Snapshot, bool) {
 	return out, changed
 }
 
-func clampPolicyReasoningEffort(policy RoutingPolicy) (RoutingPolicy, bool) {
+func clampPolicyReasoningEffort(policy RoutingPolicy, route ModelRoute, routeFound bool) (RoutingPolicy, bool) {
 	effort := strings.TrimSpace(policy.DefaultReasoningEffort)
-	if profiles.IsCanonicalReasoningEffort(effort) {
+	if effort == "" || effort == "none" {
+		return policy, false
+	}
+	if routeFound {
+		model := profiles.ModelDef{
+			Name: route.ProfileModel, Model: route.Model, SupportsReasoningEffort: route.SupportsReasoningEffort,
+			ReasoningEfforts: route.ReasoningEfforts, ReasoningEffortsSource: route.ReasoningEffortsSource,
+		}
+		if profiles.ModelSupportsReasoningEffort(model, effort) {
+			return policy, false
+		}
+	} else if profiles.IsCanonicalReasoningEffort(effort) {
 		return policy, false
 	}
 	policy.DefaultReasoningEffort = "none"

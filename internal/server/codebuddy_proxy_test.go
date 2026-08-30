@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -318,7 +320,101 @@ func TestEnsureCodeBuddyProviderAddsExplicitDefaultToSubset(t *testing.T) {
 	}
 }
 
-func TestProfileUpdatePreservesCodeBuddySource(t *testing.T) {
+func TestEnsureCodeBuddyProviderRollsBackUpdatedProfileWhenRoutingFails(t *testing.T) {
+	dir := t.TempDir()
+	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
+	if _, err := routingStore.Initialize(profileStore); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{ActualPort: 19096, Paths: paths.Paths{GrokConfig: configPath, DataDir: dir}, Profiles: profileStore, Routing: routingStore, Switcher: sw}
+	created, err := s.EnsureCodeBuddyProvider("ck_before", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeProfiles, err := os.ReadFile(profileStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRouting, err := os.ReadFile(routingStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := fmt.Errorf("injected routing failure")
+	oldReplace := replaceRoutingSnapshot
+	replaceRoutingSnapshot = func(store *routing.Store, snapshot routing.Snapshot) (routing.Snapshot, error) {
+		stored, err := store.Replace(snapshot)
+		if err != nil {
+			return routing.Snapshot{}, err
+		}
+		return stored, injected
+	}
+	defer func() { replaceRoutingSnapshot = oldReplace }()
+
+	if _, err := s.EnsureCodeBuddyProviderOpts(CodeBuddyEnsureOptions{APIKey: "ck_after", DefaultModel: created.DefaultModel}); !errors.Is(err, injected) {
+		t.Fatalf("EnsureCodeBuddyProviderOpts() error = %v, want injected", err)
+	}
+	assertFileBytesEqual(t, profileStore.Path(), beforeProfiles)
+	assertFileBytesEqual(t, routingStore.Path(), beforeRouting)
+	assertFileBytesEqual(t, configPath, beforeConfig)
+}
+
+func TestEnsureCodeBuddyProviderRollsBackNewProfileWhenRoutingFails(t *testing.T) {
+	dir := t.TempDir()
+	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
+	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[telemetry]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sw := &switcher.Switcher{ConfigPath: configPath, Profiles: profileStore}
+	if _, err := routingStore.Initialize(profileStore); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{ActualPort: 19097, Paths: paths.Paths{GrokConfig: configPath, DataDir: dir}, Profiles: profileStore, Routing: routingStore, Switcher: sw}
+	beforeRouting, err := os.ReadFile(routingStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := fmt.Errorf("injected routing failure")
+	oldReplace := replaceRoutingSnapshot
+	replaceRoutingSnapshot = func(store *routing.Store, snapshot routing.Snapshot) (routing.Snapshot, error) {
+		stored, err := store.Replace(snapshot)
+		if err != nil {
+			return routing.Snapshot{}, err
+		}
+		return stored, injected
+	}
+	defer func() { replaceRoutingSnapshot = oldReplace }()
+
+	if _, err := s.EnsureCodeBuddyProvider("ck_new", false); !errors.Is(err, injected) {
+		t.Fatalf("EnsureCodeBuddyProvider() error = %v, want injected", err)
+	}
+	list, err := profileStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("failed creation left profiles: %#v", list)
+	}
+	assertFileBytesEqual(t, routingStore.Path(), beforeRouting)
+	assertFileBytesEqual(t, configPath, beforeConfig)
+}
+
+func TestManagedCodeBuddyProfileRejectsOrdinaryProfileMutation(t *testing.T) {
 	dir := t.TempDir()
 	profileStore := profiles.NewStore(filepath.Join(dir, "profiles.json"))
 	routingStore := routing.NewStore(filepath.Join(dir, "routing.json"))
@@ -346,17 +442,17 @@ func TestProfileUpdatePreservesCodeBuddySource(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1"
 	rr := httptest.NewRecorder()
 	s.handleProfileByID(rr, req)
-	if rr.Code != http.StatusOK {
+	if rr.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	got, err := profileStore.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Source != codebuddy.SourceTag {
-		t.Fatalf("source cleared on UI update: %q", got.Source)
+	if got.Source != codebuddy.SourceTag || len(got.Models) != len(created.Models) {
+		t.Fatalf("managed profile changed after rejected mutation: %#v", got)
 	}
-	// Startup/ensure must not recreate the full KnownModels catalog.
+	// Startup/ensure must not recreate the full catalog.
 	trimmed := got
 	trimmed.Models = []profiles.ModelDef{
 		{Name: "hy3", Model: "hy3", BaseURL: got.BaseURL, APIKey: "ck_preserve", APIBackend: "chat_completions"},
@@ -378,8 +474,8 @@ func TestProfileUpdatePreservesCodeBuddySource(t *testing.T) {
 	names := map[string]bool{}
 	for _, model := range ensured.Models {
 		names[model.Name] = true
-		if !model.SupportsReasoningEffort || len(model.ReasoningEfforts) == 0 {
-			t.Fatalf("ensure dropped reasoning metadata: %#v", model)
+		if model.BaseURL != got.BaseURL || model.APIKey != "ck_preserve" || model.StreamToolCalls == nil || *model.StreamToolCalls {
+			t.Fatalf("ensure did not restamp managed transport metadata: %#v", model)
 		}
 	}
 	if !names["hy3"] || !names["deepseek-v4-flash"] {

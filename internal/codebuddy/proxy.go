@@ -28,17 +28,19 @@ const (
 
 // KnownModels are the subscription models we expose through the Switch catalog.
 var KnownModels = []string{
+	"auto",
+	"hy4-preview",
 	"hy3",
-	"hy3-preview-agent",
-	"hy3-preview",
-	"glm-5.2",
-	"glm-5.1",
+	"glm-5.3",
+	"glm-5.3-flash",
+	"kimi-k3-2",
 	"deepseek-v4-flash",
 	"deepseek-v4-pro",
-	"kimi-k2.5",
-	"kimi-k2.6",
+	"glm-5.2",
+	"glm-5.1",
 	"kimi-k2.7",
-	"auto",
+	"kimi-k2.6",
+	"kimi-k2.5",
 }
 
 // ModelOffer is one CodeBuddy model as shown to Grok (/m / config alias) and
@@ -54,9 +56,12 @@ type Handler struct {
 	// FallbackKey is used when the client did not send Authorization.
 	FallbackKey string
 	Client      *http.Client
-	// Offers is the enabled catalog advertised on GET /v1/models. Empty means
-	// the full KnownModels list (bare ids) for a fresh provider.
+	// Offers is the enabled catalog advertised on GET /v1/models. Nil means
+	// the full fallback list for the standalone helper; an explicit empty slice
+	// fails closed.
 	Offers []ModelOffer
+	// AllowedModels is the trusted catalog. Nil uses the fallback list.
+	AllowedModels []string
 }
 
 func (h *Handler) upstream() string {
@@ -96,7 +101,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) enabledOffers() []ModelOffer {
-	if len(h.Offers) > 0 {
+	allowed := h.AllowedModels
+	if allowed == nil {
+		allowed = KnownModels
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		if IsValidModelID(id) {
+			allowedSet[id] = true
+		}
+	}
+	if h.Offers != nil {
 		out := make([]ModelOffer, 0, len(h.Offers))
 		seen := map[string]bool{}
 		for _, offer := range h.Offers {
@@ -105,19 +120,19 @@ func (h *Handler) enabledOffers() []ModelOffer {
 			if upstream == "" {
 				upstream = id
 			}
-			if id == "" || seen[id] || !IsKnownModel(upstream) {
+			if id == "" || seen[id] || !allowedSet[upstream] {
 				continue
 			}
 			seen[id] = true
 			out = append(out, ModelOffer{ID: id, Upstream: upstream})
 		}
-		if len(out) > 0 {
-			return out
-		}
+		return out
 	}
-	out := make([]ModelOffer, 0, len(KnownModels))
-	for _, id := range KnownModels {
-		out = append(out, ModelOffer{ID: id, Upstream: id})
+	out := make([]ModelOffer, 0, len(allowed))
+	for _, id := range allowed {
+		if allowedSet[id] {
+			out = append(out, ModelOffer{ID: id, Upstream: id})
+		}
 	}
 	return out
 }

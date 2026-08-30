@@ -9,7 +9,7 @@ import (
 // ProfileName is the user-visible supplier name in Switch.
 const ProfileName = "CodeBuddy / WorkBuddy"
 
-// IsKnownModel reports whether id is in the managed catalog.
+// IsKnownModel reports whether id is in the Switch fallback catalog.
 func IsKnownModel(id string) bool {
 	id = strings.TrimSpace(id)
 	for _, known := range KnownModels {
@@ -21,29 +21,32 @@ func IsKnownModel(id string) bool {
 }
 
 // NewProfile builds a managed profile that routes through the in-process
-// CodeBuddy proxy. baseURL must be the Switch-local OpenAI root, e.g.
-// http://127.0.0.1:17878/codebuddy-proxy/v1
+// CodeBuddy proxy using the Switch fallback catalog.
 func NewProfile(baseURL, apiKey string) profiles.Profile {
-	models := make([]profiles.ModelDef, 0, len(KnownModels))
-	for _, id := range KnownModels {
-		contextWindow := profiles.KnownContextWindow(id)
-		if contextWindow == 0 {
-			contextWindow = 128000
+	return NewProfileFromCatalog(baseURL, apiKey, BuiltInCatalog())
+}
+
+// NewProfileFromCatalog builds a managed profile from the latest available
+// WorkBuddy CLI model directory.
+func NewProfileFromCatalog(baseURL, apiKey string, catalog Catalog) profiles.Profile {
+	models := make([]profiles.ModelDef, 0, len(catalog.Models))
+	available := make([]string, 0, len(catalog.Models))
+	for _, model := range catalog.Models {
+		if !IsValidModelID(model.ID) || !model.SupportsToolCall {
+			continue
 		}
-		models = append(models, profiles.ModelDef{
-			Name:                    id,
-			Model:                   id,
-			BaseURL:                 baseURL,
-			APIKey:                  apiKey,
-			APIBackend:              "chat_completions",
-			SupportsBackendSearch:   false,
-			SupportsReasoningEffort: true,
-			ReasoningEfforts:        append([]string(nil), profiles.CanonicalReasoningEfforts...),
-			ReasoningEffortsSource:  "declared",
-			ContextWindow:           contextWindow,
-			MaxCompletionTokens:     8192,
-			StreamToolCalls:         profiles.BoolPtr(false),
-		})
+		models = append(models, ModelDefinition(model, baseURL, apiKey))
+		available = append(available, model.ID)
+	}
+	if len(models) == 0 {
+		fallback := BuiltInCatalog()
+		if catalog.Source != fallback.Source {
+			return NewProfileFromCatalog(baseURL, apiKey, fallback)
+		}
+	}
+	defaultModel := DefaultModel
+	if !containsModelID(available, defaultModel) && len(available) > 0 {
+		defaultModel = available[0]
 	}
 	return profiles.Profile{
 		Name:            ProfileName,
@@ -51,8 +54,17 @@ func NewProfile(baseURL, apiKey string) profiles.Profile {
 		UpstreamFormat:  "openai_chat",
 		BaseURL:         baseURL,
 		APIKey:          apiKey,
-		AvailableModels: append([]string(nil), KnownModels...),
-		DefaultModel:    DefaultModel,
+		AvailableModels: available,
+		DefaultModel:    defaultModel,
 		Models:          models,
 	}
+}
+
+func containsModelID(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

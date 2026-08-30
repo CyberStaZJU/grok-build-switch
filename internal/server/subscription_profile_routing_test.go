@@ -72,11 +72,11 @@ func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testin
 	if !ok || fastModel.Model != fast || fastModel.SpeedTier != profiles.SpeedTierFast || fastModel.StandardAnchor != standard {
 		t.Fatalf("fast model = %#v", fastModel)
 	}
-	if standardModel.ContextWindow != 272000 || fastModel.ContextWindow != 272000 {
-		t.Fatalf("trusted codex context windows = %d/%d, want 272000/272000", standardModel.ContextWindow, fastModel.ContextWindow)
+	if standardModel.ContextWindow != 320000 || fastModel.ContextWindow != 320000 {
+		t.Fatalf("trusted codex context windows = %d/%d, want 320000/320000", standardModel.ContextWindow, fastModel.ContextWindow)
 	}
 	for _, model := range []profiles.ModelDef{standardModel, fastModel} {
-		if !model.SupportsReasoningEffort || model.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(model.ReasoningEfforts, modelvariants.TrustedCodexReasoningEfforts()) {
+		if !model.SupportsReasoningEffort || model.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(model.ReasoningEfforts, modelvariants.TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-terra")) {
 			t.Fatalf("trusted model reasoning metadata = %#v", model)
 		}
 	}
@@ -149,6 +149,42 @@ func TestFindSubscriptionProfileRejectsAmbiguousLegacyIdentities(t *testing.T) {
 	if err == nil || got != nil || !strings.Contains(err.Error(), "多个未标记") {
 		t.Fatalf("profile=%#v err=%v; want ambiguity failure", got, err)
 	}
+}
+
+func TestSubscriptionProfileAddsUltraOnlyToSolStandardAndFast(t *testing.T) {
+	accounts := []SubscriptionProxyAccount{{ID: "codex", Provider: "codex"}}
+	profile := subscriptionProfile("codex", "Codex", "secret", accounts, []SubscriptionProxyModel{
+		{ID: "subscription/codex/gpt-5.6-terra", Provider: "codex"},
+		{ID: "subscription/codex/gpt-5.6-sol", Provider: "codex"},
+		{ID: "subscription/codex/gpt-5.6-luna", Provider: "codex"},
+	}, "http://127.0.0.1:17878/subscription-proxy/v1")
+
+	byName := map[string]profiles.ModelDef{}
+	for _, model := range profile.Models {
+		byName[model.Name] = model
+	}
+	for _, name := range []string{"subscription/codex/gpt-5.6-sol", "subscription/codex/gpt-5.6-sol-fast"} {
+		if !containsString(byName[name].ReasoningEfforts, "ultra") {
+			t.Fatalf("Sol route %q efforts = %v, want ultra", name, byName[name].ReasoningEfforts)
+		}
+	}
+	for _, name := range []string{
+		"subscription/codex/gpt-5.6-terra", "subscription/codex/gpt-5.6-terra-fast",
+		"subscription/codex/gpt-5.6-luna", "subscription/codex/gpt-5.6-luna-fast",
+	} {
+		if containsString(byName[name].ReasoningEfforts, "ultra") {
+			t.Fatalf("non-Sol route %q unexpectedly advertises ultra: %v", name, byName[name].ReasoningEfforts)
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSubscriptionProfileLeavesUntrustedProviderWithoutReasoningDefault(t *testing.T) {

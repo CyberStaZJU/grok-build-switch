@@ -19,6 +19,14 @@ func (s *Server) CodeBuddyProxyBaseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/codebuddy-proxy/v1", s.ActualPort)
 }
 
+func (s *Server) codeBuddyCatalog() codebuddy.Catalog {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return codebuddy.BuiltInCatalog()
+	}
+	return codebuddy.LoadCatalog(home)
+}
+
 func (s *Server) handleCodeBuddyProxy(w http.ResponseWriter, r *http.Request) {
 	if !isLoopbackRequest(r) {
 		http.Error(w, "仅允许本机访问", http.StatusForbidden)
@@ -37,7 +45,10 @@ func (s *Server) handleCodeBuddyProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	h := &codebuddy.Handler{FallbackKey: fallback, Offers: offers}
+	if offers == nil {
+		offers = []codebuddy.ModelOffer{}
+	}
+	h := &codebuddy.Handler{FallbackKey: fallback, Offers: offers, AllowedModels: s.codeBuddyCatalog().IDs()}
 	h.ServeHTTP(w, r)
 }
 
@@ -69,9 +80,6 @@ func (s *Server) EnsureCodeBuddyRoutes() error {
 				profile.Models[i].StreamToolCalls = profiles.BoolPtr(false)
 				profileChanged = true
 			}
-			if codebuddyEnsureReasoning(&profile.Models[i]) {
-				profileChanged = true
-			}
 		}
 		if !profileChanged {
 			continue
@@ -97,6 +105,7 @@ type CodeBuddyEnsureOptions struct {
 	APIKey       string
 	DefaultModel string
 	Activate     bool
+	SyncCatalog  bool
 }
 
 // EnsureCodeBuddyProvider creates or updates the managed CodeBuddy profile and
@@ -114,15 +123,23 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	if apiKey == "" {
 		return profiles.Profile{}, fmt.Errorf("缺少 CodeBuddy API Key")
 	}
+	catalog := s.codeBuddyCatalog()
 	defaultModel := strings.TrimSpace(opts.DefaultModel)
 	if defaultModel == "" {
 		defaultModel = codebuddy.DefaultModel
+		if _, ok := catalog.Find(defaultModel); !ok {
+			ids := catalog.IDs()
+			if len(ids) == 0 {
+				return profiles.Profile{}, fmt.Errorf("CodeBuddy 模型目录为空")
+			}
+			defaultModel = ids[0]
+		}
 	}
-	if !codebuddy.IsKnownModel(defaultModel) {
-		return profiles.Profile{}, fmt.Errorf("不支持的默认模型 %q", defaultModel)
+	if _, ok := catalog.Find(defaultModel); !ok {
+		return profiles.Profile{}, fmt.Errorf("当前 CodeBuddy 模型目录不包含 %q；请先刷新模型目录", defaultModel)
 	}
 	baseURL := s.CodeBuddyProxyBaseURL()
-	desired := codebuddy.NewProfile(baseURL, apiKey)
+	desired := codebuddy.NewProfileFromCatalog(baseURL, apiKey, catalog)
 	desired.DefaultModel = defaultModel
 
 	list, err := s.Profiles.List()
@@ -130,31 +147,40 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 		return profiles.Profile{}, err
 	}
 	var profile profiles.Profile
+	var previous *profiles.Profile
+	createdNew := false
 	if existing, ok := selectCodeBuddyProfile(list); ok {
+		previousCopy := existing
+		previous = &previousCopy
 		desired.ID = existing.ID
 		desired.CreatedAt = existing.CreatedAt
-		// Keep the user-edited enabled model subset (e.g. only hy3 + flash).
-		// Startup ensure must not recreate the full KnownModels catalog.
-		if len(existing.Models) > 0 {
+		// Startup keeps the user-edited enabled subset. An explicit catalog sync
+		// replaces it with the latest WorkBuddy CLI catalog.
+		if len(existing.Models) > 0 && !opts.SyncCatalog {
 			desired.Models = restampCodeBuddyModels(existing.Models, baseURL, apiKey)
+			if !codeBuddyHasModel(desired.Models, defaultModel) {
+				if model, ok := catalog.Find(defaultModel); ok {
+					desired.Models = append(desired.Models, codebuddy.ModelDefinition(model, baseURL, apiKey))
+				}
+			}
 			if len(desired.Models) == 0 {
-				desired.Models = []profiles.ModelDef{codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey)}
+				desired.Models = []profiles.ModelDef{codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey, catalog)}
 			}
 			if strings.TrimSpace(opts.DefaultModel) != "" && !codeBuddyHasModel(desired.Models, desired.DefaultModel) {
-				desired.Models = append(desired.Models, codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey))
+				desired.Models = append(desired.Models, codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey, catalog))
 			}
 			desired.AvailableModels = codeBuddyModelNames(desired.Models)
 			if codeBuddyHasModel(desired.Models, existing.DefaultModel) && strings.TrimSpace(opts.DefaultModel) == "" {
-				desired.DefaultModel = canonicalCodeBuddyModelID(existing.DefaultModel)
+				desired.DefaultModel = canonicalCodeBuddyModelID(existing.DefaultModel, catalog)
 			} else if !codeBuddyHasModel(desired.Models, desired.DefaultModel) {
 				desired.DefaultModel = desired.Models[0].Name
 				if codeBuddyHasModel(desired.Models, codebuddy.DefaultModel) {
 					desired.DefaultModel = codebuddy.DefaultModel
 				}
 			}
-			if effort := strings.TrimSpace(existing.DefaultReasoningEffort); effort != "" {
-				desired.DefaultReasoningEffort = effort
-			}
+		}
+		if effort := strings.TrimSpace(existing.DefaultReasoningEffort); effort != "" {
+			desired.DefaultReasoningEffort = effort
 		}
 		updated, updateErr := s.Profiles.Update(existing.ID, desired)
 		if updateErr != nil {
@@ -167,12 +193,25 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 			return profiles.Profile{}, createErr
 		}
 		profile = created
+		createdNew = true
+	}
+	rollbackProfile := func(cause error) error {
+		var rollbackErr error
+		if createdNew {
+			rollbackErr = s.Profiles.Delete(profile.ID)
+		} else if previous != nil {
+			rollbackErr = s.Profiles.Restore(*previous)
+		}
+		if rollbackErr != nil {
+			return fmt.Errorf("CodeBuddy 路由更新失败: %v；恢复原供应商失败: %w", cause, rollbackErr)
+		}
+		return cause
 	}
 
 	if !opts.Activate {
 		if s.Routing != nil {
 			if err := s.ApplyCurrentRouting(); err != nil {
-				return profile, err
+				return profiles.Profile{}, rollbackProfile(err)
 			}
 		}
 		s.changed()
@@ -182,7 +221,7 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	if s.Routing == nil {
 		// Legacy single-profile path.
 		if _, err := s.Switcher.Activate(profile.ID); err != nil {
-			return profile, err
+			return profiles.Profile{}, rollbackProfile(err)
 		}
 		s.changed()
 		return profile, nil
@@ -193,11 +232,11 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	defer s.routingMu.Unlock()
 	stored, err := s.Routing.Snapshot()
 	if err != nil {
-		return profile, err
+		return profiles.Profile{}, rollbackProfile(err)
 	}
 	profileList, err := s.Profiles.List()
 	if err != nil {
-		return profile, err
+		return profiles.Profile{}, rollbackProfile(err)
 	}
 	activeDefault := strings.TrimSpace(profile.DefaultModel)
 	if activeDefault == "" {
@@ -218,7 +257,7 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	}
 	stored.ProviderPolicies[profile.ID] = policy
 	if _, err := s.applyRoutingSnapshotTransaction(profileList, stored); err != nil {
-		return profile, err
+		return profiles.Profile{}, rollbackProfile(err)
 	}
 	s.changed()
 	return profile, nil
@@ -288,33 +327,13 @@ func sortCodeBuddyProfilesByCreated(list []profiles.Profile) {
 	})
 }
 
-func codebuddyEnsureReasoning(model *profiles.ModelDef) bool {
-	if model == nil {
-		return false
-	}
-	changed := false
-	if !model.SupportsReasoningEffort {
-		model.SupportsReasoningEffort = true
-		changed = true
-	}
-	if len(model.ReasoningEfforts) == 0 {
-		model.ReasoningEfforts = append([]string(nil), profiles.CanonicalReasoningEfforts...)
-		changed = true
-	}
-	if strings.TrimSpace(model.ReasoningEffortsSource) == "" || model.ReasoningEffortsSource == "default" {
-		model.ReasoningEffortsSource = "declared"
-		changed = true
-	}
-	return changed
-}
-
 func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) []profiles.ModelDef {
 	out := make([]profiles.ModelDef, 0, len(models))
 	seen := map[string]bool{}
 	for _, model := range models {
-		upstream := canonicalCodeBuddyModelID(model.Model)
+		upstream := storedCodeBuddyModelID(model.Model)
 		if upstream == "" {
-			upstream = canonicalCodeBuddyModelID(model.Name)
+			upstream = storedCodeBuddyModelID(model.Name)
 		}
 		if upstream == "" || seen[upstream] {
 			continue
@@ -328,7 +347,6 @@ func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) 
 		if strings.TrimSpace(next.APIBackend) == "" {
 			next.APIBackend = "chat_completions"
 		}
-		codebuddyEnsureReasoning(&next)
 		if next.StreamToolCalls == nil || *next.StreamToolCalls {
 			next.StreamToolCalls = profiles.BoolPtr(false)
 		}
@@ -337,24 +355,33 @@ func restampCodeBuddyModels(models []profiles.ModelDef, baseURL, apiKey string) 
 	return out
 }
 
-func codeBuddyModelDefinition(id, baseURL, apiKey string) profiles.ModelDef {
-	id = canonicalCodeBuddyModelID(id)
-	for _, model := range codebuddy.NewProfile(baseURL, apiKey).Models {
-		if model.Name == id {
-			return model
-		}
+func storedCodeBuddyModelID(id string) string {
+	id = strings.TrimSpace(id)
+	if i := strings.LastIndex(id, "@"); i > 0 {
+		id = strings.TrimSpace(id[:i])
+	}
+	if codebuddy.IsValidModelID(id) {
+		return id
+	}
+	return ""
+}
+
+func codeBuddyModelDefinition(id, baseURL, apiKey string, catalog codebuddy.Catalog) profiles.ModelDef {
+	id = canonicalCodeBuddyModelID(id, catalog)
+	if model, ok := catalog.Find(id); ok {
+		return codebuddy.ModelDefinition(model, baseURL, apiKey)
 	}
 	return profiles.ModelDef{}
 }
 
-func canonicalCodeBuddyModelID(id string) string {
+func canonicalCodeBuddyModelID(id string, catalog codebuddy.Catalog) string {
 	id = strings.TrimSpace(id)
-	if codebuddy.IsKnownModel(id) {
+	if _, ok := catalog.Find(id); ok {
 		return id
 	}
 	if i := strings.LastIndex(id, "@"); i > 0 {
 		bare := strings.TrimSpace(id[:i])
-		if codebuddy.IsKnownModel(bare) {
+		if _, ok := catalog.Find(bare); ok {
 			return bare
 		}
 	}
@@ -417,13 +444,22 @@ func codeBuddyModelOffers(profile profiles.Profile, all []profiles.Profile) []co
 }
 
 func codeBuddyHasModel(models []profiles.ModelDef, name string) bool {
-	name = canonicalCodeBuddyModelID(name)
-	if name == "" {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndex(name, "@"); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	if !codebuddy.IsValidModelID(name) {
 		return false
 	}
 	for _, model := range models {
-		if canonicalCodeBuddyModelID(model.Name) == name || canonicalCodeBuddyModelID(model.Model) == name {
-			return true
+		for _, candidate := range []string{model.Name, model.Model} {
+			candidate = strings.TrimSpace(candidate)
+			if i := strings.LastIndex(candidate, "@"); i > 0 {
+				candidate = strings.TrimSpace(candidate[:i])
+			}
+			if candidate == name {
+				return true
+			}
 		}
 	}
 	return false

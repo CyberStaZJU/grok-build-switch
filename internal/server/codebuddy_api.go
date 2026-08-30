@@ -16,24 +16,28 @@ import (
 )
 
 type codeBuddyStatus struct {
-	Configured     bool     `json:"configured"`
-	HasAPIKey      bool     `json:"has_api_key"`
-	APIKeyMasked   string   `json:"api_key_masked,omitempty"`
-	ProxyBaseURL   string   `json:"proxy_base_url"`
-	ProxyPath      string   `json:"proxy_path"`
-	ProfileID      string   `json:"profile_id,omitempty"`
-	ProfileName    string   `json:"profile_name,omitempty"`
-	DefaultModel   string   `json:"default_model"`
-	Models         []string `json:"models"`
-	Active         bool     `json:"active"`
-	ActiveProvider string   `json:"active_provider_id,omitempty"`
-	Note           string   `json:"note,omitempty"`
+	Configured       bool                     `json:"configured"`
+	HasAPIKey        bool                     `json:"has_api_key"`
+	APIKeyMasked     string                   `json:"api_key_masked,omitempty"`
+	ProxyBaseURL     string                   `json:"proxy_base_url"`
+	ProxyPath        string                   `json:"proxy_path"`
+	ProfileID        string                   `json:"profile_id,omitempty"`
+	ProfileName      string                   `json:"profile_name,omitempty"`
+	DefaultModel     string                   `json:"default_model"`
+	Models           []string                 `json:"models"`
+	ModelCatalog     []codebuddy.CatalogModel `json:"model_catalog"`
+	CatalogSource    string                   `json:"catalog_source"`
+	CatalogUpdatedAt time.Time                `json:"catalog_updated_at,omitempty"`
+	Active           bool                     `json:"active"`
+	ActiveProvider   string                   `json:"active_provider_id,omitempty"`
+	Note             string                   `json:"note,omitempty"`
 }
 
 type codeBuddySaveRequest struct {
 	APIKey       *string `json:"api_key"`
 	DefaultModel string  `json:"default_model"`
 	Activate     bool    `json:"activate"`
+	SyncCatalog  bool    `json:"sync_catalog"`
 }
 
 type codeBuddyTestRequest struct {
@@ -72,6 +76,20 @@ func (s *Server) handleCodeBuddyAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleCodeBuddyModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	catalog := s.codeBuddyCatalog()
+	writeJSON(w, map[string]any{
+		"models":             catalog.Models,
+		"source":             catalog.Source,
+		"updated_at":         catalog.UpdatedAt,
+		"inference_endpoint": codebuddy.DefaultUpstream,
+	})
+}
+
 func (s *Server) handleCodeBuddyTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
@@ -94,8 +112,8 @@ func (s *Server) handleCodeBuddyTest(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = codebuddy.DefaultModel
 	}
-	if !codebuddy.IsKnownModel(model) {
-		writeError(w, fmt.Errorf("不支持的模型 %q", model), http.StatusBadRequest)
+	if _, ok := s.codeBuddyCatalog().Find(model); !ok {
+		writeError(w, fmt.Errorf("当前 CodeBuddy 模型目录不包含 %q", model), http.StatusBadRequest)
 		return
 	}
 	result, err := testCodeBuddyUpstream(r.Context(), key, model)
@@ -141,12 +159,22 @@ func (s *Server) handleCodeBuddyActivate(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) codeBuddyStatus() (codeBuddyStatus, error) {
+	catalog := s.codeBuddyCatalog()
+	defaultModel := codebuddy.DefaultModel
+	if _, ok := catalog.Find(defaultModel); !ok {
+		if ids := catalog.IDs(); len(ids) > 0 {
+			defaultModel = ids[0]
+		}
+	}
 	status := codeBuddyStatus{
-		ProxyBaseURL: s.CodeBuddyProxyBaseURL(),
-		ProxyPath:    "/codebuddy-proxy/v1",
-		DefaultModel: codebuddy.DefaultModel,
-		Models:       append([]string(nil), codebuddy.KnownModels...),
-		Note:         "请求经 Switch 本机代理转发到 CodeBuddy，不经过 WorkBuddy agent harness。",
+		ProxyBaseURL:     s.CodeBuddyProxyBaseURL(),
+		ProxyPath:        "/codebuddy-proxy/v1",
+		DefaultModel:     defaultModel,
+		Models:           catalog.IDs(),
+		ModelCatalog:     append([]codebuddy.CatalogModel(nil), catalog.Models...),
+		CatalogSource:    catalog.Source,
+		CatalogUpdatedAt: catalog.UpdatedAt,
+		Note:             "模型目录只读同步自 WorkBuddy 本机产品缓存；推理由 Switch 直接请求 CodeBuddy，不经过 WorkBuddy agent harness。",
 	}
 	if s.ActualPort == 0 {
 		status.ProxyBaseURL = "http://127.0.0.1:<port>/codebuddy-proxy/v1"
@@ -226,6 +254,7 @@ func (s *Server) saveCodeBuddy(req codeBuddySaveRequest) (profiles.Profile, erro
 		APIKey:       key,
 		DefaultModel: req.DefaultModel,
 		Activate:     req.Activate,
+		SyncCatalog:  req.SyncCatalog,
 	})
 }
 
@@ -233,7 +262,7 @@ func testCodeBuddyUpstream(ctx context.Context, apiKey, model string) (string, e
 	body, _ := json.Marshal(map[string]any{
 		"model":      model,
 		"stream":     true,
-		"max_tokens": 16,
+		"max_tokens": 256,
 		"messages":   []map[string]string{{"role": "user", "content": "Reply with exactly: pong"}},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, codebuddy.DefaultUpstream, bytes.NewReader(body))
@@ -259,6 +288,7 @@ func testCodeBuddyUpstream(ctx context.Context, apiKey, model string) (string, e
 		return "", err
 	}
 	var content strings.Builder
+	var reasoning strings.Builder
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
@@ -279,13 +309,19 @@ func testCodeBuddyUpstream(ctx context.Context, apiKey, model string) (string, e
 			if c, ok := delta["content"].(string); ok {
 				content.WriteString(c)
 			}
+			if c, ok := delta["reasoning_content"].(string); ok {
+				reasoning.WriteString(c)
+			}
 		}
 	}
 	reply := strings.TrimSpace(content.String())
-	if reply == "" {
-		return "", fmt.Errorf("上游未返回内容")
+	if reply != "" {
+		return reply, nil
 	}
-	return reply, nil
+	if strings.TrimSpace(reasoning.String()) != "" {
+		return "模型已返回推理流", nil
+	}
+	return "", fmt.Errorf("上游未返回内容")
 }
 
 func maskSecret(secret string) string {
@@ -307,4 +343,3 @@ func isNotExist(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not exist") || strings.Contains(msg, "no such file")
 }
-

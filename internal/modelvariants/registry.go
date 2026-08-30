@@ -17,6 +17,7 @@ var trustedCodexPhysicalModels = map[string]struct{}{
 }
 
 var trustedCodexReasoningEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+var trustedCodexSolReasoningEfforts = []string{"low", "medium", "high", "xhigh", "max", "ultra"}
 
 func IsTrustedCodexPhysicalModel(id string) bool {
 	_, ok := trustedCodexPhysicalModels[strings.TrimSpace(id)]
@@ -80,6 +81,13 @@ func TrustedCodexFastLeaf(physicalID string) (string, bool) {
 	return physicalID + "-fast", true
 }
 
-func TrustedCodexReasoningEfforts() []string {
+func TrustedCodexReasoningEffortsForPhysicalModel(physicalID string) []string {
+	if strings.TrimSpace(physicalID) == "gpt-5.6-sol" {
+		return append([]string(nil), trustedCodexSolReasoningEfforts...)
+	}
 	return append([]string(nil), trustedCodexReasoningEfforts...)
+}
+
+func TrustedCodexReasoningEfforts() []string {
+	return TrustedCodexReasoningEffortsForPhysicalModel("")
 }

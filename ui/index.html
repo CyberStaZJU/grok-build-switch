@@ -123,10 +123,11 @@
                     <option value="high">高 (high)</option>
                     <option value="xhigh">超高 (xhigh)</option>
                     <option value="max">最大 (max)</option>
+                    <option value="ultra">极致 (ultra)</option>
                     <option value="none">禁用推理 (none)</option>
                   </select>
                 </div>
-                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、none。上游若不支持所选档位，可能静默忽略。</span>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、ultra、none。ultra 当前用于 Codex gpt-5.6-sol Standard/Fast；其他上游若不支持可能静默忽略。</span>
               </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
@@ -210,7 +211,8 @@
           </div>
         </div>
         <div class="inlineActions">
-          <button type="button" id="codeBuddyRefreshBtn" class="btn ghost">刷新</button>
+          <button type="button" id="codeBuddyRefreshBtn" class="btn ghost">刷新状态</button>
+          <button type="button" id="codeBuddySyncModelsBtn" class="btn">刷新模型目录</button>
           <button type="button" id="codeBuddyTestBtn" class="btn">测试连通</button>
         </div>
         <p id="codeBuddyTestResult" class="connStatus" hidden></p>
@@ -233,7 +235,8 @@
 
       <section class="formCard">
         <h2 class="sectionTitle">第 2 步：默认模型</h2>
-        <p class="muted tiny">启用 CodeBuddy 供应商后，Grok 的 <code>default</code> 将指向这里选择的模型。</p>
+        <p class="muted tiny">目录来自 WorkBuddy 已同步的 CodeBuddy 产品配置；启用供应商后，Grok 的 <code>default</code> 将指向这里选择的模型。</p>
+        <p id="codeBuddyCatalogDetail" class="muted tiny">模型目录加载中…</p>
         <label class="field">
           默认模型
           <select id="codeBuddyDefaultModel" class="mono"></select>
@@ -259,6 +262,7 @@
         <h2 class="sectionTitle">说明</h2>
         <ul class="muted tiny codeBuddyNotes">
           <li>Harness 仍是 Grok Build；只有模型推理走 CodeBuddy 订阅。</li>
+          <li><code>/v2/chat/completions</code> 是推理端点，不提供模型枚举；Switch 只读同步 WorkBuddy 本机的最新产品目录。</li>
           <li>上游仅支持流式；Switch 代理会清洗 <code>finish_reason:""</code>，避免 Grok 反序列化失败。</li>
           <li>进程内路径：<code>/codebuddy-proxy/v1</code>（需使用含本功能的 Switch 版本）。</li>
         </ul>
