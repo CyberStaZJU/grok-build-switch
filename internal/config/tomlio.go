@@ -242,16 +242,19 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 		if apiKey == "" {
 			apiKey = effectiveKey
 		}
+		efforts := make([]string, 0, len(model.ReasoningEfforts))
+		for _, effort := range model.ReasoningEfforts {
+			if strings.TrimSpace(effort) != "ultra" {
+				efforts = append(efforts, effort)
+			}
+		}
 		entry := map[string]any{
 			"model":                     model.Model,
 			"api_key":                   apiKey,
 			"api_backend":               model.APIBackend,
 			"supports_backend_search":   model.SupportsBackendSearch,
 			"supports_reasoning_effort": model.SupportsReasoningEffort,
-			"reasoning_efforts":         model.ReasoningEfforts,
-		}
-		if strings.TrimSpace(model.ReasoningEffortsSource) != "" {
-			entry["reasoning_efforts_source"] = model.ReasoningEffortsSource
+			"reasoning_efforts":         efforts,
 		}
 		// Omit zero values so Grok uses its own defaults:
 		// - omitted context_window → ~200k for new models (or built-in inherit)

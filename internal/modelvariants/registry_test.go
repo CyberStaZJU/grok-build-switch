@@ -73,13 +73,12 @@ func TestTrustedCodexReasoningEffortsAreModelSpecificAndCopied(t *testing.T) {
 	if got := TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-luna"); !reflect.DeepEqual(got, base) {
 		t.Fatalf("Luna reasoning efforts = %v, want %v", got, base)
 	}
-	sol := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
 	first := TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-sol")
-	if !reflect.DeepEqual(first, sol) {
-		t.Fatalf("Sol reasoning efforts = %v, want %v", first, sol)
+	if !reflect.DeepEqual(first, base) {
+		t.Fatalf("Sol reasoning efforts = %v, want %v", first, base)
 	}
 	first[0] = "mutated"
-	if got := TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-sol"); !reflect.DeepEqual(got, sol) {
+	if got := TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-sol"); !reflect.DeepEqual(got, base) {
 		t.Fatalf("registry reasoning efforts were mutated through returned slice: %v", got)
 	}
 	if got := TrustedCodexReasoningEfforts(); !reflect.DeepEqual(got, base) {

@@ -51,9 +51,9 @@ type Profile struct {
 }
 
 // Matches compares the view that can be projected to and reconstructed from
-// Grok's config.toml. Switch-only catalog metadata such as SpeedTier and
-// StandardAnchor is intentionally ignored here; durable profile/routing stores
-// validate and compare that metadata separately.
+// Grok's config.toml. Switch-only catalog metadata such as SpeedTier,
+// StandardAnchor, and ReasoningEffortsSource is intentionally ignored here;
+// durable profile/routing stores validate and compare that metadata separately.
 func (p Profile) Matches(other Profile) bool {
 	p = Normalize(p)
 	other = Normalize(other)
@@ -99,7 +99,6 @@ func modelEqual(a, b ModelDef) bool {
 		a.APIBackend != b.APIBackend ||
 		a.SupportsBackendSearch != b.SupportsBackendSearch ||
 		a.SupportsReasoningEffort != b.SupportsReasoningEffort ||
-		a.ReasoningEffortsSource != b.ReasoningEffortsSource ||
 		a.ContextWindow != b.ContextWindow ||
 		a.MaxCompletionTokens != b.MaxCompletionTokens ||
 		!optionalBoolEqual(a.StreamToolCalls, b.StreamToolCalls) {
@@ -172,7 +171,7 @@ func ValidateModelVariants(p Profile) error {
 
 // CanonicalReasoningEfforts is the fixed user-facing menu. Models no longer
 // advertise a probed subset; upstream may silently ignore an unsupported tier.
-var CanonicalReasoningEfforts = []string{"medium", "high", "xhigh", "max", "ultra", "none"}
+var CanonicalReasoningEfforts = []string{"medium", "high", "xhigh", "max", "none"}
 
 // IsCanonicalReasoningEffort reports whether effort is empty or one of the
 // fixed menu values.
@@ -196,6 +195,9 @@ func ModelSupportsReasoningEffort(model ModelDef, effort string) bool {
 	effort = strings.TrimSpace(effort)
 	if effort == "" || effort == "none" {
 		return true
+	}
+	if effort == "ultra" {
+		return false
 	}
 	aliases := []string{strings.TrimSpace(model.Name), strings.TrimSpace(model.Model)}
 	trustedPhysicalID := ""
@@ -322,7 +324,13 @@ func Normalize(p Profile) Profile {
 		if p.Models[i].ExtraHeaders == nil {
 			p.Models[i].ExtraHeaders = map[string]string{}
 		}
-		p.Models[i].ReasoningEfforts = uniqueStrings(p.Models[i].ReasoningEfforts)
+		efforts := uniqueStrings(p.Models[i].ReasoningEfforts)
+		p.Models[i].ReasoningEfforts = make([]string, 0, len(efforts))
+		for _, effort := range efforts {
+			if effort != "ultra" {
+				p.Models[i].ReasoningEfforts = append(p.Models[i].ReasoningEfforts, effort)
+			}
+		}
 		if len(p.Models[i].ReasoningEfforts) > 0 {
 			p.Models[i].SupportsReasoningEffort = true
 			if p.Models[i].ReasoningEffortsSource == "" {

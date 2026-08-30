@@ -1,6 +1,6 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、产品边界与技术债。最后更新：2026-08-30（Codex Sol Ultra 推理模式）。
+> 当前状态、产品边界与技术债。最后更新：2026-08-30（Grok Build 推理强度暂只接入到 max）。
 
 ---
 
@@ -8,16 +8,17 @@
 
 ### 1.1 保留并维护的能力
 
-- **GitHub 当前基线**：2026-08-30 已将 CodeBuddy 本机目录同步、Codex Sol Ultra、托管 Profile/路由边界加固、测试和文档推送到 `https://github.com/CyberStaZJU/grok-build-switch` 的 `main`。功能提交 `ef5d4522e75e322f08cc9a0e12cd217526050234` 已由本地 `HEAD`、`origin/main` 与远端 advertised ref 核验一致；提交不包含构建产物、运行数据、凭据或私有 home 路径。
-- **发布前边界加固**：2026-08-30 GitHub 同步前独立审查并修复四类边界：路由按具体模型的可信声明校验推理强度，Terra/Luna Standard/Fast 以及“自定义显示名 + 可信模型 ID”均不能绕过 `ultra` 限制，Sol Standard/Fast 保持支持；供应商编辑页保留已保存且由模型声明的 `low` 等非全局菜单值；CodeBuddy 本机目录跨文件按嵌入时间戳选择最新有效完整快照；CodeBuddy Profile 在后续路由或激活失败时恢复原 Profile 或删除本次新建项。隔离源码实例已通过桌面 context-only 保存 `low`、`390×844` 移动布局及持久化验证；全量 Go、vet、race、前端 Node 与 Wails-tag 测试通过。
-- **最新本机安装**：2026-08-30 已用重建 DMG 替换并重启 `/Applications/Grok Build Switch.app`，当前为 `0.9.0 (build 9)`；arm64 主程序 SHA-256 为 `68e5de7a837dfded9fb08688b31858b093058850a58700ab6457098dee40423b`，严格 codesign 校验通过。该安装仍为 ad-hoc 签名，没有 Developer ID 签名或 Apple 公证。旧 App 完整回滚备份位于 `~/.grok/build-state/grok-build-switch-installed-backup-20260830T043532Z`；真实 Codex 托管 Profile 同步前的 `profiles.json`、`routing.json` 与 `config.toml` 快照位于 `~/.grok/build-state/grok-build-switch-live-ultra-sync-backup-20260830T044202Z`。
-- **Codex Sol Ultra**：`gpt-5.6-sol` 的 Standard 与 Fast 逻辑路由均显式声明 `ultra` 推理档位，Terra/Luna 保持原档位集合。供应商编辑页可选择 `ultra`；订阅代理托管 Profile 仅允许保存所选模型已声明的默认推理强度和上下文窗口，其他托管字段继续通过订阅代理页面更新。2026-08-30 除隔离验证外，还在已安装 App 的真实订阅代理页面显式更新 Codex 托管供应商：桌面编辑页保存 Standard+Ultra、受保护路由接口切换 Fast+Ultra，`390×844` 首页/订阅/编辑页无横向溢出，`config.toml` 与 `routing.json` 持久化一致；验证后默认恢复为 Standard+Medium，Standard/Fast 继续保留 `ultra` 能力。全量 Go、vet、受影响包 race、前端 Node 与 Wails-tag 测试此前均通过。
+- **Grok Build 推理强度兼容边界**：2026-08-30 经本机 Grok Build `1.0.13` 实测，`max` 是可用的最高原生推理档位，`ultra` 会使该模型整组自定义档位失效。当前源码与 UI 暂只接入到 `max`：可信 Codex Standard/Fast 均声明到 `max`，`ultra` 被服务端拒绝且不投影到 `config.toml`；Switch 内部的 `reasoning_efforts_source` 只留在 Profile/路由状态，不再写入 Grok 的未知字段。
+- **历史 GitHub 基线**：2026-08-30 曾将 CodeBuddy 本机目录同步、当时的 Codex Sol Ultra 实现、托管 Profile/路由边界加固、测试和文档推送到 `https://github.com/CyberStaZJU/grok-build-switch` 的 `main`。历史功能提交 `ef5d4522e75e322f08cc9a0e12cd217526050234` 已由本地 `HEAD`、`origin/main` 与远端 advertised ref 核验一致；提交不包含构建产物、运行数据、凭据或私有 home 路径。后续 max-only 改动已取代该提交中的 Ultra 运行行为。
+- **历史发布前边界加固（已被 max-only 决策取代 Ultra 部分）**：2026-08-30 GitHub 同步前独立审查并修复四类边界：路由按具体模型的可信声明校验推理强度，当时 Terra/Luna Standard/Fast 以及“自定义显示名 + 可信模型 ID”不能绕过 `ultra` 限制，Sol Standard/Fast 保持支持；供应商编辑页保留已保存且由模型声明的 `low` 等非全局菜单值；CodeBuddy 本机目录跨文件按嵌入时间戳选择最新有效完整快照；CodeBuddy Profile 在后续路由或激活失败时恢复原 Profile 或删除本次新建项。隔离源码实例已通过桌面 context-only 保存 `low`、`390×844` 移动布局及持久化验证；全量 Go、vet、race、前端 Node 与 Wails-tag 测试通过。当前运行行为以本节的 max-only 条目为准。
+- **最新本机安装**：2026-08-30 已构建并安装 `0.9.2 (build 11)` 到 `/Applications/Grok Build Switch.app`，运行配置、凭据和账号数据保持存在。arm64 主程序 SHA-256 为 `65e5023dd283b6390a19534c03f20f05cc034fded41a3607219f6f48f09eb918`，与 `dist/macos/Grok Build Switch.app` 主程序逐字节一致；严格 codesign 校验通过，但仍是 ad-hoc 签名，没有 Developer ID 签名或 Apple 公证。当前进程从安装路径运行并监听 `127.0.0.1:17878`。真实桌面与 `390×844` 移动页面确认首页、Codex 编辑、订阅代理和 CodeBuddy 状态一致且无横向溢出；CodeBuddy 仍暴露 `hy4-preview`、`hy4-preview-x`、`hy3`，默认 `hy4-preview-x`，保持未激活。仓库中保留 0.9.2 DMG、`.sha256` 和 App 构建副本作为本轮产物；它们不是第二个已安装 App。
+- **Codex 推理强度最高接入到 Max**：`gpt-5.6-sol` 的 Standard 与 Fast 逻辑路由均显式声明 `low / medium / high / xhigh / max`，不再声明 `ultra`。供应商编辑页只提供 `medium / high / xhigh / max / none`；服务端会过滤陈旧 `ultra` 元数据并拒绝将其作为默认值，Switch 内部 `reasoning_efforts_source` 不再投影到 Grok `config.toml`。本机 Grok Build `1.0.13` 已实测 Standard/Fast 的 `max` 均返回 `OK`，`ultra` 被明确拒绝。真实托管 Profile 编辑页提交 `max` 成功，证明 effort-only 保存不再误报 409；验证后 Profile 恢复 Standard+Medium，全局路由恢复 Fast+High，`config.toml`、routing 和运行 API 一致。
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
 - **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash/deepseek-v4-pro）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。Codex GPT-5.6 订阅代理模型的建议窗口为 320,000 tokens；订阅代理 Profile 允许在供应商编辑页调整上下文窗口和默认推理强度，其他托管字段仍通过订阅代理页面更新；编辑表单会保留上游已声明但不在当前菜单中的推理档位（如 Codex 的 `low`），避免保存上下文窗口时丢失模型元数据。CodeBuddy 的 DeepSeek v4 Flash/Pro 使用 1,000,000 的配置窗口，为已验证的 1,048,576 网关上限保留系统提示、工具调用和输出余量。
 - **供应商默认模型写入路由**：在供应商编辑页设置 default 模型与推理强度；保存后事务性更新 `config.toml` 与 `routing.json`。explore / plan 跟随该 default（无独立「模型路由」页）。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。
-- **CodeBuddy / WorkBuddy 模型接入**：Switch 以本机 loopback OpenAI Chat Completions 代理直接请求固定推理端点 `https://copilot.tencent.com/v2/chat/completions`，不使用 WorkBuddy agent harness。`/v2/chat/completions` 本身不提供模型枚举；CodeBuddy 页面通过 `GET /api/codebuddy/models` 和“刷新模型目录”只读解析 WorkBuddy 本机已同步的产品目录，只采用 `cli` agent 明确允许、支持 tool call 且模型 ID 合法的条目，并显示来源和更新时间。目录缺失或损坏时使用 Switch 内置已验证兜底；显式同步才更新托管 Profile，普通启动不扩张用户模型子集。2026-08-28 本机目录包含 16 个 CLI 模型，包括 `kimi-k3-2`、`hy4-preview`、`glm-5.3`、`glm-5.3-flash`；四者均已用现有 CodeBuddy API Key 最小直连验证 HTTP 200。CodeBuddy 托管 Profile 的普通编辑入口仅允许调整上下文窗口，目录、密钥和默认模型必须走 CodeBuddy 页面。当天已安装 `0.9.0 (build 9)` ad-hoc 本地候选并在真实实例同步该目录；CodeBuddy 保持未激活，默认供应商仍为 Codex Sol，四个新模型经页面逐一连通返回 `pong`。旧 0.8.0 安装包已保存在仓库外 build-state 供回滚；新包未经 Developer ID 签名或 Apple 公证。
+- **CodeBuddy / WorkBuddy 模型接入**：Switch 以本机 loopback OpenAI Chat Completions 代理直接请求固定推理端点 `https://copilot.tencent.com/v2/chat/completions`，不使用 WorkBuddy agent harness。`/v2/chat/completions` 本身不提供模型枚举；CodeBuddy 页面通过 `GET /api/codebuddy/models` 和“刷新模型目录”只读解析 WorkBuddy 本机已同步的产品目录，只采用 `cli` agent 明确允许、支持 tool call 且模型 ID 合法的条目，并显示来源和更新时间。目录缺失或损坏时使用 Switch 内置已验证兜底；普通启动不扩张用户模型子集。2026-08-30 页面新增 CodeBuddy 专属“暴露给 Grok Build”多选：默认模型必须属于所选子集；保存只更新 CodeBuddy Profile 并重新投影组合路由，其他供应商模型保持不变。隔离浏览器实例已验证只选 `hy4-preview` 后 CodeBuddy Profile、`config.toml` 与代理 `/v1/models` 均只保留该模型，另一个供应商的模型仍存在；空子集被前后端拒绝，桌面流程和 `390×844` 移动布局无横向溢出。2026-08-28 本机目录包含 16 个 CLI 模型，包括 `kimi-k3-2`、`hy4-preview`、`glm-5.3`、`glm-5.3-flash`；四者均已用现有 CodeBuddy API Key 最小直连验证 HTTP 200。CodeBuddy 托管 Profile 的普通编辑入口仅允许调整上下文窗口，目录、密钥、暴露子集和默认模型必须走 CodeBuddy 页面。当天已安装 `0.9.0 (build 9)` ad-hoc 本地候选并在真实实例同步该目录；CodeBuddy 保持未激活，默认供应商仍为 Codex Sol，四个新模型经页面逐一连通返回 `pong`。旧 0.8.0 安装包已保存在仓库外 build-state 供回滚；新包未经 Developer ID 签名或 Apple 公证。
 - **配置编辑**：查看、校验和编辑 Grok CLI 的 `~/.grok/config.toml`。
 - **菜单栏与桌面壳**：macOS 菜单栏、Wails 窗口、单实例与自动启动流程可用。
 - **LAN 与 SSH**：局域网配对、CSRF 防护、SSH 连接和远程文件管理可用。
@@ -43,7 +44,7 @@
 
 ### 2.1 单一启用供应商与路由切换
 
-`routing.json` 当前使用 schema v2：保存唯一 `active_provider_id`，并为每个供应商分别记忆 default、web_search、explore、plan 与默认推理强度。自定义供应商默认全部进入混合路由目录，不必再逐个启用。官方账号仍是互斥特例，但不与自定义认证混用。产品 UI 已去掉独立「模型路由」页：保存供应商时把其默认模型写入 Grok `default`，并强制 explore / plan 跟随；推理强度固定为 medium / high / xhigh / max / ultra / none；`ultra` 当前由 Codex `gpt-5.6-sol` 的 Standard/Fast 路由显式声明。
+`routing.json` 当前使用 schema v2：保存唯一 `active_provider_id`，并为每个供应商分别记忆 default、web_search、explore、plan 与默认推理强度。自定义供应商默认全部进入混合路由目录，不必再逐个启用。官方账号仍是互斥特例，但不与自定义认证混用。产品 UI 已去掉独立「模型路由」页：保存供应商时把其默认模型写入 Grok `default`，并强制 explore / plan 跟随；Switch 可保存 medium / high / xhigh / max / none。`max` 是推理强度元数据，不是独立模型，所以不会作为模型行出现在 `/m`；本机 Grok Build `1.0.13` 已实测 `/effort max` 和 `--effort max` 可用。`ultra` 暂不接入：服务端拒绝该默认值，模型能力和 `config.toml` 投影中均不包含它。
 
 - v1 按 default 路由所属供应商确定启用项；跨供应商的 web_search、explore 与 plan 会分别迁移到其路由所属供应商的策略记忆。
 - `config.toml` 保留全部自定义模型定义；web_search 仍由后端在具备能力时选用或修复。
@@ -68,7 +69,7 @@
 
 - routing 仍保持 schema v2；Collaboration Policy 使用独立 schema v5，保存在应用 DataDir 的 `collaboration.json`。每个角色保存 Standard route anchor、`speed_tier` 与 `reasoning_effort`。旧 schema v1/v2/v3/v4 均严格解码并只在内存迁移为 v5；v1 映射三角色与全局 effort，v2 保留四角色 model/effort 并固定 Standard，v3 保留四角色 anchor/speed/effort；三者都复制顶层 provider 到各角色、写入 workflow 派生的固定 data scope、保持 federation consent 为空。读取不重写旧文件，下一次显式保存才持久化 v5。
 - v1 的 coordinator → 主协调与主实现、evidence → 任务拆解、builder → 困难实现 / 复核，旧全局 effort 复制到四角色；v2 保留四角色模型/effort。两者都不会根据 `-fast` 后缀自动提高速度档：旧具体 Fast ID 若不能作为可信 Standard 锚点解析会 fail closed，等待用户显式修复。
-- Standard 使用现有逻辑身份且不注入 priority；Fast 仅解析到 exact-registry 可信 Terra/Sol/Luna partner，由 CLIProxy 对精确 `-fast` 别名注入 `service_tier: priority`。缺失、歧义或伪造关系不回退。速度与 effort 相互独立；Fast 通常更快但消耗更多订阅 credits，无固定倍率声明。`gpt-5.6-sol` 的 Standard/Fast 路由额外显式声明 `ultra` 推理档位，Terra/Luna 保持原档位集合。
+- Standard 使用现有逻辑身份且不注入 priority；Fast 仅解析到 exact-registry 可信 Terra/Sol/Luna partner，由 CLIProxy 对精确 `-fast` 别名注入 `service_tier: priority`。缺失、歧义或伪造关系不回退。速度与 effort 相互独立；Fast 通常更快但消耗更多订阅 credits，无固定倍率声明。所有可信 Codex Standard/Fast 路由的推理档位当前统一到 `max`，不声明 `ultra`。
 - 能力校验 fail closed：四个锚点必须属于当前启用的同一可信 Codex 订阅供应商；每个解析后的具体 Standard/Fast route 都必须 `supports_reasoning_effort=true`、来源为 `declared` 或 `probe`、支持列表明确包含该角色所选 effort。
 - preview 无副作用；apply 需要用户确认和最新 fingerprint；端点全部 loopback-only、strict JSON、CSRF 保护。
 - enabled apply 写入顺序为 artifacts → config → routing → policy；后段失败会补偿回滚。写入前再次核对文件状态，避免 stale preview 覆盖并发用户编辑。

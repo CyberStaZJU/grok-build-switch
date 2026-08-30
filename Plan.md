@@ -5,7 +5,7 @@
 
 ## 当前任务
 
-当前无进行中任务。
+暂无。
 
 ## 待办（按优先级）
 
@@ -23,6 +23,10 @@
 
 ## 已完成
 
+- [x] 2026-08-30 按用户决定暂不接入 `ultra`、只接入到 `max`：供应商编辑菜单与可信 Codex Standard/Fast 能力均移除 `ultra`，陈旧声明会被过滤且不能绕过服务端校验；Switch 内部 `reasoning_efforts_source` 不再投影到 Grok `config.toml`。修复托管 Profile effort-only 保存因提前补齐上下文窗口而误报 409，以及规范化切片复用导致原 Profile 元数据被修改的问题。前端 21 项、全量 Go、vet、相关包 race、Wails-tag 测试通过；Standard/Fast 的 `max` 均实测返回 `OK`，`ultra` 被 Grok Build 1.0.13 拒绝。已构建并安装 `0.9.2 (build 11)` ad-hoc 候选，主程序 SHA-256 `65e5023dd283b6390a19534c03f20f05cc034fded41a3607219f6f48f09eb918`，与仓库构建副本逐字节一致；桌面与 `390×844` 移动端首页、Codex 编辑、订阅代理和 CodeBuddy 页面通过，托管供应商保存 `max` 成功且无横向溢出。验证后 Profile 恢复 Standard+Medium，全局路由恢复 Fast+High，`config.toml`/routing 一致且不含 `ultra` 或 `reasoning_efforts_source`。浏览器录制位于 `~/.config/browser-harness/agent-workspace/recordings/gbs-max-only-final`。
+- [x] 2026-08-30 按用户要求只保留一个最新版 App：删除仓库中被 Git 忽略的 `dist/macos/Grok Build Switch.app` 构建副本，以及 `~/.grok/build-state` 下三个已核验为 0.8.0/0.9.0 的旧 App bundle；各父目录中的配置快照、清单和其他证据文件未删除。Spotlight 全局应用索引现只返回 `/Applications/Grok Build Switch.app`；该安装仍为 `0.9.1 (build 10)`，主程序哈希未变并正常监听 `127.0.0.1:17878`。保留的 0.9.1 DMG 与 `.sha256` 是安装介质，不是第二个已安装 App，校验仍通过。
+- [x] 2026-08-30 为 CodeBuddy 增加独立的 Grok Build 暴露模型多选：默认模型必须属于所选子集，空子集被前后端拒绝，保存时只更新 CodeBuddy Profile 并通过统一路由保留其他供应商。前端 21 项、全量 Go、vet、相关包 race 与 Wails-tag 测试通过；仓库外隔离实例验证只暴露 `hy4-preview`、另一供应商的 `other-model` 保持存在、代理 `/v1/models` 只返回 `hy4-preview`，桌面流程与 `390×844` 移动布局通过。隔离状态保留在 `~/.grok/build-state/grok-build-switch-codebuddy-subset-20260830`，待获得清理授权。
+- [x] 2026-08-30 以 `MARKETING_VERSION=0.9.1 BUILD_VERSION=10 ./build-macos.sh` 构建并安装 CodeBuddy 子集版本。旧 `/Applications/Grok Build Switch.app` 已停止并删除，新 App 从校验后的 DMG 安装；运行配置、凭据和账号数据保留，安装前配置快照位于 `~/.grok/build-state/grok-build-switch-preinstall-config-20260830T205215`。当前安装为 `0.9.1 (build 10)`，arm64 主程序 SHA-256 `be9d6590c1718fc4d37e23f9bf54f1ebdee28b4214500b5125f29b5cd1bd9a6c`，与 DMG 内主程序逐字节一致；App 为 ad-hoc 签名且未公证，进程从 `/Applications/Grok Build Switch.app` 运行并监听 `127.0.0.1:17878`。真实页面验证 CodeBuddy 当前只暴露 `hy4-preview` 与 `hy4-preview-x`、默认 `hy4-preview-x`，其他供应商模型仍在 Grok `/m`，桌面与 `390×844` 移动布局通过。Finder 单独显示的时间不是版本依据；实际 bundle/binary 于 20:51–20:52 创建并在 20:54 安装。
 - [x] 2026-08-30 将 CodeBuddy 本机目录同步、Codex Sol Ultra、托管 Profile/路由边界加固、测试和文档提交并推送到 `https://github.com/CyberStaZJU/grok-build-switch` `main`。功能提交 `ef5d4522e75e322f08cc9a0e12cd217526050234` 已由 `git fetch`、`origin/main` 和 `git ls-remote` 三方核验一致；最终独立审查无阻断项，工作区除忽略的 `.DS_Store`、`dist/`、`vendor/` 外保持干净。
 - [x] 2026-08-30 将重建的 `0.9.0 (build 9)` DMG 安装到 `/Applications/Grok Build Switch.app` 并重启。旧 App 已移动到 `~/.grok/build-state/grok-build-switch-installed-backup-20260830T043532Z`；另在 Codex 托管 Profile 显式同步前保存 `~/.grok/build-state/grok-build-switch-live-ultra-sync-backup-20260830T044202Z`。已核验版本、进程、端口、主程序哈希、ad-hoc 签名、API 与路由一致性；真实桌面页面保存 Standard+Ultra、受保护路由切换 Fast+Ultra、移动端 `390×844` 首页/订阅/编辑页无横向溢出。最终默认恢复为 Sol Standard+Medium，Standard/Fast 均保留 `ultra` 能力。
 - [x] 2026-08-30 删除两套仓库外 Ultra 隔离验证状态，并以 `MARKETING_VERSION=0.9.0 BUILD_VERSION=9 ./build-macos.sh` 重建 macOS arm64 App 与 DMG。脚本内全量 Go 测试、macOS 15.0 最低版本检查、ad-hoc 签名校验、DMG staging 签名校验和 SHA-256 生成通过；DMG 校验和复核通过。

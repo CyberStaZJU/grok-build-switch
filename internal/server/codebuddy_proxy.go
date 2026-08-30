@@ -102,10 +102,11 @@ func (s *Server) EnsureCodeBuddyRoutes() error {
 
 // CodeBuddyEnsureOptions controls managed profile create/update/activation.
 type CodeBuddyEnsureOptions struct {
-	APIKey       string
-	DefaultModel string
-	Activate     bool
-	SyncCatalog  bool
+	APIKey        string
+	DefaultModel  string
+	EnabledModels []string
+	Activate      bool
+	SyncCatalog   bool
 }
 
 // EnsureCodeBuddyProvider creates or updates the managed CodeBuddy profile and
@@ -141,6 +142,17 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 	baseURL := s.CodeBuddyProxyBaseURL()
 	desired := codebuddy.NewProfileFromCatalog(baseURL, apiKey, catalog)
 	desired.DefaultModel = defaultModel
+	if opts.EnabledModels != nil {
+		selected, selectErr := selectedCodeBuddyModels(catalog, opts.EnabledModels, baseURL, apiKey)
+		if selectErr != nil {
+			return profiles.Profile{}, selectErr
+		}
+		if !codeBuddyHasModel(selected, defaultModel) {
+			return profiles.Profile{}, fmt.Errorf("CodeBuddy 默认模型 %q 必须属于已选择的暴露模型", defaultModel)
+		}
+		desired.Models = selected
+		desired.AvailableModels = codeBuddyModelNames(selected)
+	}
 
 	list, err := s.Profiles.List()
 	if err != nil {
@@ -154,9 +166,9 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 		previous = &previousCopy
 		desired.ID = existing.ID
 		desired.CreatedAt = existing.CreatedAt
-		// Startup keeps the user-edited enabled subset. An explicit catalog sync
-		// replaces it with the latest WorkBuddy CLI catalog.
-		if len(existing.Models) > 0 && !opts.SyncCatalog {
+		// Startup keeps the existing enabled subset when the caller did not submit
+		// an explicit selection. Catalog sync replaces it only in that legacy case.
+		if len(existing.Models) > 0 && !opts.SyncCatalog && opts.EnabledModels == nil {
 			desired.Models = restampCodeBuddyModels(existing.Models, baseURL, apiKey)
 			if !codeBuddyHasModel(desired.Models, defaultModel) {
 				if model, ok := catalog.Find(defaultModel); ok {
@@ -400,6 +412,33 @@ func codeBuddyModelNames(models []profiles.ModelDef) []string {
 		}
 	}
 	return out
+}
+
+func selectedCodeBuddyModels(catalog codebuddy.Catalog, ids []string, baseURL, apiKey string) ([]profiles.ModelDef, error) {
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("请至少选择一个暴露给 Grok Build 的 CodeBuddy 模型")
+	}
+	out := make([]profiles.ModelDef, 0, len(ids))
+	seen := map[string]bool{}
+	for _, raw := range ids {
+		id := canonicalCodeBuddyModelID(raw, catalog)
+		if id == "" {
+			return nil, fmt.Errorf("当前 CodeBuddy 模型目录不包含 %q；请先刷新模型目录", strings.TrimSpace(raw))
+		}
+		if seen[id] {
+			continue
+		}
+		model, ok := catalog.Find(id)
+		if !ok {
+			return nil, fmt.Errorf("当前 CodeBuddy 模型目录不包含 %q；请先刷新模型目录", id)
+		}
+		seen[id] = true
+		out = append(out, codebuddy.ModelDefinition(model, baseURL, apiKey))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("请至少选择一个暴露给 Grok Build 的 CodeBuddy 模型")
+	}
+	return out, nil
 }
 
 // codeBuddyModelOffers builds /v1/models ids that match routing/config aliases

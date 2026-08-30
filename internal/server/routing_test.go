@@ -806,28 +806,18 @@ func TestValidateRoutingReasoningEffortAllowsNoneForCustomAndOfficial(t *testing
 	}
 }
 
-func TestValidateRoutingReasoningEffortAllowsUltraOnlyWhenDeclared(t *testing.T) {
+func TestValidateRoutingReasoningEffortRejectsUltraEvenWhenDeclared(t *testing.T) {
 	snapshot := routing.Snapshot{
 		ActiveProviderID: "codex",
 		Providers:        []routing.Provider{{ID: "codex"}},
 		ModelRoutes: []routing.ModelRoute{{
 			ID: "codex:sol", Name: "subscription/codex/gpt-5.6-sol", ProviderID: "codex",
-			SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "ultra"}, ReasoningEffortsSource: "declared",
+			SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max", "ultra"}, ReasoningEffortsSource: "declared",
 		}},
 		Policy: routing.RoutingPolicy{Default: "codex:sol", DefaultReasoningEffort: "ultra"},
 	}
-	if err := validateRoutingReasoningEffort(snapshot); err != nil {
-		t.Fatalf("declared ultra rejected: %v", err)
-	}
-	for _, route := range []routing.ModelRoute{
-		{ID: "codex:terra", Name: "subscription/codex/gpt-5.6-terra", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared"},
-		{ID: "codex:luna-fast", Name: "subscription/codex/gpt-5.6-luna-fast", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared"},
-	} {
-		snapshot.ModelRoutes = []routing.ModelRoute{route}
-		snapshot.Policy.Default = route.ID
-		if err := validateRoutingReasoningEffort(snapshot); err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
-			t.Fatalf("route %q ultra validation error = %v", route.Name, err)
-		}
+	if err := validateRoutingReasoningEffort(snapshot); err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
+		t.Fatalf("declared ultra validation error = %v", err)
 	}
 }
 

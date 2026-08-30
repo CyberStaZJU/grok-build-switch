@@ -228,12 +228,44 @@ func TestSubscriptionProfileUpdatePreservesDeclaredLowWhileChangingContextWindow
 	}
 }
 
+func TestManagedProfileUpdateDoesNotFabricateKnownContextBeforeOwnershipCheck(t *testing.T) {
+	s := newRoutingTestServer(t)
+	model := "subscription/codex/gpt-5.6-sol"
+	baseURL := "http://127.0.0.1:17878/subscription-proxy/v1"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "Managed", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: "key",
+		AvailableModels: []string{model}, DefaultModel: model, DefaultReasoningEffort: "medium",
+		Models: []profiles.ModelDef{{Name: model, Model: model, BaseURL: baseURL, APIKey: "key", APIBackend: "chat_completions", SupportsReasoningEffort: true, ReasoningEfforts: []string{"medium", "high", "max"}, ReasoningEffortsSource: "declared", ContextWindow: 0}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := profileMutationFromProfile(profile)
+	mutation.DefaultReasoningEffort = "high"
+	payload, err := json.Marshal(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := s.Profiles.Get(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DefaultReasoningEffort != "high" || updated.Models[0].ContextWindow != profiles.KnownContextWindow(model) {
+		t.Fatalf("updated profile = %#v", updated)
+	}
+}
+
 func TestSubscriptionProfileUpdateAllowsContextWindowAndDeclaredReasoningEffort(t *testing.T) {
 	s := newRoutingTestServer(t)
 	standard := "subscription/codex/gpt-5.6-sol"
 	fast := standard + "-fast"
 	baseURL := "http://127.0.0.1:17878/subscription-proxy/v1"
-	efforts := []string{"medium", "high", "xhigh", "max", "ultra"}
+	efforts := []string{"medium", "high", "xhigh", "max"}
 	profile, err := s.Profiles.Create(profiles.Profile{
 		Name: "Trusted", Source: "subscription-proxy:codex", UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: "profile-key",
 		AvailableModels: []string{standard, fast}, DefaultModel: standard, DefaultReasoningEffort: "medium",
@@ -247,7 +279,7 @@ func TestSubscriptionProfileUpdateAllowsContextWindowAndDeclaredReasoningEffort(
 	}
 
 	mutation := profileMutationFromProfile(profile)
-	mutation.DefaultReasoningEffort = "ultra"
+	mutation.DefaultReasoningEffort = "max"
 	mutation.Models[0].ContextWindow = 321000
 	mutation.Models[1].ContextWindow = 322000
 	payload, err := json.Marshal(mutation)
@@ -263,8 +295,8 @@ func TestSubscriptionProfileUpdateAllowsContextWindowAndDeclaredReasoningEffort(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.DefaultReasoningEffort != "ultra" {
-		t.Fatalf("default reasoning effort = %q, want ultra", updated.DefaultReasoningEffort)
+	if updated.DefaultReasoningEffort != "max" {
+		t.Fatalf("default reasoning effort = %q, want max", updated.DefaultReasoningEffort)
 	}
 	if updated.Models[0].ContextWindow != 321000 || updated.Models[1].ContextWindow != 322000 {
 		t.Fatalf("context windows = %d/%d", updated.Models[0].ContextWindow, updated.Models[1].ContextWindow)
@@ -277,7 +309,7 @@ func TestSubscriptionProfileUpdateAllowsContextWindowAndDeclaredReasoningEffort(
 	}
 }
 
-func TestSubscriptionProfileUpdateRejectsUndeclaredReasoningEffort(t *testing.T) {
+func TestSubscriptionProfileUpdateRejectsUltraReasoningEffort(t *testing.T) {
 	s := newRoutingTestServer(t)
 	standard := "subscription/codex/gpt-5.6-terra"
 	baseURL := "http://127.0.0.1:17878/subscription-proxy/v1"

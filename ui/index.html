@@ -123,11 +123,10 @@
                     <option value="high">高 (high)</option>
                     <option value="xhigh">超高 (xhigh)</option>
                     <option value="max">最大 (max)</option>
-                    <option value="ultra">极致 (ultra)</option>
                     <option value="none">禁用推理 (none)</option>
                   </select>
                 </div>
-                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、ultra、none。ultra 当前用于 Codex gpt-5.6-sol Standard/Fast；其他上游若不支持可能静默忽略。</span>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、none。当前 Grok Build 兼容范围暂只接入到 max；其他上游若不支持可能静默忽略。</span>
               </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
@@ -234,14 +233,16 @@
       </section>
 
       <section class="formCard">
-        <h2 class="sectionTitle">第 2 步：默认模型</h2>
-        <p class="muted tiny">目录来自 WorkBuddy 已同步的 CodeBuddy 产品配置；启用供应商后，Grok 的 <code>default</code> 将指向这里选择的模型。</p>
+        <h2 class="sectionTitle">第 2 步：选择暴露模型与默认模型</h2>
+        <p class="muted tiny">只选择希望 CodeBuddy 暴露给 Grok Build <code>/m</code> 的模型。此选择只修改 CodeBuddy 供应商，不影响其他供应商已启用的模型。</p>
         <p id="codeBuddyCatalogDetail" class="muted tiny">模型目录加载中…</p>
+        <div id="codeBuddyModelChips" class="chips" aria-label="暴露给 Grok Build 的 CodeBuddy 模型"></div>
+        <p id="codeBuddyEnabledModelHint" class="muted tiny">至少选择一个模型。</p>
         <label class="field">
           默认模型
           <select id="codeBuddyDefaultModel" class="mono"></select>
         </label>
-        <div id="codeBuddyModelChips" class="chips" aria-label="可选模型"></div>
+        <p class="muted tiny">默认模型必须属于上方已选择的暴露模型；启用供应商后，Grok 的 <code>default</code> 将指向这里。</p>
       </section>
 
       <section class="formCard">

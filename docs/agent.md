@@ -77,7 +77,7 @@ HTTP request
 - default、web_search、explore、plan 必须全部属于启用供应商，不能重新引入跨供应商会话图；v1 跨供应商可选字段仅迁移进各自供应商的策略记忆；
 - 自定义非空 web_search 还必须是 `responses` 后端且明确支持后端搜索；UI 过滤不是安全边界，服务端拒绝无能力路由且不得产生持久化副作用；
 - 自定义供应商默认全部进入混合路由目录，不必再逐个“启用”；可删除任一自定义供应商（含当前 default 所属），也可删除官方登录（清 `auth.json` 并回落到自定义路由）；
-- 不再提供独立「模型路由」页。Grok 的 default / explore / plan 都跟随供应商里设置的默认模型与推理强度（Grok Build 没有 explore/plan 独立 effort 配置）；全局可选档位包含 `ultra`，当前只由 Codex `gpt-5.6-sol` Standard/Fast 路由显式声明；
+- 不再提供独立「模型路由」页。Grok 的 default / explore / plan 都跟随供应商里设置的默认模型与推理强度（Grok Build 没有 explore/plan 独立 effort 配置）；全局可选档位最高为 `max`；`ultra` 暂不接入 Grok Build，也不得由模型声明绕过；
 - 自定义供应商切换保留 `config.toml` 的组合自定义模型目录，以兼容旧会话固定的旧别名；
 - `/m` 混合显示各自定义供应商**已启用**的模型；官方 default 时清空自定义 `[model.*]`（档案仍保留）；「设为默认」只改 default；
 - 路由更新只处理配置与模型选择；普通 Profile UI 只管理基础连接信息和常用模型；

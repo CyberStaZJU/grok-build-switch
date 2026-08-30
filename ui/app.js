@@ -10,6 +10,7 @@ const state = {
   draggedProviderKey: "",
   subscriptionProxy: null,
   codeBuddy: null,
+  codeBuddyEnabledModels: new Set(),
   routing: null,
 };
 
@@ -27,9 +28,9 @@ let toastTimer = null;
 let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
 let subscriptionLoginBusy = false;
-const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "ultra", "none"];
+const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"];
 const REASONING_EFFORT_LABELS = {
-  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", ultra: "极致 (ultra)", none: "禁用推理 (none)",
+  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", none: "禁用推理 (none)",
 };
 
 function normalizeReasoningEffort(effort) {
@@ -38,6 +39,7 @@ function normalizeReasoningEffort(effort) {
 
 function preservedDefaultReasoningEffort(effort) {
   const value = String(effort || "").trim();
+  if (value === "ultra") return "none";
   return value || "none";
 }
 
@@ -51,7 +53,7 @@ function reasoningEffortOptions(effort) {
 }
 
 function preservedReasoningEfforts(efforts) {
-  return [...new Set((efforts || []).map((effort) => String(effort || "").trim()).filter(Boolean))];
+  return [...new Set((efforts || []).map((effort) => String(effort || "").trim()).filter((effort) => effort && effort !== "ultra"))];
 }
 
 // Mirrors internal/profiles/context_defaults.go — keep both tables in sync.
@@ -323,6 +325,35 @@ function officialProviderSwitchWarning(currentProviderID) {
 
 function capableWebSearchRoutes(routes, official = false) {
   return official ? routes : routes.filter((route) => route.api_backend === "responses" && route.supports_backend_search === true);
+}
+
+function normalizedCodeBuddySelection(models, enabledModels, defaultModel) {
+  const catalog = [...new Set((models || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  const enabled = [...new Set((enabledModels || []).map((id) => String(id || "").trim()))]
+    .filter((id) => catalog.includes(id));
+  if (!enabled.length) {
+    const fallback = catalog.includes(defaultModel) ? defaultModel : catalog[0];
+    if (fallback) enabled.push(fallback);
+  }
+  return {
+    models: catalog,
+    enabledModels: enabled,
+    defaultModel: enabled.includes(defaultModel) ? defaultModel : enabled[0] || "",
+  };
+}
+
+function buildCodeBuddySavePayload(models, enabledModels, defaultModel, { activate, syncCatalog = false }) {
+  const catalog = [...new Set((models || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  const enabled = [...new Set((enabledModels || []).map((id) => String(id || "").trim()))]
+    .filter((id) => catalog.includes(id));
+  if (!enabled.length) throw new Error("请至少选择一个暴露给 Grok Build 的 CodeBuddy 模型");
+  if (!enabled.includes(defaultModel)) throw new Error("CodeBuddy 默认模型必须属于已选择的暴露模型");
+  return {
+    default_model: defaultModel,
+    enabled_models: enabled,
+    activate: !!activate,
+    sync_catalog: !!syncCatalog,
+  };
 }
 
 // Custom confirm dialog (window.confirm is unreliable in Wails WebView)
@@ -1052,7 +1083,7 @@ function updateReasoningEffortMetadata() {
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "可选：medium、high、xhigh、max、ultra、none。ultra 当前用于 Codex gpt-5.6-sol Standard/Fast；explore / plan 跟随此默认模型。";
+    status.textContent = "可选：medium、high、xhigh、max、none。当前 Grok Build 兼容范围暂只接入到 max；explore / plan 跟随此默认模型。";
   }
   setReasoningEffortOptions();
 }
@@ -1476,44 +1507,70 @@ function renderCodeBuddy(data) {
   const models = Array.isArray(status.models) && status.models.length
     ? status.models
     : ["auto", "hy4-preview", "hy3", "glm-5.3", "glm-5.3-flash", "kimi-k3-2"];
-  const selected = models.includes(status.default_model) ? status.default_model : models[0];
+  const selection = normalizedCodeBuddySelection(models, status.enabled_models, status.default_model);
+  const fallbackDefault = selection.defaultModel;
+  state.codeBuddyEnabledModels = new Set(selection.enabledModels);
+
   const select = $("codeBuddyDefaultModel");
-  if (select) {
-    select.innerHTML = models.map((id) =>
-      `<option value="${escapeAttr(id)}" ${id === selected ? "selected" : ""}>${escapeHtml(id)}</option>`
-    ).join("");
-  }
   const chips = $("codeBuddyModelChips");
+  const syncCodeBuddyModelControls = (preferredDefault = "") => {
+    const enabled = models.filter((id) => state.codeBuddyEnabledModels.has(id));
+    const selected = enabled.includes(preferredDefault)
+      ? preferredDefault
+      : enabled.includes(select?.value) ? select.value
+      : enabled.includes(status.default_model) ? status.default_model
+      : enabled[0] || "";
+    if (select) {
+      select.innerHTML = enabled.map((id) =>
+        `<option value="${escapeAttr(id)}" ${id === selected ? "selected" : ""}>${escapeHtml(id)}</option>`
+      ).join("");
+      select.disabled = enabled.length === 0;
+    }
+    chips?.querySelectorAll(".chip").forEach((chip) => {
+      chip.classList.toggle("selected", state.codeBuddyEnabledModels.has(chip.dataset.model));
+    });
+    if ($("codeBuddyEnabledModelHint")) {
+      $("codeBuddyEnabledModelHint").textContent = enabled.length
+        ? `将向 Grok Build /m 暴露 ${enabled.length} 个 CodeBuddy 模型：${enabled.join("、")}`
+        : "请至少选择一个模型；未选择时无法保存或启用 CodeBuddy。";
+    }
+  };
   if (chips) {
     chips.innerHTML = models.map((id) =>
-      `<button type="button" class="chip${id === selected ? " active" : ""}" data-model="${escapeAttr(id)}">${escapeHtml(id)}</button>`
+      `<button type="button" class="chip" data-model="${escapeAttr(id)}" aria-pressed="false">${escapeHtml(id)}</button>`
     ).join("");
     chips.querySelectorAll(".chip").forEach((chip) => {
       chip.onclick = () => {
         const model = chip.dataset.model;
-        if (select) select.value = model;
-        chips.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.model === model));
+        if (state.codeBuddyEnabledModels.has(model)) {
+          state.codeBuddyEnabledModels.delete(model);
+        } else {
+          state.codeBuddyEnabledModels.add(model);
+        }
+        syncCodeBuddyModelControls(model);
+        chip.setAttribute("aria-pressed", state.codeBuddyEnabledModels.has(model) ? "true" : "false");
       };
     });
   }
-  if (select) {
-    select.onchange = () => {
-      const model = select.value;
-      chips?.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.model === model));
-    };
-  }
+  syncCodeBuddyModelControls(fallbackDefault);
+  chips?.querySelectorAll(".chip").forEach((chip) => {
+    chip.setAttribute("aria-pressed", state.codeBuddyEnabledModels.has(chip.dataset.model) ? "true" : "false");
+  });
 }
 
 async function loadCodeBuddy() {
   renderCodeBuddy(await api("/api/codebuddy"));
 }
 
+function codeBuddySavePayload({ activate, syncCatalog = false }) {
+  const models = state.codeBuddy?.models || [];
+  const enabledModels = models.filter((id) => state.codeBuddyEnabledModels.has(id));
+  const defaultModel = $("codeBuddyDefaultModel")?.value || enabledModels[0] || "";
+  return buildCodeBuddySavePayload(models, enabledModels, defaultModel, { activate, syncCatalog });
+}
+
 async function saveCodeBuddy({ activate, syncCatalog = false }) {
-  const body = {
-    default_model: $("codeBuddyDefaultModel")?.value || state.codeBuddy?.models?.[0] || "hy3",
-    activate: !!activate,
-    sync_catalog: !!syncCatalog,
-  };
+  const body = codeBuddySavePayload({ activate, syncCatalog });
   const typed = $("codeBuddyApiKey")?.value?.trim();
   if (typed) body.api_key = typed;
   // When no typed key and nothing saved, force explicit empty so server returns a clear error.
@@ -2105,7 +2162,10 @@ if ($("codeBuddyActivateBtn")) {
   $("codeBuddyActivateBtn").onclick = () => run(async () => {
     const result = await api("/api/codebuddy/activate", {
       method: "POST",
-      body: JSON.stringify({ default_model: $("codeBuddyDefaultModel")?.value || state.codeBuddy?.models?.[0] || "hy3" }),
+      body: JSON.stringify({
+        default_model: $("codeBuddyDefaultModel")?.value || [...state.codeBuddyEnabledModels][0] || "hy3",
+        enabled_models: (state.codeBuddy?.models || []).filter((id) => state.codeBuddyEnabledModels.has(id)),
+      }),
     });
     if (result?.status) renderCodeBuddy(result.status);
     await refreshAll().catch(() => {});

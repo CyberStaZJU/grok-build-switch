@@ -151,7 +151,7 @@ func TestFindSubscriptionProfileRejectsAmbiguousLegacyIdentities(t *testing.T) {
 	}
 }
 
-func TestSubscriptionProfileAddsUltraOnlyToSolStandardAndFast(t *testing.T) {
+func TestSubscriptionProfileCapsTrustedCodexEffortsAtMax(t *testing.T) {
 	accounts := []SubscriptionProxyAccount{{ID: "codex", Provider: "codex"}}
 	profile := subscriptionProfile("codex", "Codex", "secret", accounts, []SubscriptionProxyModel{
 		{ID: "subscription/codex/gpt-5.6-terra", Provider: "codex"},
@@ -163,17 +163,13 @@ func TestSubscriptionProfileAddsUltraOnlyToSolStandardAndFast(t *testing.T) {
 	for _, model := range profile.Models {
 		byName[model.Name] = model
 	}
-	for _, name := range []string{"subscription/codex/gpt-5.6-sol", "subscription/codex/gpt-5.6-sol-fast"} {
-		if !containsString(byName[name].ReasoningEfforts, "ultra") {
-			t.Fatalf("Sol route %q efforts = %v, want ultra", name, byName[name].ReasoningEfforts)
-		}
-	}
 	for _, name := range []string{
 		"subscription/codex/gpt-5.6-terra", "subscription/codex/gpt-5.6-terra-fast",
+		"subscription/codex/gpt-5.6-sol", "subscription/codex/gpt-5.6-sol-fast",
 		"subscription/codex/gpt-5.6-luna", "subscription/codex/gpt-5.6-luna-fast",
 	} {
-		if containsString(byName[name].ReasoningEfforts, "ultra") {
-			t.Fatalf("non-Sol route %q unexpectedly advertises ultra: %v", name, byName[name].ReasoningEfforts)
+		if !containsString(byName[name].ReasoningEfforts, "max") || containsString(byName[name].ReasoningEfforts, "ultra") {
+			t.Fatalf("trusted route %q efforts = %v, want max without ultra", name, byName[name].ReasoningEfforts)
 		}
 	}
 }

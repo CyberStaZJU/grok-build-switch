@@ -188,7 +188,7 @@ func TestRepairUnsupportedReasoningEffortUsesConcreteRouteCapabilities(t *testin
 		Providers:        []Provider{{ID: "codex"}},
 		ModelRoutes: []ModelRoute{
 			{ID: "codex:terra", Name: "subscription/codex/gpt-5.6-terra", ProfileModel: "subscription/codex/gpt-5.6-terra", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high", "max"}, ReasoningEffortsSource: "declared"},
-			{ID: "codex:sol", Name: "subscription/codex/gpt-5.6-sol", ProfileModel: "subscription/codex/gpt-5.6-sol", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high", "max", "ultra"}, ReasoningEffortsSource: "declared"},
+			{ID: "codex:sol", Name: "subscription/codex/gpt-5.6-sol", ProfileModel: "subscription/codex/gpt-5.6-sol", ProviderID: "codex", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "medium", "high", "max"}, ReasoningEffortsSource: "declared"},
 		},
 		ProviderPolicies: map[string]RoutingPolicy{"codex": {Default: "codex:terra", DefaultReasoningEffort: "ultra"}},
 	}
@@ -198,8 +198,8 @@ func TestRepairUnsupportedReasoningEffortUsesConcreteRouteCapabilities(t *testin
 	}
 	snapshot.ProviderPolicies["codex"] = RoutingPolicy{Default: "codex:sol", DefaultReasoningEffort: "ultra"}
 	got, changed = RepairUnsupportedReasoningEffort(snapshot)
-	if changed || got.ProviderPolicies["codex"].DefaultReasoningEffort != "ultra" {
-		t.Fatalf("Sol ultra was repaired: %#v changed=%v", got.ProviderPolicies["codex"], changed)
+	if !changed || got.ProviderPolicies["codex"].DefaultReasoningEffort != "none" {
+		t.Fatalf("Sol ultra repair = %#v changed=%v", got.ProviderPolicies["codex"], changed)
 	}
 	snapshot.ProviderPolicies["codex"] = RoutingPolicy{Default: "codex:terra", DefaultReasoningEffort: "low"}
 	got, changed = RepairUnsupportedReasoningEffort(snapshot)

@@ -25,6 +25,7 @@ type codeBuddyStatus struct {
 	ProfileName      string                   `json:"profile_name,omitempty"`
 	DefaultModel     string                   `json:"default_model"`
 	Models           []string                 `json:"models"`
+	EnabledModels    []string                 `json:"enabled_models"`
 	ModelCatalog     []codebuddy.CatalogModel `json:"model_catalog"`
 	CatalogSource    string                   `json:"catalog_source"`
 	CatalogUpdatedAt time.Time                `json:"catalog_updated_at,omitempty"`
@@ -34,10 +35,11 @@ type codeBuddyStatus struct {
 }
 
 type codeBuddySaveRequest struct {
-	APIKey       *string `json:"api_key"`
-	DefaultModel string  `json:"default_model"`
-	Activate     bool    `json:"activate"`
-	SyncCatalog  bool    `json:"sync_catalog"`
+	APIKey        *string  `json:"api_key"`
+	DefaultModel  string   `json:"default_model"`
+	EnabledModels []string `json:"enabled_models"`
+	Activate      bool     `json:"activate"`
+	SyncCatalog   bool     `json:"sync_catalog"`
 }
 
 type codeBuddyTestRequest struct {
@@ -130,7 +132,8 @@ func (s *Server) handleCodeBuddyActivate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		DefaultModel string `json:"default_model"`
+		DefaultModel  string   `json:"default_model"`
+		EnabledModels []string `json:"enabled_models"`
 	}
 	if err := httpjson.Decode(w, r, &req, httpjson.Options{MaxBytes: 1 << 20, AllowEmpty: true}); err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -142,9 +145,10 @@ func (s *Server) handleCodeBuddyActivate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	profile, err := s.EnsureCodeBuddyProviderOpts(CodeBuddyEnsureOptions{
-		APIKey:       key,
-		DefaultModel: req.DefaultModel,
-		Activate:     true,
+		APIKey:        key,
+		DefaultModel:  req.DefaultModel,
+		EnabledModels: req.EnabledModels,
+		Activate:      true,
 	})
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -200,6 +204,7 @@ func (s *Server) codeBuddyStatus() (codeBuddyStatus, error) {
 		status.Configured = true
 		status.ProfileID = profile.ID
 		status.ProfileName = profile.Name
+		status.EnabledModels = codeBuddyModelNames(profile.Models)
 		if profile.DefaultModel != "" {
 			status.DefaultModel = profile.DefaultModel
 		}
@@ -251,10 +256,11 @@ func (s *Server) saveCodeBuddy(req codeBuddySaveRequest) (profiles.Profile, erro
 		return profiles.Profile{}, fmt.Errorf("缺少 CodeBuddy API Key")
 	}
 	return s.EnsureCodeBuddyProviderOpts(CodeBuddyEnsureOptions{
-		APIKey:       key,
-		DefaultModel: req.DefaultModel,
-		Activate:     req.Activate,
-		SyncCatalog:  req.SyncCatalog,
+		APIKey:        key,
+		DefaultModel:  req.DefaultModel,
+		EnabledModels: req.EnabledModels,
+		Activate:      req.Activate,
+		SyncCatalog:   req.SyncCatalog,
 	})
 }
 

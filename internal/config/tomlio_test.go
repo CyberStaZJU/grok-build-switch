@@ -633,6 +633,32 @@ plan = "legacy-agent"
 	}
 }
 
+func TestApplyProfileOmitsInternalReasoningEffortSourceAndUltra(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := profiles.Profile{
+		BaseURL: "https://api.example/v1", APIKey: "key", DefaultModel: "m", DefaultReasoningEffort: "max",
+		Models: []profiles.ModelDef{{Name: "m", Model: "m", SupportsReasoningEffort: true, ReasoningEfforts: []string{"low", "max", "ultra"}, ReasoningEffortsSource: "declared"}},
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := readDoc(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, _ := tableAt(doc, "model")["m"].(map[string]any)
+	if got := stringSliceAt(model, "reasoning_efforts"); len(got) != 2 || got[0] != "low" || got[1] != "max" {
+		t.Fatalf("reasoning_efforts = %#v", got)
+	}
+	if got := stringAt(model, "reasoning_efforts_source"); got != "" {
+		t.Fatalf("reasoning_efforts_source = %q", got)
+	}
+}
+
 func TestImportProfilePreservesExplicitReasoningEffort(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

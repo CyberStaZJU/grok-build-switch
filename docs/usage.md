@@ -35,7 +35,9 @@
 在首页点「设为默认」，或在供应商编辑页选择：
 
 - **默认模型**（写入 Grok `default`；explore / plan 会跟随它）；
-- **推理强度**（medium / high / xhigh / max / ultra / none；`ultra` 当前用于 Codex `gpt-5.6-sol` Standard/Fast）；并在该供应商的模型卡片上声明支持推理强度，否则 `/m` 无法选档。
+- **推理强度**（medium / high / xhigh / max / none）；并在该供应商的模型卡片上声明支持推理强度。
+
+`max` 是同一个 GPT 模型的**推理强度值**，不是独立模型 ID，所以不会作为单独模型出现在 `/m`。当前 Switch 暂只接入到 Grok Build 1.0.13 支持的最高原生档位 `max`；`ultra` 不写入模型能力列表，也不提供为默认值。使用 `/effort max` 或 `--effort max` 可选择该档位。
 
 「设为默认」只改新会话默认，不会把其他供应商的已启用模型从 `/m` 拿掉。保存后更新 `~/.grok/config.toml` 与 `routing.json`。
 
@@ -138,12 +140,13 @@ Switch 可将腾讯 CodeBuddy/WorkBuddy 订阅接入 Grok Build harness（不经
 
 1. 打开管理页，点顶栏 **CodeBuddy**。
 2. 粘贴个人 API Key（[copilot.tencent.com/profile](https://copilot.tencent.com/profile/)，形如 `ck_…`）。
-3. 点 **刷新模型目录**，显式把 WorkBuddy 本机已同步、供 CLI 使用且支持工具调用的模型目录更新到托管供应商；普通启动不会扩张现有模型子集。
-4. 选择所需默认模型；无本机目录或目录损坏时，页面会明确使用 Switch 内置兜底目录。
-5. **测试连通** → **保存并启用**。
-6. 新开 `grok` 会话即走该供应商；`default` 为所选模型。
+3. 点 **刷新模型目录**，读取 WorkBuddy 本机已同步、供 CLI 使用且支持工具调用的模型目录；普通启动不会扩张现有模型子集。
+4. 在“选择暴露模型与默认模型”中，只勾选希望 CodeBuddy 提供给 Grok Build `/m` 的模型。例如只勾选 `hy4-preview`，则 CodeBuddy 只贡献这一条模型；其他供应商已经启用的模型保持不变。
+5. 从已勾选子集中选择默认模型；默认模型不能指向未勾选项。无本机目录或目录损坏时，页面会明确使用 Switch 内置兜底目录。
+6. **测试连通** → **保存供应商**或**保存并启用**。
+7. 新开 `grok` 会话读取更新后的组合模型目录；若选择“保存并启用”，`default` 同时切换为所选 CodeBuddy 模型。
 
-状态页会显示 masked Key、进程内代理 Base URL、模型目录来源和更新时间，以及是否为当前 active provider。`/v2/chat/completions` 只提供推理，不提供模型枚举；Switch 不调用未确认的远程目录接口。
+状态页会显示 masked Key、进程内代理 Base URL、模型目录来源和更新时间、当前暴露子集，以及是否为 active provider。`/v2/chat/completions` 只提供推理，不提供模型枚举；Switch 不调用未确认的远程目录接口。保存子集时只更新 CodeBuddy Profile，再由统一路由重新组合所有自定义供应商，因此不会收缩或覆盖其他供应商的模型。
 
 ### CLI（可选）
 

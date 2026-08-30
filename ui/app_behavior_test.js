@@ -34,6 +34,8 @@ this.appTest = {
   formatHitRate,
   cacheTableHTML,
   loadCacheStats,
+  normalizedCodeBuddySelection,
+  buildCodeBuddySavePayload,
   resetCSRF() { csrfTokenPromise = null; },
 };
 `;
@@ -75,6 +77,40 @@ function loadApp(fetchImpl, elements = {}, confirmImpl = () => true) {
   vm.runInContext(testableSource, context, { filename: appPath });
   return context.appTest;
 }
+
+test("CodeBuddy selection keeps only catalog models and constrains the default", () => {
+  const app = loadApp(async () => response(500));
+  const selection = app.normalizedCodeBuddySelection(
+    ["hy3", "hy4-preview", "glm-5.3"],
+    ["hy4-preview", "missing", "hy4-preview"],
+    "hy3",
+  );
+  assert.deepEqual([...selection.models], ["hy3", "hy4-preview", "glm-5.3"]);
+  assert.deepEqual([...selection.enabledModels], ["hy4-preview"]);
+  assert.equal(selection.defaultModel, "hy4-preview");
+
+  const payload = app.buildCodeBuddySavePayload(
+    selection.models,
+    selection.enabledModels,
+    selection.defaultModel,
+    { activate: true },
+  );
+  assert.deepEqual([...payload.enabled_models], ["hy4-preview"]);
+  assert.equal(payload.default_model, "hy4-preview");
+  assert.equal(payload.activate, true);
+});
+
+test("CodeBuddy save rejects an empty subset or a default outside it", () => {
+  const app = loadApp(async () => response(500));
+  assert.throws(
+    () => app.buildCodeBuddySavePayload(["hy4-preview"], [], "", { activate: false }),
+    /至少选择一个/,
+  );
+  assert.throws(
+    () => app.buildCodeBuddySavePayload(["hy3", "hy4-preview"], ["hy4-preview"], "hy3", { activate: false }),
+    /必须属于/,
+  );
+});
 
 test("custom prompt resolves null on Escape and clears every handler", async () => {
   const dialog = {
@@ -334,11 +370,11 @@ test("cache statistics render empty and missing-log states", async () => {
 test("new profiles default to disabled reasoning without preset metadata", () => {
   const app = loadApp(async () => response(500));
   const draft = app.newProfileDraft();
-  assert.equal(app.normalizeReasoningEffort("ultra"), "ultra");
+  assert.equal(app.normalizeReasoningEffort("max"), "max");
   assert.equal(app.normalizeReasoningEffort("unknown"), "none");
   assert.equal(app.preservedDefaultReasoningEffort("low"), "low");
   assert.equal(app.preservedDefaultReasoningEffort(" "), "none");
-  assert.deepEqual([...app.preservedReasoningEfforts(["low", "medium", "low", " ", ""])], ["low", "medium"]);
+  assert.deepEqual([...app.preservedReasoningEfforts(["low", "medium", "ultra", "low", " ", ""])], ["low", "medium"]);
   assert.equal(draft.default_reasoning_effort, "none");
   assert.equal(Object.hasOwn(draft, "template"), false);
 });
@@ -349,7 +385,7 @@ test("reasoning selector preserves a saved model-declared low effort", () => {
   assert.equal(result.current, "low");
   assert.equal(result.options[0].value, "low");
   assert.match(result.options[0].label, /已保存/);
-  assert.equal(result.options.some((option) => option.value === "ultra"), true);
+  assert.equal(result.options.some((option) => option.value === "ultra"), false);
   assert.equal(result.options.filter((option) => option.value === "medium").length, 1);
 });
 

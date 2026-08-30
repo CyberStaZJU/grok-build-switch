@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -138,6 +139,95 @@ func TestCodeBuddyAPIStatusAndSave(t *testing.T) {
 	}
 	if policy := snap.ProviderPolicies[profileID]; policy.Default != profileID+":glm-5.2" {
 		t.Fatalf("policy default=%q", policy.Default)
+	}
+}
+
+func TestCodeBuddySubsetSavePreservesOtherProviders(t *testing.T) {
+	s := newCodeBuddyAPITestServer(t)
+	other, err := s.Profiles.Create(profiles.Profile{
+		Name: "Other Provider", BaseURL: "https://other.example/v1", APIKey: "other-secret",
+		DefaultModel: "other-model", Models: []profiles.ModelDef{{Name: "other-model", Model: "other-upstream"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyCurrentRouting(); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"api_key":"ck_subset","default_model":"hy4-preview","enabled_models":["hy4-preview"],"activate":false}`
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/codebuddy", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "127.0.0.1:1"
+	s.handleCodeBuddyAPI(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	list, err := s.Profiles.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var managed profiles.Profile
+	for _, profile := range list {
+		if profile.Source == codebuddy.SourceTag {
+			managed = profile
+		}
+	}
+	if managed.ID == "" || managed.DefaultModel != "hy4-preview" || !reflect.DeepEqual(codeBuddyModelNames(managed.Models), []string{"hy4-preview"}) {
+		t.Fatalf("managed CodeBuddy profile = %#v", managed)
+	}
+	preserved, err := s.Profiles.Get(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preserved.DefaultModel != "other-model" || len(preserved.Models) != 1 || preserved.Models[0].Model != "other-upstream" {
+		t.Fatalf("other provider changed = %#v", preserved)
+	}
+
+	snapshot, err := s.Routing.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := map[string]bool{}
+	for _, route := range snapshot.ModelRoutes {
+		routes[route.ProviderID+":"+route.ProfileModel] = true
+	}
+	if !routes[other.ID+":other-model"] || !routes[managed.ID+":hy4-preview"] || routes[managed.ID+":hy3"] {
+		t.Fatalf("routing routes = %#v", routes)
+	}
+	raw, err := os.ReadFile(s.Switcher.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `[model.other-model]`) && !strings.Contains(text, `[model.'other-model']`) && !strings.Contains(text, `[model."other-model"]`) {
+		t.Fatalf("other provider model missing from config:\n%s", text)
+	}
+	if !strings.Contains(text, `[model.hy4-preview]`) && !strings.Contains(text, `[model.'hy4-preview']`) && !strings.Contains(text, `[model."hy4-preview"]`) {
+		t.Fatalf("selected CodeBuddy model missing from config:\n%s", text)
+	}
+	if strings.Contains(text, `[model.hy3]`) || strings.Contains(text, `[model.'hy3']`) || strings.Contains(text, `[model."hy3"]`) {
+		t.Fatalf("unselected CodeBuddy model remains in config:\n%s", text)
+	}
+}
+
+func TestCodeBuddySubsetRejectsEmptyOrDefaultOutsideSelection(t *testing.T) {
+	s := newCodeBuddyAPITestServer(t)
+	for _, test := range []struct {
+		name string
+		opts CodeBuddyEnsureOptions
+		want string
+	}{
+		{name: "empty", opts: CodeBuddyEnsureOptions{APIKey: "ck_empty", DefaultModel: "hy4-preview", EnabledModels: []string{}}, want: "至少选择一个"},
+		{name: "default outside", opts: CodeBuddyEnsureOptions{APIKey: "ck_outside", DefaultModel: "hy3", EnabledModels: []string{"hy4-preview"}}, want: "必须属于"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := s.EnsureCodeBuddyProviderOpts(test.opts); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -706,7 +706,6 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		profile := request.profile()
-		profiles.ApplyKnownContextDefaults(&profile)
 		if err := profiles.ValidateEndpoints(profile); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
@@ -736,6 +735,7 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		if previousErr == nil && strings.TrimSpace(profile.Source) == "" && strings.TrimSpace(previous.Source) != "" {
 			profile.Source = previous.Source
 		}
+		profiles.ApplyKnownContextDefaults(&profile)
 		updated, err := s.Profiles.Update(id, profile)
 		if err == nil && s.Routing != nil {
 			err = s.adoptProfileDefaultLocked(updated)
