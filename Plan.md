@@ -5,13 +5,7 @@
 
 ## 当前任务
 
-### 2026-08-30：同步当前已验证变更到 GitHub
-
-- [x] 复核仓库规则、工作区、远端和运行边界
-- [x] 审计全部待提交代码、测试和文档，不包含运行数据、构建产物、凭据或私有路径；发布审查发现并修复 route-specific effort、旧 `low` 保留、目录新鲜度和 CodeBuddy 回滚问题
-- [x] 运行修复后的前端、Go、vet、全量 race、Wails-tag、格式检查和隔离源码实例桌面/移动浏览器回归
-- [ ] 提交并推送到已获取且无分叉的 `https://github.com/CyberStaZJU/grok-build-switch` `main`
-- [ ] 核验远端提交并归档本任务
+当前无进行中任务。
 
 ## 待办（按优先级）
 
@@ -29,6 +23,7 @@
 
 ## 已完成
 
+- [x] 2026-08-30 将 CodeBuddy 本机目录同步、Codex Sol Ultra、托管 Profile/路由边界加固、测试和文档提交并推送到 `https://github.com/CyberStaZJU/grok-build-switch` `main`。功能提交 `ef5d4522e75e322f08cc9a0e12cd217526050234` 已由 `git fetch`、`origin/main` 和 `git ls-remote` 三方核验一致；最终独立审查无阻断项，工作区除忽略的 `.DS_Store`、`dist/`、`vendor/` 外保持干净。
 - [x] 2026-08-30 将重建的 `0.9.0 (build 9)` DMG 安装到 `/Applications/Grok Build Switch.app` 并重启。旧 App 已移动到 `~/.grok/build-state/grok-build-switch-installed-backup-20260830T043532Z`；另在 Codex 托管 Profile 显式同步前保存 `~/.grok/build-state/grok-build-switch-live-ultra-sync-backup-20260830T044202Z`。已核验版本、进程、端口、主程序哈希、ad-hoc 签名、API 与路由一致性；真实桌面页面保存 Standard+Ultra、受保护路由切换 Fast+Ultra、移动端 `390×844` 首页/订阅/编辑页无横向溢出。最终默认恢复为 Sol Standard+Medium，Standard/Fast 均保留 `ultra` 能力。
 - [x] 2026-08-30 删除两套仓库外 Ultra 隔离验证状态，并以 `MARKETING_VERSION=0.9.0 BUILD_VERSION=9 ./build-macos.sh` 重建 macOS arm64 App 与 DMG。脚本内全量 Go 测试、macOS 15.0 最低版本检查、ad-hoc 签名校验、DMG staging 签名校验和 SHA-256 生成通过；DMG 校验和复核通过。
 - [x] 2026-08-30 为 Codex `gpt-5.6-sol` Standard/Fast 增加 `ultra`：订阅目录只在 Sol 两条逻辑路由声明该档位；供应商编辑页可选择并保存已声明的默认推理强度，其他托管字段继续受保护。全量 Go、vet、受影响包 race、前端 Node、Wails-tag 与隔离管理 Profile 的桌面/移动浏览器验证通过。

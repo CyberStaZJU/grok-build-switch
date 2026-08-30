@@ -28,6 +28,7 @@
 
 ## 最近变更
 
+- 2026-08-30：CodeBuddy 本机目录同步、Codex Sol Ultra、托管 Profile/路由边界加固、测试和文档已推送到 GitHub `CyberStaZJU/grok-build-switch` 的 `main`；功能提交为 `ef5d4522e75e322f08cc9a0e12cd217526050234`，已由本地 `HEAD`、`origin/main` 与远端 advertised ref 核验一致。提交不包含 `dist/`、`vendor/`、运行数据、凭据或私有路径。
 - 2026-08-30：GitHub 同步前独立审查并修复四类边界：路由现在按具体模型声明校验推理强度，Terra/Luna Standard/Fast 及自定义显示名绕过均拒绝 `ultra`，Sol Standard/Fast 保持支持；供应商编辑器会保留已保存且由模型声明的 `low` 等非全局菜单值；CodeBuddy 本机目录跨文件按嵌入时间戳选择最新有效快照；CodeBuddy Profile 在后续路由/激活失败时恢复旧值或删除本次新建项。隔离源码实例已验证桌面 context-only 保存保留 `low`，移动端 `390×844` 无横向溢出；全量 Go、vet、race、前端 Node 与 Wails-tag 测试通过。
 - 2026-08-30：已用重建的 DMG 替换并重启 `/Applications/Grok Build Switch.app`，当前为 `0.9.0 (build 9)`，arm64 主程序 SHA-256 `68e5de7a837dfded9fb08688b31858b093058850a58700ab6457098dee40423b`；严格 codesign 校验通过，但仍为 ad-hoc 签名、未使用 Developer ID 或 Apple 公证。真实订阅代理页面已显式更新 Codex 托管供应商，Sol Standard/Fast 均持久化声明 `ultra`；桌面编辑页保存 Standard+Ultra、受保护路由接口切换 Fast+Ultra、`390×844` 移动布局均通过，最后恢复原默认 Standard+Medium，API、`routing.json` 与 `config.toml` 一致。旧 App 回滚备份位于 `~/.grok/build-state/grok-build-switch-installed-backup-20260830T043532Z`；同步前配置快照位于 `~/.grok/build-state/grok-build-switch-live-ultra-sync-backup-20260830T044202Z`。
 - 2026-08-30：Codex `gpt-5.6-sol` 的 Standard 与 Fast 路由现在都显式支持 `ultra` 推理档位；Terra/Luna 保持原档位集合。供应商编辑页全局菜单新增 `ultra`，订阅代理托管 Profile 可保存所选模型已声明的默认推理强度，同时继续只开放上下文窗口和默认推理强度，其他托管字段须走订阅代理流程。隔离实例已通过页面保存 Standard+Ultra、受保护路由 API 切换 Fast+Ultra、桌面/移动布局及 `config.toml`/`routing.json` 持久化验证；全量 Go、vet、受影响包 race、前端 Node 与 Wails-tag 测试通过。
