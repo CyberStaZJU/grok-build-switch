@@ -177,6 +177,10 @@ func (h *Handler) serveChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientStream := truthy(payload["stream"])
+	if err := normalizeToolHistory(payload); err != nil {
+		http.Error(w, "invalid tool history: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	// CodeBuddy requires stream; always force it upstream.
 	payload["stream"] = true
 	if _, ok := payload["stream_options"]; !ok {
@@ -256,10 +260,10 @@ func (h *Handler) pipeSanitizedStream(w http.ResponseWriter, body io.Reader) {
 	scanner := bufio.NewScanner(body)
 	// Large tool-call chunks can exceed the default 64K token size.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	names := map[int]string{}
+	state := newToolCallStreamState()
 	for scanner.Scan() {
 		line := scanner.Text()
-		out := sanitizeSSELine(line, names)
+		out := sanitizeSSELine(line, state)
 		if _, err := io.WriteString(w, out+"\n"); err != nil {
 			return
 		}
@@ -277,9 +281,8 @@ func (h *Handler) pipeSanitizedStream(w http.ResponseWriter, body io.Reader) {
 }
 
 // sanitizeSSELine rewrites one SSE line. Non-data lines pass through.
-// names remembers the last non-empty function.name per tool_call index so later
-// incremental chunks that send name:"" do not wipe the name Grok already saw.
-func sanitizeSSELine(line string, names map[int]string) string {
+// State retains generated IDs and function names across incremental chunks.
+func sanitizeSSELine(line string, state *toolCallStreamState) string {
 	if !strings.HasPrefix(line, "data:") {
 		return line
 	}
@@ -291,10 +294,10 @@ func sanitizeSSELine(line string, names map[int]string) string {
 	if err := json.Unmarshal([]byte(data), &obj); err != nil {
 		return line
 	}
-	if names == nil {
-		names = map[int]string{}
+	if state == nil {
+		state = newToolCallStreamState()
 	}
-	sanitizeChunk(obj, names)
+	sanitizeChunk(obj, state)
 	b, err := json.Marshal(obj)
 	if err != nil {
 		return line
@@ -302,7 +305,30 @@ func sanitizeSSELine(line string, names map[int]string) string {
 	return "data: " + string(b)
 }
 
-func sanitizeChunk(obj map[string]any, names map[int]string) {
+type toolCallStreamState struct {
+	ids    map[int]string
+	names  map[int]string
+	prefix string
+}
+
+func newToolCallStreamState() *toolCallStreamState {
+	return &toolCallStreamState{
+		ids:    map[int]string{},
+		names:  map[int]string{},
+		prefix: fmt.Sprintf("call_cb_%x", time.Now().UnixNano()),
+	}
+}
+
+func (s *toolCallStreamState) id(index int) string {
+	if id := s.ids[index]; id != "" {
+		return id
+	}
+	id := fmt.Sprintf("%s_%d", s.prefix, index)
+	s.ids[index] = id
+	return id
+}
+
+func sanitizeChunk(obj map[string]any, state *toolCallStreamState) {
 	choices, _ := obj["choices"].([]any)
 	for _, raw := range choices {
 		ch, ok := raw.(map[string]any)
@@ -332,7 +358,7 @@ func sanitizeChunk(obj map[string]any, names map[int]string) {
 		if tc, ok := delta["tool_calls"].([]any); ok && len(tc) == 0 {
 			delete(delta, "tool_calls")
 		} else if ok {
-			repairStreamingToolCallNames(tc, names)
+			repairStreamingToolCalls(tc, state)
 		}
 		if delta["function_call"] == nil {
 			delete(delta, "function_call")
@@ -346,34 +372,36 @@ func sanitizeChunk(obj map[string]any, names map[int]string) {
 	}
 }
 
-func repairStreamingToolCallNames(tcs []any, names map[int]string) {
-	if names == nil {
+func repairStreamingToolCalls(tcs []any, state *toolCallStreamState) {
+	if state == nil {
 		return
 	}
-	for _, raw := range tcs {
+	for position, raw := range tcs {
 		tc, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		idx := 0
-		if n, ok := tc["index"].(float64); ok {
-			idx = int(n)
+		idx := toolCallIndex(tc, position)
+		if id := strings.TrimSpace(stringValue(tc["id"])); id != "" {
+			state.ids[idx] = id
+		} else {
+			tc["id"] = state.id(idx)
 		}
 		if top, ok := tc["name"].(string); ok && strings.TrimSpace(top) != "" {
-			names[idx] = top
+			state.names[idx] = top
 		}
 		fn, _ := tc["function"].(map[string]any)
 		if fn == nil {
-			if remembered := names[idx]; remembered != "" {
+			if remembered := state.names[idx]; remembered != "" {
 				tc["function"] = map[string]any{"name": remembered}
 			}
 			continue
 		}
 		if n, ok := fn["name"].(string); ok && strings.TrimSpace(n) != "" {
-			names[idx] = n
+			state.names[idx] = n
 			continue
 		}
-		if remembered := names[idx]; remembered != "" {
+		if remembered := state.names[idx]; remembered != "" {
 			fn["name"] = remembered
 		} else if _, exists := fn["name"]; exists && fn["name"] == "" {
 			// Drop a leading empty name so a later non-empty name can still land.
@@ -382,9 +410,82 @@ func repairStreamingToolCallNames(tcs []any, names map[int]string) {
 	}
 }
 
+func normalizeToolHistory(payload map[string]any) error {
+	messages, ok := payload["messages"].([]any)
+	if !ok {
+		return nil
+	}
+	pending := make([]string, 0)
+	for messageIndex, raw := range messages {
+		message, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(stringValue(message["role"])) {
+		case "assistant":
+			calls, _ := message["tool_calls"].([]any)
+			for callIndex, rawCall := range calls {
+				call, ok := rawCall.(map[string]any)
+				if !ok {
+					continue
+				}
+				id := strings.TrimSpace(stringValue(call["id"]))
+				if id == "" {
+					id = fmt.Sprintf("call_cb_history_%d_%d", messageIndex, callIndex)
+					call["id"] = id
+				}
+				pending = append(pending, id)
+			}
+		case "tool":
+			id := strings.TrimSpace(stringValue(message["tool_call_id"]))
+			if id == "" {
+				if len(pending) != 1 {
+					return fmt.Errorf("messages[%d] has an empty tool_call_id with %d possible preceding tool calls", messageIndex, len(pending))
+				}
+				id = pending[0]
+				message["tool_call_id"] = id
+			}
+			for i, candidate := range pending {
+				if candidate == id {
+					pending = append(pending[:i], pending[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func intValue(value any) int {
+	switch number := value.(type) {
+	case float64:
+		return int(number)
+	case int:
+		return number
+	case json.Number:
+		parsed, _ := number.Int64()
+		return int(parsed)
+	default:
+		return 0
+	}
+}
+
+func toolCallIndex(call map[string]any, fallback int) int {
+	if _, ok := call["index"]; !ok {
+		return fallback
+	}
+	return intValue(call["index"])
+}
+
 func collectStream(body io.Reader) (map[string]any, error) {
 	var content strings.Builder
 	toolCalls := map[int]map[string]string{}
+	state := newToolCallStreamState()
 	var model any
 	var finish any
 	var usage any
@@ -427,21 +528,19 @@ func collectStream(body io.Reader) (map[string]any, error) {
 				content.WriteString(c)
 			}
 			if tcs, ok := delta["tool_calls"].([]any); ok {
-				for _, tr := range tcs {
+				repairStreamingToolCalls(tcs, state)
+				for position, tr := range tcs {
 					tc, _ := tr.(map[string]any)
 					if tc == nil {
 						continue
 					}
-					idx := 0
-					if n, ok := tc["index"].(float64); ok {
-						idx = int(n)
-					}
+					idx := toolCallIndex(tc, position)
 					slot := toolCalls[idx]
 					if slot == nil {
 						slot = map[string]string{}
 						toolCalls[idx] = slot
 					}
-					if id, ok := tc["id"].(string); ok && id != "" {
+					if id := strings.TrimSpace(stringValue(tc["id"])); id != "" {
 						slot["id"] = id
 					}
 					fn, _ := tc["function"].(map[string]any)

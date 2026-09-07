@@ -1387,3 +1387,24 @@ textarea {
 .sshEmpty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
 
 .sshConnRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.subscriptionQuotaProviders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.subscriptionQuotaProvider { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.subscriptionQuotaProvider p, .subscriptionQuotaAccount p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.subscriptionQuotaValue { display: grid; justify-items: end; gap: 3px; }
+.subscriptionQuotaValue strong { font-size: 18px; }
+.subscriptionQuotaProvider > div, .subscriptionQuotaAccount > div { min-width: 0; overflow-wrap: anywhere; }
+.subscriptionQuotaValue { flex-shrink: 0; max-width: 48%; text-align: right; }
+.subscriptionQuotaAccount li { overflow-wrap: anywhere; }
+.subscriptionQuotaValue span { color: var(--muted); font-size: 11px; }
+.subscriptionQuotaAccounts { display: grid; gap: 10px; margin-top: 12px; }
+.subscriptionQuotaAccount { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.8fr); gap: 18px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; }
+.subscriptionQuotaAccount ul { margin: 0; padding-left: 18px; color: var(--text); font-size: 12px; line-height: 1.7; }
+
+/* Keep the shared usage tables within the mobile settings card. */
+.cacheStatsTables > div, #cacheStatsCard { min-width: 0; }
+.cacheTable { max-width: 100%; min-width: 0; }
+
+.headerRight { flex-wrap: wrap; }
+.headerRight .btn { white-space: nowrap; }
+@media (max-width: 640px) { .headerRight .btn { flex: 1 0 auto; } }

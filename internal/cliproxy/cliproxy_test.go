@@ -26,7 +26,7 @@ func (f fakeKeys) Get(_, account string) (string, error) {
 func (f fakeKeys) Set(_, account, value string) error { f[account] = value; return nil }
 
 func TestManifest(t *testing.T) {
-	if BuiltinManifest.Version != "7.2.94" || BuiltinManifest.Commit != Commit || BuiltinManifest.Size != 14243376 || len(BuiltinManifest.SHA256) != 64 {
+	if BuiltinManifest.Version != "7.2.152" || BuiltinManifest.Commit != Commit || BuiltinManifest.Size != 19837682 || len(BuiltinManifest.SHA256) != 64 {
 		t.Fatal("manifest 不匹配")
 	}
 }
@@ -57,7 +57,7 @@ func TestWriteConfigPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"host: 127.0.0.1", "port: 8317", "allow-remote: false", "disable-control-panel: true", filepath.ToSlash(p.AuthDir), "commercial-mode: true", "logging-to-file: false", "usage-statistics-enabled: false"} {
+	for _, want := range []string{"host: 127.0.0.1", "port: 8317", "allow-remote: false", "disable-control-panel: true", filepath.ToSlash(p.AuthDir), "commercial-mode: true", "logging-to-file: false", "usage-statistics-enabled: true"} {
 		if !strings.Contains(filepath.ToSlash(text), want) {
 			t.Errorf("配置缺少 %q", want)
 		}
@@ -241,8 +241,8 @@ usage-statistics: user-value
 		t.Fatal(err)
 	}
 	enabled, _, ok := mappingValue(root, "usage-statistics-enabled")
-	if !ok || enabled.Tag != "!!bool" || enabled.Value != "false" {
-		t.Fatalf("authoritative key not disabled: %s", raw)
+	if !ok || enabled.Tag != "!!bool" || enabled.Value != "true" {
+		t.Fatalf("authoritative key not enabled: %s", raw)
 	}
 	legacy, _, ok := mappingValue(root, "usage-statistics")
 	if !ok || legacy.Value != "user-value" {

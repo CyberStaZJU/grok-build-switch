@@ -20,12 +20,12 @@ import (
 )
 
 const (
-	Version       = "7.2.94"
-	Commit        = "36b45d57a3e804b9dfcee307e5d7b3e8cea5acfc"
-	ArchiveName   = "CLIProxyAPI_7.2.94_darwin_aarch64.tar.gz"
-	ArchiveSHA256 = "e3be2bc37e115a73a1a5bb11f67e6ddb72f313c4377261312b7551e58b428cef"
-	BinarySHA256  = "4a93e141e942bdbd423462fa8b8726667bc243c5e0b093fa5802cbc47fa2601e"
-	ArchiveSize   = int64(14243376)
+	Version       = "7.2.152"
+	Commit        = "c76dfd4e0edabab9000628b1560ab8ab379eadb8"
+	ArchiveName   = "CLIProxyAPI_7.2.152_darwin_aarch64.tar.gz"
+	ArchiveSHA256 = "37c3f48b2cd78f3fa1a26e4e0966617d00efad4bbea16599c6a00640b49f8af1"
+	BinarySHA256  = "9077b648eb47cce2ec934af9084502149bcce849655929b66a76c05d5254a252"
+	ArchiveSize   = int64(19837682)
 	License       = "MIT"
 	Label         = "com.grokbuildswitch.cliproxyapi"
 	DefaultPort   = 8317

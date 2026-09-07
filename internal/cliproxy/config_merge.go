@@ -635,7 +635,7 @@ func mergeManagedBase(root *yaml.Node, base managedBaseConfig) error {
 	setMappingNode(root, "debug", boolNode(false))
 	setMappingNode(root, "commercial-mode", boolNode(true))
 	setMappingNode(root, "logging-to-file", boolNode(false))
-	setMappingNode(root, "usage-statistics-enabled", boolNode(false))
+	setMappingNode(root, "usage-statistics-enabled", boolNode(true))
 	return nil
 }
 

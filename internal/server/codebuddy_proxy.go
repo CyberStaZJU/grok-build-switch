@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -170,11 +171,6 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 		// an explicit selection. Catalog sync replaces it only in that legacy case.
 		if len(existing.Models) > 0 && !opts.SyncCatalog && opts.EnabledModels == nil {
 			desired.Models = restampCodeBuddyModels(existing.Models, baseURL, apiKey)
-			if !codeBuddyHasModel(desired.Models, defaultModel) {
-				if model, ok := catalog.Find(defaultModel); ok {
-					desired.Models = append(desired.Models, codebuddy.ModelDefinition(model, baseURL, apiKey))
-				}
-			}
 			if len(desired.Models) == 0 {
 				desired.Models = []profiles.ModelDef{codeBuddyModelDefinition(desired.DefaultModel, baseURL, apiKey, catalog)}
 			}
@@ -194,11 +190,16 @@ func (s *Server) EnsureCodeBuddyProviderOpts(opts CodeBuddyEnsureOptions) (profi
 		if effort := strings.TrimSpace(existing.DefaultReasoningEffort); effort != "" {
 			desired.DefaultReasoningEffort = effort
 		}
-		updated, updateErr := s.Profiles.Update(existing.ID, desired)
-		if updateErr != nil {
-			return profiles.Profile{}, updateErr
+		desired.UpdatedAt = existing.UpdatedAt
+		if reflect.DeepEqual(profiles.Normalize(desired), existing) {
+			profile = existing
+		} else {
+			updated, updateErr := s.Profiles.Update(existing.ID, desired)
+			if updateErr != nil {
+				return profiles.Profile{}, updateErr
+			}
+			profile = updated
 		}
-		profile = updated
 	} else {
 		created, createErr := s.Profiles.Create(desired)
 		if createErr != nil {

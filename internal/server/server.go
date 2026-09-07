@@ -208,6 +208,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/subscription-proxy/accounts/", s.handleSubscriptionProxyAccount)
 	mux.HandleFunc("/api/subscription-proxy/models", s.handleSubscriptionProxyModels)
 	mux.HandleFunc("/api/subscription-proxy/providers", s.handleSubscriptionProxyProviders)
+	mux.HandleFunc("/api/subscription-proxy/quotas", s.handleSubscriptionProxyQuotas)
 	mux.HandleFunc("/api/subscription-proxy/diagnostics", s.handleSubscriptionProxyDiagnostics)
 	mux.HandleFunc("/subscription-proxy/v1", s.handleSubscriptionInference)
 	mux.HandleFunc("/subscription-proxy/v1/", s.handleSubscriptionInference)

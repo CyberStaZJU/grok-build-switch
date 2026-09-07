@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>grok_switch</title>
+  <title>Grok Build Switch</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/style.css?v=47">
+  <link rel="stylesheet" href="/style.css?v=48">
 </head>
 <body>
   <div class="shell">
@@ -23,7 +23,7 @@
       <div class="headerRight">
         <button type="button" id="addBtn" class="btn primary" data-home-only>添加供应商</button>
         <button type="button" id="navSubscriptionProxyBtn" class="btn">订阅代理</button>
-        <button type="button" id="navCodeBuddyBtn" class="btn">CodeBuddy</button>
+        <button type="button" id="navCodeBuddyBtn" class="btn">WorkBuddy</button>
         <button type="button" id="navSettingsBtn" class="btn" title="设置">设置</button>
         <button type="button" id="navSSHBtn" class="btn">SSH</button>
       </div>
@@ -45,7 +45,7 @@
       <div class="toolbar">
         <div>
           <h1 class="pageTitle">登录方式</h1>
-          <p class="pageDesc">管理官方登录与 API 供应商。/m 混合显示各供应商已启用的模型；「设为默认」只改新会话默认</p>
+          <p class="pageDesc">管理 Grok 官方登录与 API 供应商。支持通过订阅代理使用 GPT 模型；「设为默认」只改新会话默认。</p>
         </div>
         <span id="profileCount" class="muted count">0 个</span>
       </div>
@@ -71,6 +71,7 @@
       </div>
 
       <div id="profiles" class="providerGrid" data-layout="card"></div>
+
     </main>
 
     <!-- EDIT -->
@@ -280,6 +281,7 @@
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">代理服务</h2><p id="subscriptionServiceDetail" class="muted tiny">加载中…</p></div><span id="subscriptionServiceBadge" class="badge">未知</span></div><div class="subscriptionConnection"><div><span>Base URL</span><code id="subscriptionBaseUrl">—</code></div><div><span>推理 Key</span><code id="subscriptionApiKey">—</code></div></div><div class="inlineActions"><button id="subscriptionStartBtn" class="btn primary" type="button">启动</button><button id="subscriptionStopBtn" class="btn danger" type="button">停止</button><button id="subscriptionRestartBtn" class="btn" type="button">重启</button><button id="subscriptionRefreshBtn" class="btn ghost" type="button">刷新</button></div></section>
       <section><h2 class="sectionTitle subscriptionSectionTitle">第 1 步：添加订阅账号</h2><p class="muted tiny subscriptionStepHint">账号是订阅代理访问官方服务的登录凭据；添加成功后，选择模型并创建供应商，再在供应商里设置默认模型。</p><div class="subscriptionLoginGrid"><article class="formCard"><strong>Codex / ChatGPT</strong><p class="muted tiny">点击后自动打开浏览器。用要添加的 ChatGPT 账号登录并授权即可，无需设备码。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="codex">添加 ChatGPT 账号</button></article><article class="formCard"><strong>Google Antigravity / Gemini</strong><p class="muted tiny">使用 Google 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="gemini">登录 Google</button></article><article class="formCard"><strong>xAI / Grok Build</strong><p class="muted tiny">使用 xAI 订阅登录。</p><button type="button" class="btn primary subscriptionLoginBtn" data-provider="grok">登录 xAI</button></article></div><div id="subscriptionLoginSession" class="formCard subscriptionLoginSession" hidden></div></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">已添加账号</h2><p class="muted tiny">禁用会保留凭据但停止使用；删除会移除本地保存的订阅凭据。</p></div><span id="subscriptionAccountCount" class="muted tiny">0 个</span></div><div id="subscriptionAccounts" class="subscriptionAccounts"></div></section>
+      <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">额度概览</h2><p class="muted tiny">仅显示 Codex 与 Google。Codex 水位来自最近一次上游响应；Google 只读查询 Google One AI credits。不同账号的百分比额度池不相加。</p></div><button type="button" id="subscriptionQuotaRefreshBtn" class="btn" disabled>刷新额度</button></div><div id="subscriptionQuotaProviders" class="subscriptionQuotaProviders"><p class="muted tiny">尚未读取额度。</p></div><div id="subscriptionQuotaAccounts" class="subscriptionQuotaAccounts"></div><p id="subscriptionQuotaHint" class="muted tiny" role="status" aria-live="polite"></p></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">第 2 步：选择模型</h2><p class="muted tiny">只勾选希望暴露给 Grok Build 的模型，然后保存。</p></div><button type="button" id="saveSubscriptionModelsBtn" class="btn primary">保存模型选择</button></div><div id="subscriptionModels" class="subscriptionModels"></div></section>
       <section class="formCard"><div><h2 class="sectionTitle">第 3 步：创建 / 更新供应商</h2><p class="muted tiny">每个按钮只同步对应类型的已登录账号和已保存模型。创建后编辑该供应商，把它的默认模型设成你要给 Grok 用的模型。</p></div><div class="subscriptionProviderGrid"><button type="button" class="btn subscriptionProviderBtn" data-provider="codex">创建 Codex 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="gemini">创建 Gemini 供应商</button><button type="button" class="btn subscriptionProviderBtn" data-provider="grok">创建 Grok 供应商</button></div><p id="subscriptionProviderHint" class="muted tiny">请先完成账号登录和模型选择。</p></section>
       <section class="formCard"><div class="rowBetween"><div><h2 class="sectionTitle">诊断</h2><p class="muted tiny">检查服务、账号与模型路由。</p></div><button type="button" id="runSubscriptionDiagnosticsBtn" class="btn">运行诊断</button></div><pre id="subscriptionDiagnostics" class="subscriptionDiagnostics mono">尚未运行诊断。</pre></section>

@@ -25,13 +25,14 @@ import (
 const managementBaseURL = "http://127.0.0.1:8317/v0/management"
 
 type Manager struct {
-	Paths         Paths
-	Runtime       Runtime
-	Store         KeyStore
-	BuiltinBinary string
-	BuiltinHash   string
-	HTTPClient    *http.Client
-	opMu          sync.Mutex
+	Paths           Paths
+	Runtime         Runtime
+	Store           KeyStore
+	BuiltinBinary   string
+	BuiltinHash     string
+	HTTPClient      *http.Client
+	QuotaHTTPClient *http.Client
+	opMu            sync.Mutex
 }
 
 func NewManager(dataDir, home, builtin string, store KeyStore) *Manager {

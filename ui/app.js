@@ -43,10 +43,12 @@ function preservedDefaultReasoningEffort(effort) {
   return value || "none";
 }
 
-function reasoningEffortOptions(effort) {
+function reasoningEffortOptions(effort, declared = []) {
   const current = preservedDefaultReasoningEffort(effort);
-  const options = REASONING_EFFORTS.map((value) => ({ value, label: REASONING_EFFORT_LABELS[value] }));
-  if (!REASONING_EFFORTS.includes(current)) {
+  const values = [...REASONING_EFFORTS];
+  if (declared.includes("low")) values.unshift("low");
+  const options = values.map((value) => ({ value, label: REASONING_EFFORT_LABELS[value] || "低 (low)" }));
+  if (!values.includes(current)) {
     options.unshift({ value: current, label: `${current}（已保存，由模型声明）` });
   }
   return { current, options };
@@ -61,10 +63,13 @@ function preservedReasoningEfforts(efforts) {
 // when config.toml omits context_window, so known models get an explicit
 // default here. Exact leaf matches only; values stay editable per model.
 const CONTEXT_WINDOW_SUGGESTIONS = {
-  "gpt-5.6-terra": 320000,
-  "gpt-5.6-sol": 320000,
-  "gpt-5.6-luna": 320000,
+  "gpt-5.6-terra": 372000,
+  "gpt-5.6-sol": 372000,
+  "gpt-5.6-luna": 372000,
+  "gpt-6-astra": 272000,
+  "gemini-3.6-flash-high": 1048576,
   "gemini-3.7-flash-high": 1048576,
+  "gemini-3.8-flash-high": 1048576,
   "grok-4.5": 500000,
   "grok-4.6": 500000,
   "k3-256k": 262144,
@@ -1069,7 +1074,14 @@ function fallbackReasoningEffort(efforts) {
 function setReasoningEffortOptions(preferred) {
   const select = $("defaultReasoningEffort");
   if (!select) return;
-  const { current, options } = reasoningEffortOptions(preferred ?? select.value);
+  const selectedModel = $("defaultModel")?.value;
+  const row = [...($("modelsBody")?.querySelectorAll(".modelCard") || [])].find((card) => {
+    const name = card.querySelector('[data-field="name"]')?.value.trim();
+    const model = card.querySelector('[data-field="model"]')?.value.trim();
+    return (name || model) === selectedModel;
+  });
+  const declared = row ? JSON.parse(row.dataset.reasoningEfforts || "[]") : [];
+  const { current, options } = reasoningEffortOptions(preferred ?? select.value, declared);
   select.replaceChildren(...options.map((item) => {
     const option = document.createElement("option");
     option.value = item.value;
@@ -1083,7 +1095,7 @@ function updateReasoningEffortMetadata() {
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "可选：medium、high、xhigh、max、none。当前 Grok Build 兼容范围暂只接入到 max；explore / plan 跟随此默认模型。";
+    status.textContent = "可选：medium、high、xhigh、max、none；模型明确声明时也提供 low。当前 Grok Build 兼容范围暂只接入到 max；explore / plan 跟随此默认模型。";
   }
   setReasoningEffortOptions();
 }
@@ -1210,7 +1222,7 @@ function addModelCard(model = {}) {
         <input data-field="model" class="mono" value="${escapeAttr(model.model || "")}" placeholder="上游模型 ID">
       </label>
       <label class="field">上下文窗口
-        <input data-field="context_window" type="number" min="0" step="1000" class="mono" value="${card.modelDraft.context_window || 0}">
+        <input data-field="context_window" type="number" min="0" step="1" class="mono" value="${card.modelDraft.context_window || 0}">
         <span class="muted tiny" data-field="context_window_hint"></span>
       </label>
       <details class="modelAdvanced full">
@@ -1423,6 +1435,8 @@ function renderSubscriptionService(service = {}) {
   $("subscriptionStartBtn").disabled = transitioning || service.state === "running";
   $("subscriptionStopBtn").disabled = transitioning || service.state !== "running";
   $("subscriptionRestartBtn").disabled = transitioning || service.state !== "running";
+  $("subscriptionQuotaRefreshBtn").disabled = service.state !== "running";
+  if (service.state !== "running") clearSubscriptionQuotas();
 }
 
 function renderSubscriptionProxy(data) {
@@ -1458,8 +1472,98 @@ function renderSubscriptionProxy(data) {
   if (data?.login_session) renderSubscriptionLoginSession(data.login_session);
 }
 
+let subscriptionQuotaRequest = 0;
+
+function quotaNumber(value) {
+  if (value == null || typeof value === "boolean" || String(value).trim() === "") return NaN;
+  return Number(value);
+}
+
+function formatQuotaNumber(value) {
+  const number = quotaNumber(value);
+  if (!Number.isFinite(number)) return "—";
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number);
+}
+
+function formatQuotaTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN");
+}
+
+function quotaProviderLabel(provider) {
+  return provider === "gemini" ? "Google" : "Codex";
+}
+
+function quotaWindowLabel(window = {}) {
+  const used = quotaNumber(window.used_percent);
+  const parts = [window.name || "额度窗口"];
+  parts.push(Number.isFinite(used) ? `已用 ${formatQuotaNumber(used)}%` : "已用比例未知");
+  if (window.window_minutes) parts.push(`${formatQuotaNumber(window.window_minutes)} 分钟窗口`);
+  if (window.reset_at) parts.push(`${formatQuotaTime(window.reset_at)} 重置`);
+  else if (window.reset_after_seconds) parts.push(`${formatQuotaNumber(window.reset_after_seconds)} 秒后重置`);
+  if (window.limit_reached) parts.push("已达上限");
+  return parts.join(" · ");
+}
+
+function renderSubscriptionQuotas(data = {}) {
+  const supported = (item) => item && ["codex", "gemini"].includes(item.provider);
+  const providers = (Array.isArray(data.providers) ? data.providers : []).filter(supported);
+  const accounts = (Array.isArray(data.accounts) ? data.accounts : []).filter(supported);
+  $("subscriptionQuotaProviders").innerHTML = providers.map((provider) => {
+    const count = provider.account_count ?? accounts.filter((account) => account.provider === provider.provider).length;
+    const credits = Number.isFinite(quotaNumber(provider.credits_remaining)) ? `<strong>${escapeHtml(formatQuotaNumber(provider.credits_remaining))}</strong><span>${escapeHtml(provider.credit_type || "credits")}</span>` : "";
+    const fallback = count === 0 ? "尚未添加账号" : "额度未知 / 未汇总";
+    const message = provider.message || (count === 0 ? "添加账号后可读取额度" : "百分比额度池不相加，请查看账号明细");
+    return `<article class="subscriptionQuotaProvider"><div><strong>${escapeHtml(quotaProviderLabel(provider.provider))}</strong><p>${escapeHtml(`${provider.available_accounts || 0} 个可用 · ${provider.disabled_accounts || 0} 个停用 · ${provider.error_accounts || 0} 个异常`)}</p><p>${escapeHtml(message)}</p></div><div class="subscriptionQuotaValue">${credits || `<strong>${fallback}</strong><span>不按本地用量估算</span>`}</div></article>`;
+  }).join("") || '<p class="muted tiny">暂无 Codex 或 Google 账号。</p>';
+  $("subscriptionQuotaAccounts").innerHTML = accounts.map((account) => {
+    const details = [];
+    if (account.plan) details.push(`套餐 ${account.plan}`);
+    if (account.credits) details.push(`${formatQuotaNumber(account.credits.remaining)} ${account.credits.type || "credits"}`);
+    if (account.credits?.minimum_per_use) details.push(`最低单次 ${formatQuotaNumber(account.credits.minimum_per_use)}`);
+    const windows = Array.isArray(account.windows) ? account.windows : [];
+    windows.forEach((window) => details.push(quotaWindowLabel(window)));
+    if (!account.credits && !windows.length) details.push("额度未知：上游未提供额度水位");
+    if (account.message) details.push(account.message);
+    if (account.next_retry_at) details.push(`下次重试 ${formatQuotaTime(account.next_retry_at)}`);
+    const status = account.disabled ? "已停用" : account.unavailable || account.status === "error" ? "账号异常" : subscriptionStatusLabel(account.status);
+    return `<article class="subscriptionQuotaAccount"><div><strong>${escapeHtml(account.email || account.label || account.id || "未命名账号")}</strong><p>${escapeHtml([quotaProviderLabel(account.provider), status, account.observed_at ? `观测于 ${formatQuotaTime(account.observed_at)}` : ""].filter(Boolean).join(" · "))}</p></div><ul>${details.map((detail) => `<li>${escapeHtml(detail)}</li>`).join("")}</ul></article>`;
+  }).join("") || '<p class="muted tiny">暂无账号额度明细。</p>';
+  $("subscriptionQuotaHint").textContent = data.updated_at ? `刷新时间：${formatQuotaTime(data.updated_at)}。额度数据可能滞后；未知值不会按本地 token 用量估算。` : "";
+}
+
+function clearSubscriptionQuotas(message = "服务未运行，启动后可读取额度。") {
+  subscriptionQuotaRequest++;
+  $("subscriptionQuotaProviders").innerHTML = "";
+  $("subscriptionQuotaAccounts").innerHTML = "";
+  $("subscriptionQuotaHint").textContent = message;
+}
+
+async function loadSubscriptionQuotas() {
+  if (state.subscriptionProxy?.service?.state !== "running") {
+    clearSubscriptionQuotas();
+    return false;
+  }
+  const request = ++subscriptionQuotaRequest;
+  $("subscriptionQuotaHint").textContent = "正在读取额度；已有数据为上次观测。";
+  try {
+    const data = await api("/api/subscription-proxy/quotas");
+    if (request !== subscriptionQuotaRequest || state.subscriptionProxy?.service?.state !== "running") return false;
+    renderSubscriptionQuotas(data);
+    return data;
+  } catch (err) {
+    if (request !== subscriptionQuotaRequest || state.subscriptionProxy?.service?.state !== "running") return false;
+    clearSubscriptionQuotas(`额度读取失败：${err.message || "未知错误"}。请稍后重试。`);
+    return false;
+  }
+}
+
 async function loadSubscriptionProxy() {
   renderSubscriptionProxy(await api("/api/subscription-proxy"));
+  if (state.subscriptionProxy?.service?.state === "running") {
+    void loadSubscriptionQuotas();
+  }
 }
 
 function renderCodeBuddy(data) {
@@ -1679,7 +1783,8 @@ const ssh = {
 };
 
 async function loadSSHConnections() {
-  ssh.connections = await api("/api/ssh/connections");
+  const connections = await api("/api/ssh/connections");
+  ssh.connections = Array.isArray(connections) ? connections : [];
   renderSSHConnections();
 }
 
@@ -2207,6 +2312,11 @@ document.querySelectorAll(".subscriptionProviderBtn").forEach((button) => button
   const profile = result?.providers?.[0];
   toast(`${profile?.name || "订阅代理供应商"}已同步；请编辑该供应商并设置默认模型`, "success");
 }, { button, busyLabel: "同步中…" }));
+$("subscriptionQuotaRefreshBtn").onclick = () => run(async () => {
+  if (await loadSubscriptionQuotas()) toast("额度已刷新", "success");
+}, { button: $("subscriptionQuotaRefreshBtn"), busyLabel: "读取中…" }).finally(() => {
+  $("subscriptionQuotaRefreshBtn").disabled = state.subscriptionProxy?.service?.state !== "running";
+});
 $("runSubscriptionDiagnosticsBtn").onclick = () => run(async () => { const result = await api("/api/subscription-proxy/diagnostics", { method: "POST" }); $("subscriptionDiagnostics").textContent = JSON.stringify(result, null, 2); }, { button: $("runSubscriptionDiagnosticsBtn"), busyLabel: "诊断中…" });
 $("backFromEditBtn").onclick = () => showView("home");
 $("backFromSettingsBtn").onclick = () => showView("home");

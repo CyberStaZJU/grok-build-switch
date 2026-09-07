@@ -9,6 +9,11 @@ const vm = require("node:vm");
 const appPath = path.join(__dirname, "app.js");
 const appSource = fs.readFileSync(appPath, "utf8");
 const htmlSource = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+
+test("context input accepts exact token counts and quota failures do not report success", () => {
+  assert.match(appSource, /data-field="context_window" type="number" min="0" step="1"/);
+  assert.match(appSource, /if \(await loadSubscriptionQuotas\(\)\) toast\("额度已刷新", "success"\)/);
+});
 const testableSource = appSource.split("// Custom confirm dialog")[0] + `
 this.appTest = {
   api,
@@ -39,6 +44,27 @@ this.appTest = {
   resetCSRF() { csrfTokenPromise = null; },
 };
 `;
+
+function loadQuotaApp(apiImpl) {
+  const elements = new Proxy({}, { get(target, id) {
+    return target[id] ||= { innerHTML: "", textContent: "", disabled: false, dataset: {} };
+  } });
+  const context = {
+    api: apiImpl,
+    state: { subscriptionProxy: { service: { state: "running" } } },
+    $: (id) => elements[id],
+    escapeHtml: (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]),
+    renderSubscriptionProxy(data) { context.state.subscriptionProxy = data; context.renderSubscriptionService(data.service); },
+  };
+  const start = appSource.indexOf("let subscriptionQuotaRequest =");
+  const end = appSource.indexOf("function renderCodeBuddy(", start);
+  const serviceStart = appSource.indexOf("function subscriptionStatusLabel(");
+  const serviceEnd = appSource.indexOf("function renderSubscriptionProxy(", serviceStart);
+  assert.ok(start > 0 && end > start && serviceEnd > serviceStart, "quota source boundaries must exist");
+  vm.createContext(context);
+  vm.runInContext(appSource.slice(serviceStart, serviceEnd) + appSource.slice(start, end), context, { filename: appPath });
+  return { app: context, elements };
+}
 
 function response(status, data = {}, statusText = "") {
   return {
@@ -77,6 +103,93 @@ function loadApp(fetchImpl, elements = {}, confirmImpl = () => true) {
   vm.runInContext(testableSource, context, { filename: appPath });
   return context.appTest;
 }
+
+test("quota unknown percentages do not become zero and genuine zero remains visible", () => {
+  const { app } = loadQuotaApp();
+  for (const value of [null, undefined, "", "  ", false, "invalid"]) {
+    assert.equal(app.formatQuotaNumber(value), "—");
+    assert.match(app.quotaWindowLabel({ used_percent: value }), /比例未知/);
+    assert.doesNotMatch(app.quotaWindowLabel({ used_percent: value }), /已用 0%/);
+  }
+  assert.match(app.quotaWindowLabel({ used_percent: 0 }), /已用 0%/);
+  assert.match(app.quotaWindowLabel({ used_percent: 25.5, limit_reached: true }), /已用 25.5%.*已达上限/);
+});
+
+test("quota cards distinguish no accounts and unknown balances and preserve escaped messages", () => {
+  const { app, elements } = loadQuotaApp();
+  app.renderSubscriptionQuotas({ providers: [
+    { provider: "codex", account_count: 0 },
+    { provider: "gemini", account_count: 1, error_accounts: 1 },
+  ], accounts: [
+    { provider: "gemini", email: "<account>", plan: "AI", status: "error", credits: { remaining: 0 }, windows: [{ used_percent: null }], message: "<upstream error>" },
+    { provider: "codex", plan: "Plus", disabled: true, message: "credentials disabled" },
+    { provider: "grok", message: "excluded-provider" },
+  ] });
+  const providers = elements.subscriptionQuotaProviders.innerHTML;
+  const accounts = elements.subscriptionQuotaAccounts.innerHTML;
+  assert.match(providers, /尚未添加账号/);
+  assert.match(providers, /额度未知 \/ 未汇总/);
+  assert.doesNotMatch(providers, /多个额度池/);
+  assert.match(accounts, /0 credits/);
+  assert.match(accounts, /账号异常/);
+  assert.match(accounts, /&lt;upstream error&gt;/);
+  assert.match(accounts, /&lt;account&gt;/);
+  assert.match(accounts, /额度未知：上游未提供额度水位/);
+  assert.match(accounts, /已停用/);
+  assert.match(accounts, /credentials disabled/);
+  assert.doesNotMatch(accounts, /excluded-provider|<upstream error>/);
+  app.renderSubscriptionQuotas({});
+  assert.match(elements.subscriptionQuotaProviders.innerHTML, /暂无 Codex 或 Google 账号/);
+});
+
+test("quota latest refresh wins against stale success and stale failure", async () => {
+  for (const staleFailure of [false, true]) {
+    const old = deferred();
+    const latest = deferred();
+    let calls = 0;
+    const { app, elements } = loadQuotaApp(() => ++calls === 1 ? old.promise : latest.promise);
+    const first = app.loadSubscriptionQuotas();
+    const second = app.loadSubscriptionQuotas();
+    latest.resolve({ accounts: [{ provider: "codex", message: "latest-result" }] });
+    await second;
+    if (staleFailure) old.reject(new Error("stale-error"));
+    else old.resolve({ accounts: [{ provider: "codex", message: "stale-result" }] });
+    assert.equal(await first, false);
+    assert.match(elements.subscriptionQuotaAccounts.innerHTML, /latest-result/);
+    assert.doesNotMatch(elements.subscriptionQuotaHint.textContent, /stale-error/);
+  }
+});
+
+test("stopping service clears quota and invalidates in-flight responses even after restart", async () => {
+  const pending = deferred();
+  let calls = 0;
+  const { app, elements } = loadQuotaApp(() => { calls++; return pending.promise; });
+  app.renderSubscriptionQuotas({ accounts: [{ provider: "codex", message: "old-data" }] });
+  const refresh = app.loadSubscriptionQuotas();
+  app.renderSubscriptionService({ state: "stopped" });
+  assert.equal(elements.subscriptionQuotaAccounts.innerHTML, "");
+  assert.equal(elements.subscriptionQuotaProviders.innerHTML, "");
+  assert.equal(elements.subscriptionQuotaRefreshBtn.disabled, true);
+  assert.match(elements.subscriptionQuotaHint.textContent, /服务未运行/);
+  assert.equal(await app.loadSubscriptionQuotas(), false);
+  assert.equal(calls, 1);
+  app.renderSubscriptionService({ state: "running" });
+  pending.resolve({ accounts: [{ provider: "codex", message: "late-data" }] });
+  assert.equal(await refresh, false);
+  assert.equal(elements.subscriptionQuotaAccounts.innerHTML, "");
+});
+
+test("quota failure clears stale values and does not reject the subscription main flow", async () => {
+  const quota = deferred();
+  const { app, elements } = loadQuotaApp((url) => url.endsWith("/quotas") ? quota.promise : Promise.resolve({ service: { state: "running" } }));
+  app.renderSubscriptionQuotas({ accounts: [{ provider: "codex", message: "stale-data" }] });
+  await app.loadSubscriptionProxy();
+  assert.match(elements.subscriptionQuotaHint.textContent, /正在读取额度/);
+  quota.reject(new Error("upstream unavailable"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(elements.subscriptionQuotaAccounts.innerHTML, "");
+  assert.match(elements.subscriptionQuotaHint.textContent, /额度读取失败：upstream unavailable/);
+});
 
 test("CodeBuddy selection keeps only catalog models and constrains the default", () => {
   const app = loadApp(async () => response(500));
@@ -153,9 +266,12 @@ test("suggestContextWindow resolves known leaves and leaves unknown models unset
   const app = loadApp(async () => response(500));
   assert.equal(app.suggestContextWindow("k3-256k"), 262144);
   assert.equal(app.suggestContextWindow("K3-256K"), 262144);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 320000);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 320000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 372000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 372000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-6-astra"), 272000);
+  assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.6-flash-high"), 1048576);
   assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.7-flash-high"), 1048576);
+  assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.8-flash-high"), 1048576);
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.5"), 500000);
   assert.equal(app.suggestContextWindow("subscription/grok/grok-4.6"), 500000);
   assert.equal(app.suggestContextWindow("hy4-preview"), 1000000);
@@ -377,6 +493,14 @@ test("new profiles default to disabled reasoning without preset metadata", () =>
   assert.deepEqual([...app.preservedReasoningEfforts(["low", "medium", "ultra", "low", " ", ""])], ["low", "medium"]);
   assert.equal(draft.default_reasoning_effort, "none");
   assert.equal(Object.hasOwn(draft, "template"), false);
+});
+
+test("reasoning selector offers declared low without granting ultra", () => {
+  const app = loadApp(async () => response(500));
+  const result = app.reasoningEffortOptions("medium", ["low", "medium", "high", "xhigh", "max", "ultra"]);
+  assert.equal(result.options.filter((option) => option.value === "low").length, 1);
+  assert.equal(result.options.some((option) => option.value === "ultra"), false);
+  assert.equal(app.reasoningEffortOptions("medium").options.some((option) => option.value === "low"), false);
 });
 
 test("reasoning selector preserves a saved model-declared low effort", () => {

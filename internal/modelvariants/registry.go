@@ -80,6 +80,17 @@ func TrustedCodexFastLeaf(physicalID string) (string, bool) {
 	return physicalID + "-fast", true
 }
 
+// TrustedCodexReasoningPhysicalFromAlias resolves reasoning capability without granting Fast routing.
+func TrustedCodexReasoningPhysicalFromAlias(alias string) (string, bool) {
+	if strings.TrimSpace(alias) == "subscription/codex/gpt-6-astra" {
+		return "gpt-6-astra", true
+	}
+	if physicalID, ok := TrustedCodexPhysicalFromStandardAlias(alias); ok {
+		return physicalID, true
+	}
+	return TrustedCodexPhysicalFromFastAlias(alias)
+}
+
 func TrustedCodexReasoningEffortsForPhysicalModel(physicalID string) []string {
 	return append([]string(nil), trustedCodexReasoningEfforts...)
 }

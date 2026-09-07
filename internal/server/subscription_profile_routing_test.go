@@ -38,6 +38,34 @@ func (*subscriptionProfileRoutingFake) Models(context.Context) ([]SubscriptionPr
 	}, nil
 }
 
+func TestSubscriptionProfileAstraReasoningWithoutFast(t *testing.T) {
+	alias := "subscription/codex/gpt-6-astra"
+	p := subscriptionProfile("codex", "Codex", "secret", []SubscriptionProxyAccount{{ID: "codex", Provider: "codex"}}, []SubscriptionProxyModel{{ID: alias, Provider: "codex"}}, "http://127.0.0.1:17878/subscription-proxy/v1")
+	if len(p.Models) != 1 || len(p.AvailableModels) != 1 || p.DefaultModel != alias || p.DefaultReasoningEffort != "medium" {
+		t.Fatalf("unexpected Astra profile: %#v", p)
+	}
+	m := p.Models[0]
+	if !m.SupportsReasoningEffort || m.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(m.ReasoningEfforts, []string{"low", "medium", "high", "xhigh", "max"}) || m.SpeedTier != "" || m.StandardAnchor != "" {
+		t.Fatalf("unexpected Astra capabilities: %#v", m)
+	}
+	for _, effort := range m.ReasoningEfforts {
+		p.DefaultReasoningEffort = effort
+		if err := profiles.ValidateDefaultReasoningEffort(p); err != nil {
+			t.Fatalf("Astra effort %s: %v", effort, err)
+		}
+	}
+	m.Name = "Custom Astra label"
+	m.ReasoningEfforts = append(m.ReasoningEfforts, "ultra", "invented")
+	for _, effort := range []string{"ultra", "invented"} {
+		if profiles.ModelSupportsReasoningEffort(m, effort) {
+			t.Fatalf("Astra accepted unsupported effort %s", effort)
+		}
+	}
+	if _, ok := modelvariants.CodexFastAlias("gpt-6-astra"); ok {
+		t.Fatal("Astra reasoning granted Fast routing")
+	}
+}
+
 func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testing.T) {
 	accounts := []SubscriptionProxyAccount{
 		{ID: "codex", Provider: "codex"},
@@ -72,8 +100,8 @@ func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testin
 	if !ok || fastModel.Model != fast || fastModel.SpeedTier != profiles.SpeedTierFast || fastModel.StandardAnchor != standard {
 		t.Fatalf("fast model = %#v", fastModel)
 	}
-	if standardModel.ContextWindow != 320000 || fastModel.ContextWindow != 320000 {
-		t.Fatalf("trusted codex context windows = %d/%d, want 320000/320000", standardModel.ContextWindow, fastModel.ContextWindow)
+	if standardModel.ContextWindow != 372000 || fastModel.ContextWindow != 372000 {
+		t.Fatalf("trusted codex context windows = %d/%d, want 372000/372000", standardModel.ContextWindow, fastModel.ContextWindow)
 	}
 	for _, model := range []profiles.ModelDef{standardModel, fastModel} {
 		if !model.SupportsReasoningEffort || model.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(model.ReasoningEfforts, modelvariants.TrustedCodexReasoningEffortsForPhysicalModel("gpt-5.6-terra")) {

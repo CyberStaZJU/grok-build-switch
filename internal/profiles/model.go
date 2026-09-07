@@ -205,10 +205,7 @@ func ModelSupportsReasoningEffort(model ModelDef, effort string) bool {
 		if alias == "" {
 			continue
 		}
-		physicalID, trusted := modelvariants.TrustedCodexPhysicalFromStandardAlias(alias)
-		if !trusted {
-			physicalID, trusted = modelvariants.TrustedCodexPhysicalFromFastAlias(alias)
-		}
+		physicalID, trusted := modelvariants.TrustedCodexReasoningPhysicalFromAlias(alias)
 		if !trusted {
 			continue
 		}

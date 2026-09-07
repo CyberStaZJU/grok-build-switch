@@ -85,6 +85,10 @@ HTTP request
 
 ---
 
+## 客户端范围
+
+仅适配 Grok 客户端。保留 CLIProxyAPI 的 GPT/ChatGPT 供应商及 Grok 所需的 Responses 代理能力；不提供 Codex 客户端配置管理或 CodeBuddy Chat→Responses 桥接。不得因移除客户端适配而删除订阅认证、GPT模型或供应商路由。
+
 ## 4. Collaboration 控制面
 
 ### 4.1 真相与边界

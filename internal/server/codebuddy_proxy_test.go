@@ -481,4 +481,22 @@ func TestManagedCodeBuddyProfileRejectsOrdinaryProfileMutation(t *testing.T) {
 	if !names["hy3"] || !names["deepseek-v4-flash"] {
 		t.Fatalf("ensure lost user subset: %#v", ensured.Models)
 	}
+	ensured.Models = ensured.Models[1:]
+	ensured.AvailableModels = []string{"deepseek-v4-flash"}
+	ensured.DefaultModel = "deepseek-v4-flash"
+	if _, err := profileStore.Update(created.ID, ensured); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(profileStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := s.EnsureCodeBuddyProvider("ck_preserve", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restarted.Models) != 1 || restarted.DefaultModel != "deepseek-v4-flash" {
+		t.Fatal("startup expanded subset or changed its default")
+	}
+	assertFileBytesEqual(t, profileStore.Path(), before)
 }

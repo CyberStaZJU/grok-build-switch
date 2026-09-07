@@ -41,6 +41,10 @@
 
 「设为默认」只改新会话默认，不会把其他供应商的已启用模型从 `/m` 拿掉。保存后更新 `~/.grok/config.toml` 与 `routing.json`。
 
+## Grok 客户端与 GPT 模型
+
+Switch 只管理 Grok 客户端，不提供 Codex 客户端配置切换或 WorkBuddy Responses 桥接。GPT/ChatGPT 模型仍可通过“订阅代理”创建供应商，供 Grok 使用；订阅代理中的 Codex/ChatGPT 指供应商来源，不是对 Codex 客户端的适配。现有账号与凭据保持。
+
 ## 6. Max Collaboration（已移除）
 
 当前版本不再提供 Max Collaboration 入口。它与 Grok Build 日常用法不适配。日常任务请使用供应商编辑页里的默认模型与推理强度。

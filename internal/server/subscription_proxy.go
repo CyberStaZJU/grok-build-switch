@@ -643,6 +643,18 @@ func subscriptionProfile(provider, name, key string, accounts []SubscriptionProx
 				continue
 			}
 		}
+		if provider == "codex" {
+			if physicalID, trusted := modelvariants.TrustedCodexReasoningPhysicalFromAlias(alias); trusted {
+				seen[alias] = true
+				p.AvailableModels = append(p.AvailableModels, alias)
+				p.Models = append(p.Models, trustedSubscriptionModel(alias, alias, baseURL, key, "", "", modelvariants.TrustedCodexReasoningEffortsForPhysicalModel(physicalID)))
+				if p.DefaultModel == "" {
+					p.DefaultModel = alias
+					p.DefaultReasoningEffort = "medium"
+				}
+				continue
+			}
+		}
 		seen[alias] = true
 		p.AvailableModels = append(p.AvailableModels, alias)
 		p.Models = append(p.Models, profiles.ModelDef{

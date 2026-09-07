@@ -85,12 +85,12 @@ CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" MACOSX_DEPLOYMENT_TARGET="$MACOS_MIN_VE
   -trimpath -ldflags "-s -w" \
   -o "$CONTENTS/MacOS/$EXECUTABLE_NAME" .
 
-CLIPROXY_VERSION="7.2.94"
+CLIPROXY_VERSION="7.2.152"
 CLIPROXY_CACHE_DIR="${CLIPROXY_CACHE_DIR:-${HOME}/Library/Caches/Grok Build Switch/build-deps}"
 CLIPROXY_ARCHIVE="${CLIPROXY_CACHE_DIR}/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
 CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_darwin_aarch64.tar.gz"
-CLIPROXY_SHA256="e3be2bc37e115a73a1a5bb11f67e6ddb72f313c4377261312b7551e58b428cef"
-CLIPROXY_SIZE=14243376
+CLIPROXY_SHA256="37c3f48b2cd78f3fa1a26e4e0966617d00efad4bbea16599c6a00640b49f8af1"
+CLIPROXY_SIZE=19837682
 if [[ ! -f "$CLIPROXY_ARCHIVE" ]]; then
   printf 'Downloading pinned CLIProxyAPI v%s archive...\n' "$CLIPROXY_VERSION"
   mkdir -p "$(dirname "$CLIPROXY_ARCHIVE")"
@@ -124,7 +124,7 @@ file "$CONTENTS/Resources/cliproxy/CLIProxyAPI" | grep -q 'Mach-O 64-bit executa
 verify_macos_minos "$CONTENTS/MacOS/$EXECUTABLE_NAME"
 verify_macos_minos "$CONTENTS/Resources/cliproxy/CLIProxyAPI"
 cat > "$CONTENTS/Resources/cliproxy/manifest.json" <<MANIFEST
-{"version":"v${CLIPROXY_VERSION}","commit":"36b45d57a3e804b9dfcee307e5d7b3e8cea5acfc","archive_sha256":"${CLIPROXY_SHA256}","binary":"CLIProxyAPI","license":"LICENSE"}
+{"version":"v${CLIPROXY_VERSION}","commit":"c76dfd4e0edabab9000628b1560ab8ab379eadb8","archive_sha256":"${CLIPROXY_SHA256}","binary":"CLIProxyAPI","license":"LICENSE"}
 MANIFEST
 chmod 0600 "$CONTENTS/Resources/cliproxy/manifest.json"
 

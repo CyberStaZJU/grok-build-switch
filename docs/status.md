@@ -1,17 +1,33 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、产品边界与技术债。最后更新：2026-08-30（Grok Build 推理强度暂只接入到 max）。
+> 当前状态、产品边界与技术债。最后更新：2026-09-05（Grok专用0.9.4 build18；保留GPT订阅代理）。
 
 ---
+
+## 当前产品方向与回退（2026-09-05）
+
+按用户决定撤回 Codex 客户端适配，仅管理 Grok；保留 GPT/ChatGPT 订阅代理、现有供应商与 WorkBuddy Chat 模型。已安装 0.9.4 build18 Grok 专用维护包（ad-hoc，未公证）：相对旧 build15 保留模型子集不扩张、无变化不重写 Profile、移动布局和空 SSH 列表修复。Codex 客户端 UI/API、配置写入模块与 WorkBuddy Responses 桥接均已从当前源码移除；CLIProxyAPI 的 GPT Responses 推理路由保留。
+
+安装后通过界面保存事务恢复原 hy4-preview 单模型选择。Grok config、Codex config/auth、设置与回退前字节一致；GPT/订阅 Profile 未变，WorkBuddy Profile 和 routing 仅 updated_at 变化。原 CLIProxy 进程保留。没有发起新的真实模型付费请求；GPT 反代保留结论基于代码/配置、路由与页面检查，不冒充本轮真实推理验收。
+
+回退前源码、App和私有快照位于 `~/.grok/build-state/grok-build-switch-grok-rollback-20260905/`；最终构建位于 `/private/tmp/gbs-grok-rollback-20260905/`。已有 Codex 实验资料及旧 App 未删除，源代码未提交/推送。上次真实 Codex 请求曾返回11128，具体触发字段未定位；该方向已取消，不列为继续调试任务。用户级个人规则及其他工具配置不属于此次撤回范围。
+
+验证：全量Go、vet、关键代理/server race、前端22项、构建签名与安装校验通过。生产界面已实际恢复模型选择并访问GPT订阅代理；1280桌面及390×844移动端首页、WorkBuddy、订阅代理、设置、SSH真实导航通过，无横向溢出。无需额外删除批准即可使用当前版本；外部备份留存，清理另行决定。
 
 ## 1. 当前状态
 
 ### 1.1 保留并维护的能力
 
+- **2026-09-05 本轮外部资产已清理**：经用户授权删除 `~/.grok/build-state/grok-build-switch-astra-20260905/`（约 350 MB），包含回退 App、全部构建候选及安装介质、配置快照和隔离状态。删除前无进程占用，删除后路径不存在；当前 `/Applications/Grok Build Switch.app` 0.9.4 build 15 哈希未变、签名通过、管理页面 HTTP 200，运行配置与凭据未删除。
+
+- **2026-09-05 Astra修复资格（当前安装见顶部回退说明）**：Astra阶段安装为 0.9.4 build 15，SHA-256 `74a2dd1b8e44b0724ad077bee6fb7801376b949d44fe0c928a1bd79369f9df8a`，ad-hoc 签名、未公证。Astra 明确声明 low/medium/high/xhigh/max，默认 medium，窗口 272000；不生成 Fast。声明 low 的模型可在编辑器主动选择 low，不再仅保留已保存值。全量 Go、vet、相关 race、前端 22 项通过；真实页面保存 low、移动编辑恢复 medium、再同步均核验，low/medium/max 最小真实请求返回 OK。CLIProxy 7.2.94 的 `usage-statistics-enabled` 已开启且后续合并保持 true；旧 `/usage` 不存在，`/api-key-usage` 返回空对象，上游 usage queue 为短期内存且读取会消费记录，因此本次未取走未知记录、未声称历史计费统计完成。最新 7.2.151 仍沿用此接口，无必要升级证据，暂未升级。设置页用量表移动溢出与重启后 CodeBuddy 子集扩张另记技术债；CodeBuddy 已恢复原单模型。完整本轮边界与外部保留资产见根 Status.md。
+
+- **CodeBuddy 工具调用协议修复（已安装）**：2026-09-01 根据真实 Grok Build 会话确认，CodeBuddy 模型可能在多工具调用中返回空或缺失的 `tool_call.id`；首轮工具仍会执行，但携带空 `tool_call_id` 的下一轮请求会被上游以 HTTP 400 `Invalid request parameters` 拒绝。共用 CodeBuddy 代理现为流式与聚合响应生成按调用索引稳定的非空 ID，同时延续增量函数名；转发历史前会修复可无歧义配对的空 `tool_calls[].id` / `tool_call_id`，歧义则本地明确拒绝。该行为覆盖全部 CodeBuddy Profile 模型。2026-09-02 已安装 `0.9.3 (build 12)`；真实 `hy4-preview` 工具调用及工具结果第二轮均返回 HTTP 200，歧义历史在本地明确返回 400。最新 WorkBuddy CLI 目录当前只允许 `hy4-preview` 与 `hy3`，不再允许 `hy4-preview-x`；后者定义仍保留，但代理不会在目录重新允许前枚举或转发。
+- **已授权清理**：2026-08-30 经用户明确授权，已删除仓库外 CodeBuddy 隔离验证状态 `~/.grok/build-state/grok-build-switch-codebuddy-subset-20260830`（约 14 MB）和安装前配置快照 `~/.grok/build-state/grok-build-switch-preinstall-config-20260830T205215`（约 48 KB）。删除前确认目录未被进程打开；当前安装、运行配置和订阅凭据未删除。
 - **Grok Build 推理强度兼容边界**：2026-08-30 经本机 Grok Build `1.0.13` 实测，`max` 是可用的最高原生推理档位，`ultra` 会使该模型整组自定义档位失效。当前源码与 UI 暂只接入到 `max`：可信 Codex Standard/Fast 均声明到 `max`，`ultra` 被服务端拒绝且不投影到 `config.toml`；Switch 内部的 `reasoning_efforts_source` 只留在 Profile/路由状态，不再写入 Grok 的未知字段。
 - **历史 GitHub 基线**：2026-08-30 曾将 CodeBuddy 本机目录同步、当时的 Codex Sol Ultra 实现、托管 Profile/路由边界加固、测试和文档推送到 `https://github.com/CyberStaZJU/grok-build-switch` 的 `main`。历史功能提交 `ef5d4522e75e322f08cc9a0e12cd217526050234` 已由本地 `HEAD`、`origin/main` 与远端 advertised ref 核验一致；提交不包含构建产物、运行数据、凭据或私有 home 路径。后续 max-only 改动已取代该提交中的 Ultra 运行行为。
 - **历史发布前边界加固（已被 max-only 决策取代 Ultra 部分）**：2026-08-30 GitHub 同步前独立审查并修复四类边界：路由按具体模型的可信声明校验推理强度，当时 Terra/Luna Standard/Fast 以及“自定义显示名 + 可信模型 ID”不能绕过 `ultra` 限制，Sol Standard/Fast 保持支持；供应商编辑页保留已保存且由模型声明的 `low` 等非全局菜单值；CodeBuddy 本机目录跨文件按嵌入时间戳选择最新有效完整快照；CodeBuddy Profile 在后续路由或激活失败时恢复原 Profile 或删除本次新建项。隔离源码实例已通过桌面 context-only 保存 `low`、`390×844` 移动布局及持久化验证；全量 Go、vet、race、前端 Node 与 Wails-tag 测试通过。当前运行行为以本节的 max-only 条目为准。
-- **最新本机安装**：2026-08-30 已构建并安装 `0.9.2 (build 11)` 到 `/Applications/Grok Build Switch.app`，运行配置、凭据和账号数据保持存在。arm64 主程序 SHA-256 为 `65e5023dd283b6390a19534c03f20f05cc034fded41a3607219f6f48f09eb918`，与 `dist/macos/Grok Build Switch.app` 主程序逐字节一致；严格 codesign 校验通过，但仍是 ad-hoc 签名，没有 Developer ID 签名或 Apple 公证。当前进程从安装路径运行并监听 `127.0.0.1:17878`。真实桌面与 `390×844` 移动页面确认首页、Codex 编辑、订阅代理和 CodeBuddy 状态一致且无横向溢出；CodeBuddy 仍暴露 `hy4-preview`、`hy4-preview-x`、`hy3`，默认 `hy4-preview-x`，保持未激活。仓库中保留 0.9.2 DMG、`.sha256` 和 App 构建副本作为本轮产物；它们不是第二个已安装 App。
+- **历史本机安装（已由0.9.5 build16取代）**：2026-09-02 已构建并安装 `0.9.3 (build 12)` 到 `/Applications/Grok Build Switch.app`，主程序 SHA-256 为 `b151d543a47347c0a2c8a0fb35d3260e52bc7a57906bf528ccf4a3e432c96ce6`，与 `~/.grok/build-state/grok-build-switch-codebuddy-tool-fix-20260902/macos/Grok Build Switch.app` 逐字节一致。严格 codesign 校验通过，但仍为 ad-hoc 签名，没有 Developer ID 签名或 Apple 公证。PID 64010 从安装路径运行并监听 `127.0.0.1:17878`；健康接口、config/routing 一致性以及真实桌面和 `390×844` 移动页面通过。首次仓库内构建因 FinderInfo 签名失败且构建脚本先清空 `dist/macos`，原 0.9.2 DMG 未找到副本可恢复；失败生成的部分 0.9.3 App 已删除，当前仓库 `dist/macos` 为空。经校验的 0.9.3 App、DMG 和 `.sha256` 保留在上述仓库外 build-state。
 - **Codex 推理强度最高接入到 Max**：`gpt-5.6-sol` 的 Standard 与 Fast 逻辑路由均显式声明 `low / medium / high / xhigh / max`，不再声明 `ultra`。供应商编辑页只提供 `medium / high / xhigh / max / none`；服务端会过滤陈旧 `ultra` 元数据并拒绝将其作为默认值，Switch 内部 `reasoning_efforts_source` 不再投影到 Grok `config.toml`。本机 Grok Build `1.0.13` 已实测 Standard/Fast 的 `max` 均返回 `OK`，`ultra` 被明确拒绝。真实托管 Profile 编辑页提交 `max` 成功，证明 effort-only 保存不再误报 409；验证后 Profile 恢复 Standard+Medium，全局路由恢复 Fast+High，`config.toml`、routing 和运行 API 一致。
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
 - **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash/deepseek-v4-pro）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。Codex GPT-5.6 订阅代理模型的建议窗口为 320,000 tokens；订阅代理 Profile 允许在供应商编辑页调整上下文窗口和默认推理强度，其他托管字段仍通过订阅代理页面更新；编辑表单会保留上游已声明但不在当前菜单中的推理档位（如 Codex 的 `low`），避免保存上下文窗口时丢失模型元数据。CodeBuddy 的 DeepSeek v4 Flash/Pro 使用 1,000,000 的配置窗口，为已验证的 1,048,576 网关上限保留系统提示、工具调用和输出余量。
