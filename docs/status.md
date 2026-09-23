@@ -7,20 +7,22 @@
 ## 订阅代理模型能力自动探测（2026-09-23）
 
 - **需求**：更新「订阅代理 · ChatGPT/Codex」模型时自动测试 Fast 与推理强度，有效即加入选项；触发范围限定为「目录更新时探测新出现或档位未记录的模型」（用户决策）。
-- **探测信号**：CLIProxyAPI 自身在校验 `reasoning_effort`。传入非法值时它返回 HTTP 400，并在消息中列出该模型接受的档位：`level "x" not supported, valid levels: low, medium, high, xhigh, max`。该列表按模型区分——实测 `gpt-5.5` 为 `low/medium/high/xhigh`，`gpt-5.6-terra/sol/luna`、`gpt-6-astra`、`gpt-6-luna` 另有 `max`。请求在推理前即被拒绝，因此不消耗 completion token，也不需要预先存在别名（可直接用物理模型 ID 探测）。
-- **Fast 的判定边界（必须如实表述）**：没有任何响应字段能证明 `service_tier: priority` 生效。已知可用的 `-fast` 别名（由 CLIProxy 的 payload override 注入 priority）与 Standard 一样回报 `service_tier: "default"`；并且 `service_tier` 完全不被校验（传 `bogus-tier` 仍返回 200）。按用户决策，Fast 以「代理接受并能解析该模型」为准开启，这是可获得的最强信号，**不等于已证明更快**；上游若忽略 priority，用户会以为更快而实际无变化。
-- **不可用与重试**：模型无可用账号时返回 503（`auth_unavailable` / `model_not_found`），记为 `unavailable` 且不授予能力，下次目录更新重试。返回「仅支持 /v1/images/*」等端点不匹配的模型记为已测量但无档位，不再重复探测。
+- **探测需要两个信号**：CLIProxyAPI 自己校验 `reasoning_effort`，非法值返回 HTTP 400 并附该模型允许档位（`level "x" not supported, valid levels: ...`，按模型区分：`gpt-5.5` 仅到 `xhigh`，其余多一个 `max`）。**但该校验发生在账号解析之前**：订阅无法访问的模型同样返回 400 与完整档位列表（升级 7.3.15 后实测 `gpt-6-sol` 即如此）。因此还必须要求第二条信号——真实最小请求返回 HTTP 200，证明确有账号能服务该模型。仅凭档位答案授予能力会生成一个每次调用都失败的 Fast 路由；这是本轮实际发生、已修复并加了回归测试的缺陷。两个请求都不消耗有效 token（档位探测在推理前被拒，可达性请求 `max_tokens: 1`）。
+- **Fast 的判定边界（必须如实表述）**：没有任何响应字段能证明 `service_tier: priority` 生效。已知可用的 `-fast` 别名（由 CLIProxy 的 payload override 注入 priority）与 Standard 一样回报 `service_tier: "default"`，且 `service_tier` 不被校验（传 `bogus-tier` 仍 200）。按用户决策，Fast 以「代理接受并能真正服务该模型」为准开启，这是可获得的最强信号，**不等于已证明更快**。
+- **不可用与重试**：无可用账号（`auth_unavailable` / `model_not_found`、5xx、429）记为 `unavailable` 且不授予能力，下次目录更新重试；端点不匹配（如仅支持 `/v1/images/*`）记为已测量但无档位，不再重复探测。
+- **能力记录 v2**：`capability.json` 升到 version 2。v1 仅凭档位答案授予能力，故被丢弃并重新探测（旧的 Switch 自有版本重建而非报错；未知的更高版本仍 fail closed）。
 - **实现**：
-  - `internal/cliproxy/capability.go`：单请求探测、`valid levels` 解析、`capability.json` 记录（含 `version`，未知版本 fail closed）、启动与 reconcile 时的发布逻辑。
+  - `internal/cliproxy/capability.go`：两请求探测、`valid levels` 解析、`capability.json` v2 记录、启动与 reconcile 时的发布逻辑。
   - `internal/modelvariants/registry.go`：在静态可信名单（`gpt-5.6-terra/sol/luna`）之上增加实测覆盖层（Fast 名单 + 每模型档位）；静态名单与 `gpt-6-astra` 的「仅推理、不生成 Fast」声明不回退。
-  - `ReconcileModels` 在目录更新时探测、持久化、发布；`WriteConfig` 与只读的 `Models` 只发布已记录结果、不发起探测。
-  - 边界：单模型 20s、单次探测总预算 45s、每次最多 24 个模型，避免拖慢「保存模型选择」请求；发布顺序必须在读取所有权账本之前，否则校验探测得到的 Fast 别名会失败。
-  - 稳健性：`publishCapabilities` 同时从 `config-ownership.json` 恢复已拥有的 Fast 模型，因此 `capability.json` 丢失时降级为「有 Fast、无档位」，不会因别名校验失败而阻断启动。
-- **生产实测（0.9.15）**：真实目录探测写入 12 条记录（7 个 chat 模型；5 个 image 模型判为不可用）；随后为 7 个实测模型生成 `-fast` 别名并纳入 priority 规则，订阅 Profile 生成 `gpt-6-astra`、`gpt-6-luna` 的 Standard/Fast 配对与五档 `reasoning_efforts`，`config.toml` 同步写入。真实请求：Standard 与 Fast 路由均返回 HTTP 200；`grok -m subscription/codex/gpt-6-luna-fast -p ...` 返回 `FASTOK`。`config_matches_active` 与 `config_matches_routing` 均为 true。
-- **`gpt-6-sol` 当前不可用（阻塞，非本改动引入）**：当前启用的 plus 账号对 `gpt-6-sol` 返回 `model_not_found: The model "gpt-6-sol" does not exist or you do not have access to it.`，其后一律 503（chat 与 responses 两条协议、多次复测一致）。该模型已从可选目录消失，因此本轮不会获得 Fast 或档位；需先在账号/上游侧解决访问权限。会话早期一次探测曾连续 7 次返回 200，无法解释，不排除当时命中另一账号。
-- **既有漂移（先于本改动）**：`cliproxy/config.yaml` 存在 3 条 priority 规则，其中两条重复。与 2026-09-20 安装前快照逐字一致，且本改动未触碰 `internal/cliproxy/config_merge.go`；`mergeManagedFastRule` 只按 fingerprint 移除受管规则，不清理历史重复项。
-- **验证**：隔离 HOME 下 `go test ./...` 全绿、`go vet ./...` 通过、`go test -race`（cliproxy/modelvariants/server）通过、`node --check ui/app.js` 通过、32 项前端测试通过；新增能力探测单测（探测授予、503 重试、已测量不重测、账本往返与启动顺序、未知版本 fail closed、静态名单不回退）与 server 侧「实测模型生成 Standard/Fast + 档位」测试。本机宿主污染的 CodeBuddy 两项既有失败在隔离 HOME 下通过。
-- **CLIProxyAPI 版本**：仍固定 7.3.9（提交 `61fdfc34…`）；上游最新 v7.3.15。相关条目：7.3.15 `fix(codex): compact client model catalog and preserve required fields`、`feat(registry): add grok-4.7-build-fast`；7.3.14 `feat(registry): add gpt-6-luna to codex-free`；7.3.13 registry 更新与 codex client 0.155.0；7.3.11 `feat(pluginapi): propagate ... service tier`、`fix(responses): filter upstream private and telemetry events in SSE streams`；7.3.10 `fix(translator): preserve reasoning content across tool turns`。无故障证据，升级属独立发布动作，待用户决定。
+  - 发布只以能力记录为准，**不再从所有权账本恢复信任**：否则被撤回的 Fast 别名会被永久保留。代价是记录丢失时需在下次 reconcile 重新探测。
+  - `validOwnedAliasIdentity` 改为只校验别名形状（Standard 或 `-fast`），不查询当前模型信任：所有权账本是历史记录，被撤回的别名必须仍可移除，否则无法清理。
+  - `ReconcileModels` 在目录更新时探测、持久化、发布；`WriteConfig` 与只读 `Models` 只发布已记录结果、不发起探测。
+  - 边界：单模型 20s、单次探测总预算 60s、每次最多 24 个模型，避免拖慢「保存模型选择」请求；发布必须早于读取所有权账本（校验 Fast 别名要经 registry）。
+- **生产实测（0.9.17）**：ledger v2 重新测量后为 7 个 Fast 可用模型（`codex-auto-review`、`gpt-5.5`、`gpt-5.6-luna/sol/terra`、`gpt-6-astra`、`gpt-6-luna`）、5 个 image 模型判为已测量但不可用、`gpt-6-sol` 判为不可用待重试。订阅 Profile 生成 `gpt-6-astra`、`gpt-6-luna` 的 Standard/Fast 配对与五档 `reasoning_efforts`；真实请求 Standard 与 Fast 均 HTTP 200，`grok -m subscription/codex/gpt-6-luna-fast -p ...` 返回 `FASTOK`。`config_matches_active` 与 `config_matches_routing` 均为 true。
+- **`gpt-6-sol` 仍不可用（阻塞，非本改动引入）**：当前启用的 plus 账号返回 `model_not_found: The model "gpt-6-sol" does not exist or you do not have access to it.`。7.3.15 的目录曾短暂列出它，触发一次错误授权；修正后已撤回其 Fast 别名，模型本身仍不可用，需先在账号/上游侧解决访问权限。
+- **payload 中的历史 priority 规则（先于本改动，稳定不增长）**：`config.yaml` 的 `payload.override` 现含 4 条 priority 规则，其中 3 条是 7.3.15 之前遗留、被外部格式化/升级留下、不再带当前 fingerprint 的历史副本。当前受管规则是匹配所有权 fingerprint `e07e30f1…` 的那条（7 个模型，已不含 `gpt-6-sol-fast`）。连续两次 reconcile 后 payload 逐字节不变，说明不会增长；`mergeManagedFastRule` 只按 fingerprint 处理受管规则，不清理历史副本。
+- **验证**：隔离 HOME 下 `go test ./...` 全绿、`go vet ./...` 通过、`go test -race`（cliproxy/modelvariants/server）通过、`node --check ui/app.js` 通过、32 项前端测试通过。新增回归测试：仅凭档位答案不得授予能力、不可达模型保持可重试、陈旧版本被重建而非 fail closed、静态名单不回退。本机宿主污染的 CodeBuddy 两项既有失败在隔离 HOME 下通过。
+- **CLIProxyAPI 版本**：已升级并固定 **7.3.15**（提交 `673131f5…`）。7.3.15 引入周期性远程目录刷新（`model_updater` / `codex_client_models_updater`，间隔 3h）与新的 `/v1/models` 目录行为；升级时观察到目录在 reconcile 中途变化，导致一次「模型目录未收敛」错误，目录稳定后重试成功。`oauth-model-alias` 与 `payload.override` 的 schema 在 7.3.15 中保持兼容，管理端点与 config PUT 往返无漂移。
 
 ## 当前生产安装（2026-09-23）
 
@@ -235,7 +237,7 @@
 - DataDir 清理需要按明确归属执行；未知记录不得自动删除。
 - 能力探测的缓存没有失效策略：模型一旦记为 `efforts_known` 就不再重测，因此上游后来改变档位或新增 Fast 支持不会被发现；需要时只能删除 `cliproxy/capability.json` 重新探测。
 - Fast 缺少可验证的成功信号（`service_tier` 不被校验且响应恒为 `default`），当前以「代理接受该模型」为准开启；这与 docs/agent.md 中「不得把无法验证的能力表述为已验证」的边界一致，但需要在 UI/文档措辞上持续保持诚实。
-- `cliproxy/config.yaml` 的 2 条重复 priority 规则为先于 0.9.15 的既有漂移，尚未清理。
+- `cliproxy/config.yaml` 的 `payload.override` 里有 3 条先于 0.9.15 的历史 priority 规则副本。当前受管规则正确（匹配所有权 fingerprint，且已不含被撤回的 `gpt-6-sol-fast`），连续两次 reconcile 后 payload 逐字节不变，因此不是功能缺陷，只是历史残留；`mergeManagedFastRule` 只按 fingerprint 清理受管规则。
 - 正式 macOS 发布仍需本机可用的 Developer ID Application 证书与 notarytool 凭据；缺失时只能生成 ad-hoc 本地候选，不能发布为已签名/已公证资产。
 
 ---

@@ -9,7 +9,7 @@ import "strings"
 // stay editable per model. Keep in sync with CONTEXT_WINDOW_SUGGESTIONS in
 // ui/app.js.
 var knownContextWindows = map[string]int64{
-	// CLIProxyAPI 7.3.9: use the common Codex tier limit, not Pro-only capacity.
+	// CLIProxyAPI 7.3.15: use the common Codex tier limit, not Pro-only capacity.
 	"gpt-5.6-terra": 372000,
 	"gpt-5.6-sol":   320000,
 	"gpt-5.6-luna":  372000,

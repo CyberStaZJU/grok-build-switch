@@ -5,9 +5,9 @@
 
 ## 当前安装与生产状态
 
-- `/Applications/Grok Build Switch.app` `0.9.15 (build 31)`，ad-hoc 签名（**未公证**），`codesign --verify --deep --strict` 通过；主程序 SHA-256 `eef83774…7eb75`。内置 CLIProxyAPI 7.3.9（提交 `61fdfc34…41d267c`）。管理服务 `17878` 健康，订阅代理 `8317` 正常；`config_matches_active` 与 `config_matches_routing` 均为 true。
-- 2026-09-23 已按换装流程重新构建并安装：隔离 HOME 完成全量 `go test` 门禁，bundle 先落 `/tmp` 暂存并清理扩展属性后校验签名、版本与架构，再退出旧进程、移动旧 bundle、安装新包并启动，健康检查通过后按用户明确要求删除旧 bundle（**未保留备份**）。旧 `.outgoing` 与暂存目录均已删除。
-- 上一版 `0.9.14 (build 30)` 的 App bundle 已删除；`dist/macos` 只保留 0.9.15 的 App、DMG 与 `.sha256`。配置、账号认证与订阅凭据未改动。
+- `/Applications/Grok Build Switch.app` `0.9.17 (build 33)`，ad-hoc 签名（**未公证**），`codesign --verify --deep --strict` 通过。内置 CLIProxyAPI **7.3.15**（提交 `673131f5…`）。管理服务 `17878` 健康，订阅代理 `8317` 正常（7.3.15）；`config_matches_active` 与 `config_matches_routing` 均为 true。
+- 2026-09-23 已升级并固定 CLIProxyAPI 到 7.3.15：更新 `build-macos.sh` 与 Go 常量（归档 SHA-256 `c1e49c14…`、二进制 SHA-256 `7212d398…`、提交 `673131f5…`），隔离 HOME 跑门禁，构建到仓库外暂存目录（`BUILD_DIR`，规避 Documents File Provider 的 FinderInfo 竞态），安装 `0.9.17 (build 33)` 并通过 API 重启订阅代理以装载新二进制。按用户要求删除旧 bundle 与旧 CLIProxyAPI 副本（**未保留备份**）。
+- 旧版本清理：`0.9.16` 的 App bundle 与 `.outgoing` 已删除；`dist/macos` 只保留 0.9.17 的 App、DMG 与 `.sha256`；CLIProxyAPI 旧归档（7.2.94 / 7.2.152 / 7.3.9）与 `cliproxy/backup/` 下旧二进制（`CLIProxyAPI.previous`、`7.2.94-20260907`）已删除，构建缓存只留 7.3.15 归档。配置、账号认证与订阅凭据未改动。
 
 ## 订阅代理模型能力自动探测（2026-09-23，0.9.15）
 
@@ -20,7 +20,7 @@
 - **`gpt-6-sol` 当前不可用（阻塞，非本改动引入）**：该账号对 `gpt-6-sol` 返回 `model_not_found: The model "gpt-6-sol" does not exist or you do not have access to it.`，其后一律 503；多次复测一致。它已从可选目录消失，因此本轮不会获得 Fast 或档位，需先在账号/上游侧解决访问权限。
 - **既有漂移（先于本改动）**：`cliproxy/config.yaml` 存在 3 条 priority 规则，其中两条重复；与 2026-09-20 安装前快照逐字一致，且本改动未触碰 `internal/cliproxy/config_merge.go`。待后续单独处理。
 - **验证**：`go test ./...`（隔离 HOME）、`go vet ./...`、`go test -race` 相关包、`node --check`、32 项前端测试全部通过；新增能力探测单测与 server 侧 Standard/Fast + 档位生成测试。本机宿主污染的 CodeBuddy 两项既有失败在隔离 HOME 下通过。
-- **CLIProxyAPI 版本**：仍固定 7.3.9；上游最新 v7.3.15（相关条目见 docs/status.md）。本轮未升级。
+- **CLIProxyAPI 版本**：已升级并固定 7.3.15（提交 `673131f5…`）。7.3.15 新增周期性远程目录刷新（3h）与新的 `/v1/models` 目录行为；升级时目录曾在 reconcile 中途变化导致一次「未收敛」错误，稳定后重试成功。
 - 2026-09-20 已按并发安全换装流程重新构建并安装：构建使用隔离 HOME，先验证 `.incoming` bundle，再停止并等待旧进程退出，移动旧包后原子替换，启动新实例健康检查通过后重启订阅代理。安装过程使用外部原子锁，旧 bundle 已在新实例健康后删除，未留下 `.incoming` 或回退包。
 - 旧 `0.9.12` 的 App bundle、DMG 和 `.sha256` 安装包，以及更早历史版本的 App/DMG/校验文件，均已按用户要求删除；配置快照、日志和运行数据未删除。
 - 生产已为「API 池」启用流式保护：`base_url` → `http://127.0.0.1:17878/stream-guard/v1`，`upstream_base_url` = `http://api-pool.example.com:11303/v1`。
@@ -63,7 +63,7 @@
 ## 最近变更
 
 - 2026-09-23：实现订阅代理 Codex 模型能力自动探测（`internal/cliproxy/capability.go` + `internal/modelvariants` 实测覆盖层），目录更新时为新模型自动判定推理档位与 Fast；构建并安装 `0.9.15 (build 31)`（ad-hoc，未公证），生产实测生成 7 条 Fast 别名并写入档位声明，真实请求与 `grok` CLI 路由均通过；按用户要求删除旧 bundle 且**未保留备份**。
-- 2026-09-23：核对 CLIProxyAPI 版本：本机固定 7.3.9，上游最新 v7.3.15；未升级（无故障证据，升级属独立发布动作）。
+- 2026-09-23：升级内嵌 CLIProxyAPI 到 7.3.15 并安装 `0.9.17 (build 33)`；升级暴露出能力探测缺陷（代理在账号解析前就校验推理档位，导致不可访问的模型被误授权并生成必然失败的 Fast 路由），已改为「档位 + 真实可达性」双信号、能力记录升到 v2，并补回归测试。
 - 2026-09-20：升级内嵌 CLIProxyAPI 到 `7.3.9`（提交 `61fdfc34…41d267c`），重新构建并安装 Grok Build Switch `0.9.14 (build 30)`；全量 Go 测试和构建门禁通过，生产订阅代理重启后健康检查通过，账号与模型目录保留。
 - 2026-09-20：重新构建并安装 `0.9.13 (build 29)`，包含 `upstream_base_url` 编辑往返修复；通过外部安装锁、`.incoming` 预校验、旧进程等待退出、健康检查后卸载旧包的并发安全换装流程。
 - 2026-09-20：修复 `PUT /api/profiles/{id}` 丢弃 `upstream_base_url`（编辑页保存会让流式保护失去上游 → 全部请求 503）；补经 handler 驱动的回归测试，生产已恢复并复验。

@@ -20,20 +20,27 @@ import (
 // reasoning tiers to offer. Rather than inferring that from a model name, the
 // manager asks the local CLIProxyAPI what it actually accepts.
 //
-// One request per model yields both answers. CLIProxyAPI validates
-// reasoning_effort itself, before contacting upstream, and rejects an
-// unsupported level with HTTP 400 naming the levels the model does accept:
+// Two requests per model are needed, because each answer alone is misleading.
+//
+// The tier list comes from a deliberately invalid reasoning_effort. CLIProxyAPI
+// validates the level itself and rejects it with HTTP 400 naming the levels the
+// model accepts:
 //
 //	level "x" not supported, valid levels: low, medium, high, xhigh, max
 //
-// That single 400 therefore proves the proxy resolved the model, has an
-// account for it, and that the listed tiers are the model's real set. A 503
-// (no auth available / model_not_found) or any other status leaves the model
-// unqualified. The request is rejected before inference, so discovery costs no
-// completion tokens.
+// That validation happens before account resolution, so a 400 proves the model
+// is a known chat model and yields its real tier set, but it does NOT prove an
+// account can serve it. A model the subscription cannot access still returns
+// 400 with a full tier list.
+//
+// Reachability therefore needs the second, model-derived probe: send a real
+// minimal request and require HTTP 200. Requiring both means a model is only
+// granted Fast and tiers when the proxy both knows it and can actually route
+// it. Neither request spends meaningful tokens (max_tokens 1, and the rejected
+// one never reaches inference).
 //
 // Limitation, deliberately recorded here: this proves the proxy accepts and can
-// resolve the model. It does not prove that injecting service_tier: priority
+// serve the model. It does not prove that injecting service_tier: priority
 // makes the upstream route faster. The proxy echoes service_tier: "default" for
 // both Standard and Fast aliases, including the known-good -fast routes, so no
 // response field can confirm priority is honored. Fast is therefore enabled on
@@ -41,7 +48,10 @@ import (
 // upstream failure still surfaces to the caller as a real error.
 
 const (
-	capabilityLedgerVersion = 1
+	// capabilityLedgerVersion 2 records only tiers confirmed reachable. Version 1
+	// granted capability from the tier answer alone, which CLIProxyAPI returns
+	// even for models the subscription cannot access, so it is discarded.
+	capabilityLedgerVersion = 2
 	capabilityLedgerName    = "capability.json"
 	// maxCapabilityProbesPerRun bounds how many models one reconcile probes.
 	maxCapabilityProbesPerRun = 24
@@ -50,7 +60,7 @@ const (
 	// measuring. Discovery runs inside the caller's request and config lock, so
 	// a slow or unreachable proxy must not stall saving the model selection.
 	// Models left unprobed are simply retried on the next reconcile.
-	capabilityDiscoveryBudget = 45 * time.Second
+	capabilityDiscoveryBudget = 60 * time.Second
 	// capabilityProbeEffort is never a valid tier anywhere, which is what makes
 	// the proxy answer with its accepted list instead of running inference.
 	capabilityProbeEffort = "__switch_capability_probe__"
@@ -80,8 +90,10 @@ func capabilityLedgerPath(p Paths) string {
 }
 
 // loadCapabilityLedger returns the recorded capabilities. A missing ledger is
-// an empty one; an unreadable or unfamiliar ledger is an error so callers can
-// fail closed instead of silently regenerating routes from nothing.
+// an empty one. An unreadable, malformed, or foreign ledger is an error so
+// callers fail closed instead of silently regenerating routes from nothing. An
+// older Switch-owned version is discarded and rebuilt by re-probing, because a
+// stale capability record is worse than re-measuring.
 func loadCapabilityLedger(p Paths) (capabilityLedger, error) {
 	ledger := capabilityLedger{Version: capabilityLedgerVersion, Models: map[string]modelCapability{}}
 	raw, err := os.ReadFile(capabilityLedgerPath(p))
@@ -99,6 +111,10 @@ func loadCapabilityLedger(p Paths) (capabilityLedger, error) {
 		return capabilityLedger{}, fmt.Errorf("能力记录无法解析")
 	}
 	if decoded.Version != capabilityLedgerVersion {
+		if decoded.Version > 0 && decoded.Version < capabilityLedgerVersion {
+			// Reads must never write; the next reconcile persists the rebuild.
+			return ledger, nil
+		}
 		return capabilityLedger{}, fmt.Errorf("能力记录版本不受支持")
 	}
 	if decoded.Models == nil {
@@ -133,15 +149,16 @@ func saveCapabilityLedger(p Paths, ledger capabilityLedger) error {
 	return atomicWrite(capabilityLedgerPath(p), raw, 0o600)
 }
 
-// publishCapabilities computes the measured overlay and hands it to the model
-// registry. It must run before any code validates or regenerates routes.
+// publishCapabilities hands the measured overlay to the model registry. It must
+// run before any code validates or regenerates routes, because the registry is
+// what decides which models may carry a generated Fast route.
 //
-// Fast routes come from two records, both written by Switch: the capability
-// ledger, and the ownership ledger. The ownership ledger is authoritative
-// because it is what route validation resolves against, so a lost
-// capability.json degrades to "Fast route without reasoning tiers" instead of a
-// startup failure on an alias the ownership record still claims.
-func publishCapabilities(p Paths, ledger capabilityLedger) error {
+// The ledger is the only source. Trust is deliberately not recovered from the
+// ownership ledger: a recorded Fast alias whose model is no longer measured as
+// Fast-capable must be able to disappear, and re-trusting it from ownership
+// would keep a withdrawn route alive. A lost capability record therefore costs a
+// re-probe on the next reconcile, which restores the measured set.
+func publishCapabilities(ledger capabilityLedger) {
 	fast := make([]string, 0, len(ledger.Models))
 	efforts := map[string][]string{}
 	for id, entry := range ledger.Models {
@@ -152,44 +169,7 @@ func publishCapabilities(p Paths, ledger capabilityLedger) error {
 			efforts[id] = entry.Efforts
 		}
 	}
-	owned, err := ownedFastCodexModels(p)
-	if err != nil {
-		return err
-	}
-	fast = append(fast, owned...)
 	modelvariants.SetProbedCapabilities(fast, efforts)
-	return nil
-}
-
-// ownedFastCodexModels recovers Fast models Switch already owns from the
-// ownership ledger. This reads the ledger without validating it, because
-// validation is what needs the overlay in the first place; an unreadable ledger
-// is reported by the validated load path that runs next.
-func ownedFastCodexModels(p Paths) ([]string, error) {
-	raw, err := os.ReadFile(configOwnershipPath(p))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var lenient struct {
-		Aliases []ownedAliasIdentity `json:"aliases"`
-	}
-	if json.Unmarshal(raw, &lenient) != nil {
-		return nil, nil
-	}
-	out := []string{}
-	for _, identity := range lenient.Aliases {
-		if identity.Channel != "codex" || strings.TrimSpace(identity.Name) == "" {
-			continue
-		}
-		if identity.Alias == "subscription/codex/"+identity.Name+"-fast" {
-			out = append(out, identity.Name)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
 }
 
 // normalizedEfforts trims, drops blanks and duplicates, and preserves the
@@ -242,47 +222,89 @@ func (m *Manager) inferenceProbe(ctx context.Context, model string) (int, []byte
 	return m.requestRawStatus(ctx, false, "POST", "/v1/chat/completions", "application/json", body, 1<<18)
 }
 
-// probeModelCapability classifies one model from a single probe request.
+// probeModelCapability classifies one model from two minimal requests: one that
+// elicits the accepted tier list, and one that proves an account can serve it.
+// Both are required, because the tier answer alone is returned for models the
+// subscription cannot reach.
 func (m *Manager) probeModelCapability(ctx context.Context, model string) modelCapability {
 	entry := modelCapability{ProbedAt: time.Now().UTC().Format(time.RFC3339)}
 	probeCtx, cancel := context.WithTimeout(ctx, capabilityProbeTimeout)
 	defer cancel()
+
 	status, raw, err := m.inferenceProbe(probeCtx, model)
 	if err != nil {
 		entry.Unavailable = true
 		return entry
 	}
-	switch {
-	case status == 400:
-		var payload struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(raw, &payload) != nil {
-			return entry
-		}
-		efforts, ok := parseAcceptedEfforts(payload.Error.Message)
-		if !ok {
-			return entry
-		}
-		entry.Fast = true
-		entry.Efforts = efforts
-		entry.EffortsKnown = true
-		return entry
-	case status == 503 && transientUnavailability(string(raw)):
+	if status == 503 && transientUnavailability(string(raw)) {
 		// No account can serve the model right now. Leave it unqualified so the
 		// next reconcile retries instead of recording a permanent verdict.
 		entry.Unavailable = true
 		return entry
-	default:
-		// Any other answer is definitive for this model's chat capability: a
-		// success, a schema rejection, or a message naming the endpoints the
-		// model actually serves (image models). Record it as measured with no
-		// accepted tiers so it is not probed again.
+	}
+	if status != 400 {
+		// A success or any other answer is definitive for this model's chat
+		// capability: record it as measured with no tier list so it is not
+		// probed again.
 		entry.EffortsKnown = true
 		return entry
 	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return entry
+	}
+	efforts, ok := parseAcceptedEfforts(payload.Error.Message)
+	if !ok {
+		// A 400 that does not name accepted levels is not a tier answer, for
+		// example an endpoint mismatch. Treat it as measured with no tiers.
+		entry.EffortsKnown = true
+		return entry
+	}
+
+	// The tier list is known, but validation runs before account resolution, so
+	// confirm an account can actually serve the model before granting anything.
+	reachable, retryable := m.modelReachable(probeCtx, model)
+	if !reachable {
+		// An unreachable model must not be remembered as permanently measured:
+		// a missing account is usually temporary, so retry on the next
+		// reconcile. A permanent-looking failure is recorded to stop re-probing.
+		entry.Unavailable = retryable
+		entry.EffortsKnown = !retryable
+		return entry
+	}
+	entry.Fast = true
+	entry.Efforts = efforts
+	entry.EffortsKnown = true
+	return entry
+}
+
+// modelReachable reports whether a real minimal request to the model succeeds.
+// retryable is true when the failure looks like temporary account or upstream
+// unavailability rather than a permanent property of the model.
+func (m *Manager) modelReachable(ctx context.Context, model string) (reachable, retryable bool) {
+	body, err := json.Marshal(map[string]any{
+		"model":      model,
+		"messages":   []map[string]string{{"role": "user", "content": "ok"}},
+		"max_tokens": 1,
+		"stream":     false,
+	})
+	if err != nil {
+		return false, true
+	}
+	status, raw, err := m.requestRawStatus(ctx, false, "POST", "/v1/chat/completions", "application/json", body, 1<<18)
+	if err != nil {
+		return false, true
+	}
+	if status == 200 {
+		return true, false
+	}
+	// A missing model or absent account is retryable: subscription access can
+	// change. Anything else is treated as a permanent property of the model.
+	return false, transientUnavailability(string(raw)) || status >= 500 || status == 429
 }
 
 // transientUnavailability reports whether a 503 body describes a model that may

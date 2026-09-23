@@ -140,6 +140,12 @@ func validateConfigOwnership(ownership configOwnership) error {
 	return nil
 }
 
+// validOwnedAliasIdentity accepts the two alias shapes Switch has ever written
+// for a channel: the canonical Standard alias, or its Fast sibling. It checks
+// shape only. Current model trust is deliberately not consulted, because the
+// ownership ledger is a historical record: a Fast alias stays removable after a
+// capability re-probe withdraws trust, which is exactly when it must be cleaned
+// up. What may be created is gated separately by validateManagedConfig.
 func validOwnedAliasIdentity(identity ownedAliasIdentity) bool {
 	if identity.Channel != strings.TrimSpace(identity.Channel) || identity.Name != strings.TrimSpace(identity.Name) || identity.Alias != strings.TrimSpace(identity.Alias) {
 		return false
@@ -158,8 +164,7 @@ func validOwnedAliasIdentity(identity ownedAliasIdentity) bool {
 	if identity.Channel != "codex" {
 		return false
 	}
-	physicalID, ok := modelvariants.TrustedCodexPhysicalFromFastAlias(identity.Alias)
-	return ok && physicalID == identity.Name
+	return identity.Alias == standard+"-fast"
 }
 
 func providerForAliasChannel(channel string) (string, bool) {

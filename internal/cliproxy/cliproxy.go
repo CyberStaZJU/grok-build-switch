@@ -20,12 +20,12 @@ import (
 )
 
 const (
-	Version       = "7.3.9"
-	Commit        = "61fdfc341b96178a8dcb53f2efc46cbc341d267c"
-	ArchiveName   = "CLIProxyAPI_7.3.9_darwin_aarch64.tar.gz"
-	ArchiveSHA256 = "d174fe1612c5ce3d09f2f78c972ca016c5fb1c1222d0c5084dc9359619011656"
-	BinarySHA256  = "5952bb2fdab611eb3e52f7b08c43487ee111cf68d46fc13114e92bf29dd1076c"
-	ArchiveSize   = int64(20720335)
+	Version       = "7.3.15"
+	Commit        = "673131f57484517c3a1eae7e36c4cfa7b9bb4efc"
+	ArchiveName   = "CLIProxyAPI_7.3.15_darwin_aarch64.tar.gz"
+	ArchiveSHA256 = "c1e49c148a94c476dc43a6a0eed28bca34239d5153ebb7792048d8c18f3b92f0"
+	BinarySHA256  = "7212d39890dac46fac10d75f8029d8c377fdcc75798d5dcecefffc90b987d0a9"
+	ArchiveSize   = int64(20807772)
 	License       = "MIT"
 	Label         = "com.grokbuildswitch.cliproxyapi"
 	DefaultPort   = 8317
@@ -239,9 +239,7 @@ func WriteConfig(p Paths, keys Keys) error {
 	if err != nil {
 		return err
 	}
-	if err := publishCapabilities(p, capabilities); err != nil {
-		return err
-	}
+	publishCapabilities(capabilities)
 	ownershipState, err := previousConfigOwnershipState(p)
 	if err != nil {
 		return err

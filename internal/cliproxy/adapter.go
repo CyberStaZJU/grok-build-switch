@@ -762,7 +762,7 @@ func (m *Manager) Models(ctx context.Context) ([]server.SubscriptionProxyModel, 
 	// the catalog and the generated routes agree. It issues no probe requests,
 	// and a missing or unreadable record simply leaves the static registry.
 	if ledger, err := loadCapabilityLedger(m.Paths); err == nil {
-		_ = publishCapabilities(m.Paths, ledger)
+		publishCapabilities(ledger)
 	}
 	return subscriptionModels(models), nil
 }
@@ -783,8 +783,6 @@ func (m *Manager) ReconcileModels(ctx context.Context) ([]server.SubscriptionPro
 	if err != nil {
 		return nil, err
 	}
-	// Measure newly seen Codex models once, persist the result, then publish it
-	// before any ownership or route derivation reads the registry.
 	ledger, err := loadCapabilityLedger(m.Paths)
 	if err != nil {
 		return nil, sanitize(err)
@@ -795,10 +793,7 @@ func (m *Manager) ReconcileModels(ctx context.Context) ([]server.SubscriptionPro
 			return nil, sanitize(err)
 		}
 	}
-	if err := publishCapabilities(m.Paths, ledger); err != nil {
-		return nil, sanitize(err)
-	}
-
+	publishCapabilities(ledger)
 	previous, err := previousConfigOwnership(m.Paths)
 	if err != nil {
 		return nil, sanitize(err)

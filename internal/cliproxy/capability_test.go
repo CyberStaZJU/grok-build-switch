@@ -21,8 +21,12 @@ func validLevelsBody(levels string) string {
 // capabilityManager serves a catalog that starts with the supplied physical
 // models and, after the config PUT, also advertises the generated aliases. That
 // mirrors how CLIProxyAPI exposes a managed-alias fork, which the reconcile
-// convergence check depends on. effortReply answers capability probes.
-func capabilityManager(t *testing.T, physical []map[string]string, effortReply func(model string) (int, string)) (*Manager, func() int) {
+// convergence check depends on.
+//
+// effortReply answers the tier probe (a deliberately invalid reasoning_effort).
+// reachable decides the follow-up real request that proves an account can serve
+// the model; probes counts both request kinds.
+func capabilityManager(t *testing.T, physical []map[string]string, effortReply func(model string) (int, string), reachable func(model string) bool) (*Manager, func() int) {
 	t.Helper()
 	fixture := &configYAMLFixture{t: t, yaml: []byte("host: 127.0.0.1\nport: 8317\n")}
 	probes := 0
@@ -54,9 +58,20 @@ func capabilityManager(t *testing.T, physical []map[string]string, effortReply f
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			model, _ := body["model"].(string)
 			probes++
-			status, reply := effortReply(model)
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte(reply))
+			if body["reasoning_effort"] == capabilityProbeEffort {
+				status, reply := effortReply(model)
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(reply))
+				return
+			}
+			// Real minimal request: the reachability half of the probe.
+			if reachable != nil && reachable(model) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"model":"` + model + `","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"auth_unavailable: no auth available; last upstream error: model_not_found"}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -64,8 +79,83 @@ func capabilityManager(t *testing.T, physical []map[string]string, effortReply f
 	return m, func() int { return probes }
 }
 
+// alwaysReachable is the common case: an account can serve every model.
+func alwaysReachable(string) bool { return true }
+
 func accepted(model string) (int, string) {
 	return http.StatusBadRequest, validLevelsBody("low, medium, high, xhigh, max")
+}
+
+// Regression test for the bug that the CLIProxyAPI 7.3.15 upgrade exposed:
+// CLIProxyAPI validates reasoning_effort before resolving an account, so a model
+// the subscription cannot access still answers with a full tier list. Granting
+// capability from that answer alone advertises a Fast route that always fails.
+// Capability must require a successful real request as well.
+func TestTierListAloneDoesNotGrantCapabilityWhenUnreachable(t *testing.T) {
+	modelvariants.ResetProbedCapabilities()
+	t.Cleanup(modelvariants.ResetProbedCapabilities)
+
+	m, probes := capabilityManager(t,
+		[]map[string]string{{"id": "gpt-6-sol", "owned_by": "codex"}},
+		accepted,                           // the proxy happily names the tiers
+		func(string) bool { return false }, // but no account can serve it
+	)
+	if _, err := m.ReconcileModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if probes() != 2 {
+		t.Fatalf("probes = %d, want a tier probe plus a reachability request", probes())
+	}
+	if modelvariants.IsTrustedCodexPhysicalModel("gpt-6-sol") {
+		t.Fatal("an unreachable model must not be granted Fast routing from the tier answer alone")
+	}
+	if _, ok := modelvariants.CodexFastAlias("gpt-6-sol"); ok {
+		t.Fatal("an unreachable model must not get a Fast alias")
+	}
+	desired := generatedManagedConfig([]upstreamModel{{ID: "gpt-6-sol", OwnedBy: "codex"}})
+	if len(desired.FastAliases) != 0 {
+		t.Fatalf("generated Fast aliases for an unreachable model: %v", desired.FastAliases)
+	}
+	// It must stay retryable rather than being written off as permanently measured.
+	if entry := mustLedger(t, m)["gpt-6-sol"]; !entry.Unavailable || entry.EffortsKnown {
+		t.Fatalf("unreachable model must stay retryable: %+v", entry)
+	}
+}
+
+// A stale Switch-owned capability record must be discarded and rebuilt rather
+// than trusted or treated as a hard error.
+func TestStaleCapabilityVersionIsDiscardedForReprobe(t *testing.T) {
+	m := NewManager(t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "missing"), fakeKeys{})
+	if err := m.Paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	stale := `{"version":1,"models":{"gpt-6-sol":{"fast":true,"efforts":["low"],"efforts_known":true}}}`
+	if err := atomicWrite(capabilityLedgerPath(m.Paths), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := loadCapabilityLedger(m.Paths)
+	if err != nil {
+		t.Fatalf("a stale Switch-owned record must not fail closed: %v", err)
+	}
+	if len(ledger.Models) != 0 {
+		t.Fatalf("stale capability claims must be dropped: %+v", ledger.Models)
+	}
+	// A newer, unknown version is still rejected.
+	if err := atomicWrite(capabilityLedgerPath(m.Paths), []byte(`{"version":99,"models":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCapabilityLedger(m.Paths); err == nil {
+		t.Fatal("an unknown future version must still fail closed")
+	}
+}
+
+func mustLedger(t *testing.T, m *Manager) map[string]modelCapability {
+	t.Helper()
+	ledger, err := loadCapabilityLedger(m.Paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger.Models
 }
 
 func TestParseAcceptedEfforts(t *testing.T) {
@@ -96,13 +186,13 @@ func TestReconcileProbesNewCodexModelAndGrantsCapabilities(t *testing.T) {
 	modelvariants.ResetProbedCapabilities()
 	t.Cleanup(modelvariants.ResetProbedCapabilities)
 
-	m, probes := capabilityManager(t, []map[string]string{{"id": "gpt-6-sol", "owned_by": "codex"}}, accepted)
+	m, probes := capabilityManager(t, []map[string]string{{"id": "gpt-6-sol", "owned_by": "codex"}}, accepted, alwaysReachable)
 	models, err := m.ReconcileModels(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if probes() != 1 {
-		t.Fatalf("probe requests = %d, want exactly one capability probe", probes())
+	if probes() != 2 {
+		t.Fatalf("probe requests = %d, want one tier probe plus one reachability request", probes())
 	}
 	if !modelvariants.IsTrustedCodexPhysicalModel("gpt-6-sol") {
 		t.Fatal("a measured model must become eligible for a Fast route")
@@ -136,7 +226,7 @@ func TestReconcileRetriesUnavailableModel(t *testing.T) {
 	unavailable := func(string) (int, string) {
 		return http.StatusServiceUnavailable, `{"error":{"message":"auth_unavailable: no auth available; last upstream error: model_not_found"}}`
 	}
-	m, probes := capabilityManager(t, []map[string]string{{"id": "gpt-6-sol", "owned_by": "codex"}}, unavailable)
+	m, probes := capabilityManager(t, []map[string]string{{"id": "gpt-6-sol", "owned_by": "codex"}}, unavailable, alwaysReachable)
 	for round := 0; round < 2; round++ {
 		if _, err := m.ReconcileModels(context.Background()); err != nil {
 			t.Fatal(err)
@@ -165,14 +255,16 @@ func TestReconcileDoesNotReprobeMeasuredModel(t *testing.T) {
 	m, probes := capabilityManager(t, []map[string]string{
 		{"id": "gpt-6-sol", "owned_by": "codex"},
 		{"id": "gpt-image-9", "owned_by": "codex"},
-	}, reply)
+	}, reply, alwaysReachable)
 
 	if _, err := m.ReconcileModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// gpt-6-sol needs a tier probe plus a reachability request; gpt-image-9 is
+	// settled by its single non-transient endpoint-mismatch answer.
 	first := probes()
-	if first != 2 {
-		t.Fatalf("first reconcile probes = %d, want both new models", first)
+	if first != 3 {
+		t.Fatalf("first reconcile probes = %d, want 2 for the chat model and 1 for the image model", first)
 	}
 	if _, err := m.ReconcileModels(context.Background()); err != nil {
 		t.Fatal(err)
@@ -226,11 +318,12 @@ func TestCapabilityLedgerRoundTripAndStartupOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	modelvariants.ResetProbedCapabilities()
-	if err := publishCapabilities(m.Paths, capabilityLedger{}); err != nil {
-		t.Fatal(err)
-	}
+	publishCapabilities(capabilityLedger{})
 	if _, _, err := loadConfigOwnership(m.Paths); err != nil {
-		t.Fatalf("ownership with a probed Fast alias must validate from the ownership ledger alone: %v", err)
+		t.Fatalf("an owned Fast alias must still validate against its ownership record: %v", err)
+	}
+	if _, err := loadCapabilityLedger(m.Paths); err != nil {
+		t.Fatalf("capability record must remain readable: %v", err)
 	}
 }
 
@@ -255,7 +348,7 @@ func TestUnparsableTierAnswerDoesNotGrantFast(t *testing.T) {
 
 	m, _ := capabilityManager(t, []map[string]string{{"id": "gpt-7-sol", "owned_by": "codex"}}, func(string) (int, string) {
 		return http.StatusBadRequest, `{"error":{"message":"invalid reasoning configuration"}}`
-	})
+	}, alwaysReachable)
 	if _, err := m.ReconcileModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
