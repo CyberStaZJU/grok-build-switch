@@ -31,6 +31,10 @@ this.appTest = {
   reapplyRouting,
   deleteSSHFiles,
   modelSupportsBackendSearch,
+  modelSupportsReasoningEffort,
+  modelReasoningTiers,
+  modelReasoningEffortSource,
+  cardDeclaredReasoningEfforts,
   suggestContextWindow,
   minimatch,
   setStatus(value) { state.status = value; },
@@ -266,9 +270,9 @@ test("suggestContextWindow resolves known leaves and leaves unknown models unset
   const app = loadApp(async () => response(500));
   assert.equal(app.suggestContextWindow("k3-256k"), 262144);
   assert.equal(app.suggestContextWindow("K3-256K"), 262144);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 372000);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 372000);
-  assert.equal(app.suggestContextWindow("subscription/codex/gpt-6-astra"), 272000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol"), 320000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-5.6-sol-fast"), 320000);
+  assert.equal(app.suggestContextWindow("subscription/codex/gpt-6-astra"), 320000);
   assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.6-flash-high"), 1048576);
   assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.7-flash-high"), 1048576);
   assert.equal(app.suggestContextWindow("subscription/gemini/gemini-3.8-flash-high"), 1048576);
@@ -511,6 +515,56 @@ test("reasoning selector preserves a saved model-declared low effort", () => {
   assert.match(result.options[0].label, /已保存/);
   assert.equal(result.options.some((option) => option.value === "ultra"), false);
   assert.equal(result.options.filter((option) => option.value === "medium").length, 1);
+});
+
+function fakeModelCard({ supportsReasoningEffort = false, tiers = [], checked = [] }) {
+  return {
+    dataset: {},
+    querySelector: (selector) => (selector === '[data-field="supports_reasoning_effort"]' ? { checked: supportsReasoningEffort } : null),
+    querySelectorAll: (selector) => (selector === "[data-reasoning-tier]"
+      ? tiers.map((tier) => ({ dataset: { reasoningTier: tier }, checked: checked.includes(tier) }))
+      : []),
+  };
+}
+
+test("model reasoning tiers offer the declaration menu plus stored extras", () => {
+  const app = loadApp(async () => response(500));
+  assert.deepEqual(
+    [...app.modelReasoningTiers(["high", "minimal"])],
+    ["low", "medium", "high", "xhigh", "max", "minimal"],
+  );
+  assert.deepEqual([...app.modelReasoningTiers(["ultra", "low"])], ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual([...app.modelReasoningTiers(undefined)], ["low", "medium", "high", "xhigh", "max"]);
+});
+
+test("declared low and high tiers follow the model support checkbox", () => {
+  const app = loadApp(async () => response(500));
+  const tiers = ["low", "medium", "high", "xhigh", "max"];
+  assert.deepEqual([...app.cardDeclaredReasoningEfforts(fakeModelCard({ supportsReasoningEffort: true, tiers, checked: ["low", "high"] }))], ["low", "high"]);
+  assert.deepEqual([...app.cardDeclaredReasoningEfforts(fakeModelCard({ supportsReasoningEffort: false, tiers, checked: ["low", "high"] }))], []);
+  assert.deepEqual([...app.cardDeclaredReasoningEfforts(null)], []);
+});
+
+test("a model that advertises effort without a tier list still round-trips", () => {
+  const app = loadApp(async () => response(500));
+  assert.equal(app.modelSupportsReasoningEffort({ supports_reasoning_effort: true, reasoning_efforts: [] }), true);
+  assert.equal(app.modelSupportsReasoningEffort({ supports_reasoning_effort: false, reasoning_efforts: ["high"] }), true);
+  assert.equal(app.modelSupportsReasoningEffort({ supports_reasoning_effort: false, reasoning_efforts: [] }), false);
+  assert.equal(app.modelReasoningEffortSource([], "default"), "default");
+  assert.equal(app.modelReasoningEffortSource([], ""), "");
+  // An empty list must not keep a declared source, or Grok rejects the default effort.
+  assert.equal(app.modelReasoningEffortSource([], "declared"), "");
+  assert.equal(app.modelReasoningEffortSource([], "probe"), "");
+  assert.equal(app.modelReasoningEffortSource(["high"], "default"), "declared");
+});
+
+test("declared tiers constrain the provider default effort menu", () => {
+  const app = loadApp(async () => response(500));
+  const limited = app.reasoningEffortOptions("medium", ["high"]);
+  assert.deepEqual([...limited.options.map((option) => option.value)], ["medium", "high", "none"]);
+  const wide = app.reasoningEffortOptions("high", ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual([...wide.options.map((option) => option.value)], ["low", "medium", "high", "xhigh", "max", "none"]);
+  assert.equal(wide.current, "high");
 });
 
 test("failed and empty CSRF token acquisitions are not cached", async () => {

@@ -20,12 +20,12 @@ import (
 )
 
 const (
-	Version       = "7.2.152"
-	Commit        = "c76dfd4e0edabab9000628b1560ab8ab379eadb8"
-	ArchiveName   = "CLIProxyAPI_7.2.152_darwin_aarch64.tar.gz"
-	ArchiveSHA256 = "37c3f48b2cd78f3fa1a26e4e0966617d00efad4bbea16599c6a00640b49f8af1"
-	BinarySHA256  = "9077b648eb47cce2ec934af9084502149bcce849655929b66a76c05d5254a252"
-	ArchiveSize   = int64(19837682)
+	Version       = "7.3.9"
+	Commit        = "61fdfc341b96178a8dcb53f2efc46cbc341d267c"
+	ArchiveName   = "CLIProxyAPI_7.3.9_darwin_aarch64.tar.gz"
+	ArchiveSHA256 = "d174fe1612c5ce3d09f2f78c972ca016c5fb1c1222d0c5084dc9359619011656"
+	BinarySHA256  = "5952bb2fdab611eb3e52f7b08c43487ee111cf68d46fc13114e92bf29dd1076c"
+	ArchiveSize   = int64(20720335)
 	License       = "MIT"
 	Label         = "com.grokbuildswitch.cliproxyapi"
 	DefaultPort   = 8317
@@ -229,6 +229,17 @@ func WriteConfig(p Paths, keys Keys) error {
 	}
 	raw, configExists, err := readFileForTransaction(p.Config)
 	if err != nil {
+		return err
+	}
+	// Publish measured capabilities before loading the ownership ledger: after a
+	// restart the ledger is the only source of the Fast aliases a probe granted,
+	// and validating or regenerating those aliases resolves them through the
+	// registry, which must already carry the overlay.
+	capabilities, err := loadCapabilityLedger(p)
+	if err != nil {
+		return err
+	}
+	if err := publishCapabilities(p, capabilities); err != nil {
 		return err
 	}
 	ownershipState, err := previousConfigOwnershipState(p)

@@ -26,7 +26,7 @@ func (f fakeKeys) Get(_, account string) (string, error) {
 func (f fakeKeys) Set(_, account, value string) error { f[account] = value; return nil }
 
 func TestManifest(t *testing.T) {
-	if BuiltinManifest.Version != "7.2.152" || BuiltinManifest.Commit != Commit || BuiltinManifest.Size != 19837682 || len(BuiltinManifest.SHA256) != 64 {
+	if BuiltinManifest.Version != "7.3.9" || BuiltinManifest.Commit != Commit || BuiltinManifest.Size != ArchiveSize || len(BuiltinManifest.SHA256) != 64 {
 		t.Fatal("manifest 不匹配")
 	}
 }

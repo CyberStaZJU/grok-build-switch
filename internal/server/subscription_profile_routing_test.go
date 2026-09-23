@@ -66,6 +66,52 @@ func TestSubscriptionProfileAstraReasoningWithoutFast(t *testing.T) {
 	}
 }
 
+func TestProbedModelYieldsFastPairAndTiers(t *testing.T) {
+	modelvariants.ResetProbedCapabilities()
+	t.Cleanup(modelvariants.ResetProbedCapabilities)
+
+	// This is what the cliproxy probe records after measuring the model.
+	modelvariants.SetProbedCapabilities(
+		[]string{"gpt-6-sol"},
+		map[string][]string{"gpt-6-sol": {"low", "medium", "high", "xhigh", "max"}},
+	)
+
+	alias := "subscription/codex/gpt-6-sol"
+	p := subscriptionProfile("codex", "Codex", "secret", []SubscriptionProxyAccount{{ID: "codex", Provider: "codex"}}, []SubscriptionProxyModel{{ID: alias, Provider: "codex"}}, "http://127.0.0.1:17878/subscription-proxy/v1")
+
+	byName := map[string]profiles.ModelDef{}
+	for _, model := range p.Models {
+		byName[model.Name] = model
+	}
+	standard, okStandard := byName[alias]
+	fast, okFast := byName[alias+"-fast"]
+	if !okStandard || !okFast {
+		t.Fatalf("measured model did not produce a Standard/Fast pair: %v", p.AvailableModels)
+	}
+	if standard.SpeedTier != profiles.SpeedTierStandard || standard.StandardAnchor != alias {
+		t.Fatalf("standard route = %#v", standard)
+	}
+	if fast.SpeedTier != profiles.SpeedTierFast || fast.StandardAnchor != alias {
+		t.Fatalf("fast route = %#v", fast)
+	}
+	wantEfforts := []string{"low", "medium", "high", "xhigh", "max"}
+	for _, model := range []profiles.ModelDef{standard, fast} {
+		if !model.SupportsReasoningEffort || model.ReasoningEffortsSource != "declared" || !reflect.DeepEqual(model.ReasoningEfforts, wantEfforts) {
+			t.Fatalf("measured tiers were not declared on %q: %#v", model.Name, model)
+		}
+	}
+	// The generated Fast alias must be selectable alongside its Standard anchor.
+	if !containsString(p.AvailableModels, alias+"-fast") {
+		t.Fatalf("Fast route missing from the selectable catalog: %v", p.AvailableModels)
+	}
+	// A measured model must not be presented as an unmeasured default route.
+	for _, model := range p.Models {
+		if model.Name == alias && model.ReasoningEffortsSource == "default" {
+			t.Fatal("measured model was presented as unmeasured")
+		}
+	}
+}
+
 func TestSubscriptionProfileGeneratesOnlyExactTrustedStandardFastPairs(t *testing.T) {
 	accounts := []SubscriptionProxyAccount{
 		{ID: "codex", Provider: "codex"},

@@ -29,8 +29,12 @@ let refreshTimer = null;
 let subscriptionLoginPollTimer = null;
 let subscriptionLoginBusy = false;
 const REASONING_EFFORTS = ["medium", "high", "xhigh", "max", "none"];
+// Per-model declaration menu. Grok Build only offers a reasoning picker for a
+// model that advertises support, so Switch can declare these tiers explicitly.
+// `ultra` stays out: it invalidates the whole custom tier list (see docs/status.md).
+const MODEL_REASONING_TIERS = ["low", "medium", "high", "xhigh", "max"];
 const REASONING_EFFORT_LABELS = {
-  medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", none: "禁用推理 (none)",
+  low: "低 (low)", medium: "中 (medium)", high: "高 (high)", xhigh: "超高 (xhigh)", max: "最大 (max)", none: "禁用推理 (none)",
 };
 
 function normalizeReasoningEffort(effort) {
@@ -45,9 +49,12 @@ function preservedDefaultReasoningEffort(effort) {
 
 function reasoningEffortOptions(effort, declared = []) {
   const current = preservedDefaultReasoningEffort(effort);
-  const values = [...REASONING_EFFORTS];
-  if (declared.includes("low")) values.unshift("low");
-  const options = values.map((value) => ({ value, label: REASONING_EFFORT_LABELS[value] || "低 (low)" }));
+  const saved = preservedReasoningEfforts(declared);
+  // A model that declares tiers constrains the profile default to what it
+  // accepts; `none` stays available because it means "don't request effort".
+  const values = saved.length ? [...saved] : [...REASONING_EFFORTS];
+  if (!values.includes("none")) values.push("none");
+  const options = values.map((value) => ({ value, label: REASONING_EFFORT_LABELS[value] || `${value}（已保存，由模型声明）` }));
   if (!values.includes(current)) {
     options.unshift({ value: current, label: `${current}（已保存，由模型声明）` });
   }
@@ -58,15 +65,41 @@ function preservedReasoningEfforts(efforts) {
   return [...new Set((efforts || []).map((effort) => String(effort || "").trim()).filter((effort) => effort && effort !== "ultra"))];
 }
 
+// Tiers offered for one model: the fixed menu plus any tier the profile already
+// carries, so a stored value outside the menu survives an edit round-trip.
+function modelReasoningTiers(declared) {
+  const saved = preservedReasoningEfforts(declared);
+  return [...MODEL_REASONING_TIERS, ...saved.filter((effort) => !MODEL_REASONING_TIERS.includes(effort))];
+}
+
+function modelSupportsReasoningEffort(model) {
+  return !!model?.supports_reasoning_effort || preservedReasoningEfforts(model?.reasoning_efforts).length > 0;
+}
+
+// Grok rejects a default effort that is not in a model's declared list, so an
+// empty list must never keep a declared/probe source. Otherwise the stored
+// source is preserved verbatim; managed profiles compare it byte for byte.
+function modelReasoningEffortSource(efforts, storedSource) {
+  if ((efforts || []).length) return "declared";
+  const source = String(storedSource || "").trim();
+  return source === "declared" || source === "probe" ? "" : source;
+}
+
+function cardDeclaredReasoningEfforts(card) {
+  if (!card) return [];
+  if (!card.querySelector('[data-field="supports_reasoning_effort"]')?.checked) return [];
+  return [...card.querySelectorAll("[data-reasoning-tier]")].filter((input) => input.checked).map((input) => input.dataset.reasoningTier);
+}
+
 // Mirrors internal/profiles/context_defaults.go — keep both tables in sync.
 // Upstream /v1/models does not report context sizes; Grok falls back to ~200k
 // when config.toml omits context_window, so known models get an explicit
 // default here. Exact leaf matches only; values stay editable per model.
 const CONTEXT_WINDOW_SUGGESTIONS = {
   "gpt-5.6-terra": 372000,
-  "gpt-5.6-sol": 372000,
+  "gpt-5.6-sol": 320000,
   "gpt-5.6-luna": 372000,
-  "gpt-6-astra": 272000,
+  "gpt-6-astra": 320000,
   "gemini-3.6-flash-high": 1048576,
   "gemini-3.7-flash-high": 1048576,
   "gemini-3.8-flash-high": 1048576,
@@ -935,7 +968,7 @@ function stripSecrets(profile, includeKey) {
         api_backend: m.api_backend,
         extra_headers: m.extra_headers || {},
         supports_backend_search: !!m.supports_backend_search,
-        supports_reasoning_effort: !!m.supports_reasoning_effort || !!m.reasoning_efforts?.length,
+        supports_reasoning_effort: modelSupportsReasoningEffort(m),
         reasoning_efforts: preservedReasoningEfforts(m.reasoning_efforts),
         reasoning_efforts_source: m.reasoning_efforts_source || "default",
         context_window: m.context_window || 0,
@@ -1080,7 +1113,7 @@ function setReasoningEffortOptions(preferred) {
     const model = card.querySelector('[data-field="model"]')?.value.trim();
     return (name || model) === selectedModel;
   });
-  const declared = row ? JSON.parse(row.dataset.reasoningEfforts || "[]") : [];
+  const declared = cardDeclaredReasoningEfforts(row);
   const { current, options } = reasoningEffortOptions(preferred ?? select.value, declared);
   select.replaceChildren(...options.map((item) => {
     const option = document.createElement("option");
@@ -1095,7 +1128,7 @@ function updateReasoningEffortMetadata() {
   const status = $("reasoningEffortStatus");
   if (status) {
     status.classList.remove("ok", "warn", "fail");
-    status.textContent = "可选：medium、high、xhigh、max、none；模型明确声明时也提供 low。当前 Grok Build 兼容范围暂只接入到 max；explore / plan 跟随此默认模型。";
+    status.textContent = "可选：medium、high、xhigh、max、none；默认模型声明了档位时，其档位也可选。Grok Build 只为「模型高级设置」里勾选支持推理强度的模型提供档位选择，未声明时上游可能静默忽略。explore / plan 跟随此默认模型。";
   }
   setReasoningEffortOptions();
 }
@@ -1200,11 +1233,12 @@ function addModelCard(model = {}) {
     api_backend: model.api_backend || apiBackendFor($("upstreamFormat").value),
     extra_headers: model.extra_headers || {},
     supports_backend_search: modelSupportsBackendSearch(model),
+    supports_reasoning_effort: modelSupportsReasoningEffort(model),
     context_window: Number(model.context_window || 0) || contextWindowSuggestion,
     max_completion_tokens: Number(model.max_completion_tokens || 0),
   };
   card.dataset.reasoningEfforts = JSON.stringify(preservedReasoningEfforts(model.reasoning_efforts));
-  card.dataset.reasoningEffortsSource = model.reasoning_efforts_source || "default";
+  card.dataset.reasoningEffortsSource = model.reasoning_efforts_source || "";
   card.innerHTML = `
     <div class="modelCardTop">
       <strong>${escapeHtml(model.name || model.model || "新模型")}</strong>
@@ -1231,14 +1265,35 @@ function addModelCard(model = {}) {
           <input type="checkbox" data-field="supports_backend_search" ${card.modelDraft.supports_backend_search ? "checked" : ""}>
           支持原生后端搜索（仅在上游明确支持时启用）
         </label>
+        <label class="check">
+          <input type="checkbox" data-field="supports_reasoning_effort" ${card.modelDraft.supports_reasoning_effort ? "checked" : ""}>
+          支持推理强度（Grok Build 只为勾选的模型提供档位选择）
+        </label>
+        <div class="reasoningTiers" data-field="reasoning_tiers">
+          <span class="muted tiny">可选档位（写入 config.toml 的 reasoning_efforts；不勾选则由 Grok 使用自身默认档位）</span>
+          <div class="reasoningTiersRow">
+            ${modelReasoningTiers(model.reasoning_efforts).map((tier) => `
+            <label class="check">
+              <input type="checkbox" data-reasoning-tier="${escapeAttr(tier)}" ${preservedReasoningEfforts(model.reasoning_efforts).includes(tier) ? "checked" : ""}>
+              ${escapeHtml(REASONING_EFFORT_LABELS[tier] || `${tier}（已保存，由模型声明）`)}
+            </label>`).join("")}
+          </div>
+        </div>
       </details>
     </div>
   `;
   const nameInput = card.querySelector('[data-field="name"]');
   const modelInput = card.querySelector('[data-field="model"]');
   const backendSearchInput = card.querySelector('[data-field="supports_backend_search"]');
+  const reasoningSupportInput = card.querySelector('[data-field="supports_reasoning_effort"]');
+  const reasoningTierInputs = [...card.querySelectorAll("[data-reasoning-tier]")];
   const contextWindowInput = card.querySelector('[data-field="context_window"]');
   const contextWindowHint = card.querySelector('[data-field="context_window_hint"]');
+  const syncReasoningTierState = () => {
+    reasoningTierInputs.forEach((input) => { input.disabled = !reasoningSupportInput.checked; });
+    card.dataset.reasoningEfforts = JSON.stringify(cardDeclaredReasoningEfforts(card));
+    updateReasoningEffortMetadata();
+  };
   const refreshContextWindowHint = () => {
     const suggestion = suggestContextWindow(modelInput.value.trim() || nameInput.value.trim());
     contextWindowHint.textContent = suggestion
@@ -1267,6 +1322,22 @@ function addModelCard(model = {}) {
     card.modelDraft = { ...(card.modelDraft || {}), supports_backend_search: backendSearchInput.checked };
     scheduleProviderPreview();
   });
+  reasoningSupportInput.addEventListener("change", () => {
+    card.modelDraft = { ...(card.modelDraft || {}), supports_reasoning_effort: reasoningSupportInput.checked };
+    syncReasoningTierState();
+    scheduleProviderPreview();
+  });
+  reasoningTierInputs.forEach((input) => input.addEventListener("change", () => {
+    // Declaring a tier is the intent to support effort; keep the two in sync
+    // instead of rejecting the save later.
+    if (input.checked) {
+      reasoningSupportInput.checked = true;
+      card.modelDraft = { ...(card.modelDraft || {}), supports_reasoning_effort: true };
+    }
+    syncReasoningTierState();
+    scheduleProviderPreview();
+  }));
+  syncReasoningTierState();
   card.querySelector('[data-action="remove-model"]').onclick = () => {
     card.remove();
     renderModelSelect();
@@ -1351,16 +1422,17 @@ function readForm() {
     models: rows.map((row) => {
       const name = row.querySelector('[data-field="name"]')?.value.trim() || "";
       const model = row.querySelector('[data-field="model"]')?.value.trim() || "";
-      const reasoningEfforts = JSON.parse(row.dataset.reasoningEfforts || "[]");
+      const supportsReasoning = !!row.querySelector('[data-field="supports_reasoning_effort"]')?.checked;
+      const reasoningEfforts = supportsReasoning ? cardDeclaredReasoningEfforts(row) : [];
       return {
         ...(row.modelDraft || {}),
         name,
         model,
         context_window: Math.max(0, Number(row.querySelector('[data-field="context_window"]')?.value) || 0),
         api_key: apiKey,
-        supports_reasoning_effort: reasoningEfforts.length > 0,
+        supports_reasoning_effort: supportsReasoning,
         reasoning_efforts: reasoningEfforts,
-        reasoning_efforts_source: row.dataset.reasoningEffortsSource || "default",
+        reasoning_efforts_source: modelReasoningEffortSource(reasoningEfforts, row.dataset.reasoningEffortsSource),
       };
     }).filter((m) => m.name || m.model),
   };

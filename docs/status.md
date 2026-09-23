@@ -1,18 +1,108 @@
 # Grok Build Switch — Status 文档
 
-> 当前状态、产品边界与技术债。最后更新：2026-09-05（Grok专用0.9.4 build18；保留GPT订阅代理）。
+> 当前状态、产品边界与技术债。最后更新：2026-09-23（订阅代理 Codex 模型能力自动探测，安装 0.9.15）。
 
 ---
 
-## 当前产品方向与回退（2026-09-05）
+## 订阅代理模型能力自动探测（2026-09-23）
 
-按用户决定撤回 Codex 客户端适配，仅管理 Grok；保留 GPT/ChatGPT 订阅代理、现有供应商与 WorkBuddy Chat 模型。已安装 0.9.4 build18 Grok 专用维护包（ad-hoc，未公证）：相对旧 build15 保留模型子集不扩张、无变化不重写 Profile、移动布局和空 SSH 列表修复。Codex 客户端 UI/API、配置写入模块与 WorkBuddy Responses 桥接均已从当前源码移除；CLIProxyAPI 的 GPT Responses 推理路由保留。
+- **需求**：更新「订阅代理 · ChatGPT/Codex」模型时自动测试 Fast 与推理强度，有效即加入选项；触发范围限定为「目录更新时探测新出现或档位未记录的模型」（用户决策）。
+- **探测信号**：CLIProxyAPI 自身在校验 `reasoning_effort`。传入非法值时它返回 HTTP 400，并在消息中列出该模型接受的档位：`level "x" not supported, valid levels: low, medium, high, xhigh, max`。该列表按模型区分——实测 `gpt-5.5` 为 `low/medium/high/xhigh`，`gpt-5.6-terra/sol/luna`、`gpt-6-astra`、`gpt-6-luna` 另有 `max`。请求在推理前即被拒绝，因此不消耗 completion token，也不需要预先存在别名（可直接用物理模型 ID 探测）。
+- **Fast 的判定边界（必须如实表述）**：没有任何响应字段能证明 `service_tier: priority` 生效。已知可用的 `-fast` 别名（由 CLIProxy 的 payload override 注入 priority）与 Standard 一样回报 `service_tier: "default"`；并且 `service_tier` 完全不被校验（传 `bogus-tier` 仍返回 200）。按用户决策，Fast 以「代理接受并能解析该模型」为准开启，这是可获得的最强信号，**不等于已证明更快**；上游若忽略 priority，用户会以为更快而实际无变化。
+- **不可用与重试**：模型无可用账号时返回 503（`auth_unavailable` / `model_not_found`），记为 `unavailable` 且不授予能力，下次目录更新重试。返回「仅支持 /v1/images/*」等端点不匹配的模型记为已测量但无档位，不再重复探测。
+- **实现**：
+  - `internal/cliproxy/capability.go`：单请求探测、`valid levels` 解析、`capability.json` 记录（含 `version`，未知版本 fail closed）、启动与 reconcile 时的发布逻辑。
+  - `internal/modelvariants/registry.go`：在静态可信名单（`gpt-5.6-terra/sol/luna`）之上增加实测覆盖层（Fast 名单 + 每模型档位）；静态名单与 `gpt-6-astra` 的「仅推理、不生成 Fast」声明不回退。
+  - `ReconcileModels` 在目录更新时探测、持久化、发布；`WriteConfig` 与只读的 `Models` 只发布已记录结果、不发起探测。
+  - 边界：单模型 20s、单次探测总预算 45s、每次最多 24 个模型，避免拖慢「保存模型选择」请求；发布顺序必须在读取所有权账本之前，否则校验探测得到的 Fast 别名会失败。
+  - 稳健性：`publishCapabilities` 同时从 `config-ownership.json` 恢复已拥有的 Fast 模型，因此 `capability.json` 丢失时降级为「有 Fast、无档位」，不会因别名校验失败而阻断启动。
+- **生产实测（0.9.15）**：真实目录探测写入 12 条记录（7 个 chat 模型；5 个 image 模型判为不可用）；随后为 7 个实测模型生成 `-fast` 别名并纳入 priority 规则，订阅 Profile 生成 `gpt-6-astra`、`gpt-6-luna` 的 Standard/Fast 配对与五档 `reasoning_efforts`，`config.toml` 同步写入。真实请求：Standard 与 Fast 路由均返回 HTTP 200；`grok -m subscription/codex/gpt-6-luna-fast -p ...` 返回 `FASTOK`。`config_matches_active` 与 `config_matches_routing` 均为 true。
+- **`gpt-6-sol` 当前不可用（阻塞，非本改动引入）**：当前启用的 plus 账号对 `gpt-6-sol` 返回 `model_not_found: The model "gpt-6-sol" does not exist or you do not have access to it.`，其后一律 503（chat 与 responses 两条协议、多次复测一致）。该模型已从可选目录消失，因此本轮不会获得 Fast 或档位；需先在账号/上游侧解决访问权限。会话早期一次探测曾连续 7 次返回 200，无法解释，不排除当时命中另一账号。
+- **既有漂移（先于本改动）**：`cliproxy/config.yaml` 存在 3 条 priority 规则，其中两条重复。与 2026-09-20 安装前快照逐字一致，且本改动未触碰 `internal/cliproxy/config_merge.go`；`mergeManagedFastRule` 只按 fingerprint 移除受管规则，不清理历史重复项。
+- **验证**：隔离 HOME 下 `go test ./...` 全绿、`go vet ./...` 通过、`go test -race`（cliproxy/modelvariants/server）通过、`node --check ui/app.js` 通过、32 项前端测试通过；新增能力探测单测（探测授予、503 重试、已测量不重测、账本往返与启动顺序、未知版本 fail closed、静态名单不回退）与 server 侧「实测模型生成 Standard/Fast + 档位」测试。本机宿主污染的 CodeBuddy 两项既有失败在隔离 HOME 下通过。
+- **CLIProxyAPI 版本**：仍固定 7.3.9（提交 `61fdfc34…`）；上游最新 v7.3.15。相关条目：7.3.15 `fix(codex): compact client model catalog and preserve required fields`、`feat(registry): add grok-4.7-build-fast`；7.3.14 `feat(registry): add gpt-6-luna to codex-free`；7.3.13 registry 更新与 codex client 0.155.0；7.3.11 `feat(pluginapi): propagate ... service tier`、`fix(responses): filter upstream private and telemetry events in SSE streams`；7.3.10 `fix(translator): preserve reasoning content across tool turns`。无故障证据，升级属独立发布动作，待用户决定。
 
-安装后通过界面保存事务恢复原 hy4-preview 单模型选择。Grok config、Codex config/auth、设置与回退前字节一致；GPT/订阅 Profile 未变，WorkBuddy Profile 和 routing 仅 updated_at 变化。原 CLIProxy 进程保留。没有发起新的真实模型付费请求；GPT 反代保留结论基于代码/配置、路由与页面检查，不冒充本轮真实推理验收。
+## 当前生产安装（2026-09-23）
 
-回退前源码、App和私有快照位于 `~/.grok/build-state/grok-build-switch-grok-rollback-20260905/`；最终构建位于 `/private/tmp/gbs-grok-rollback-20260905/`。已有 Codex 实验资料及旧 App 未删除，源代码未提交/推送。上次真实 Codex 请求曾返回11128，具体触发字段未定位；该方向已取消，不列为继续调试任务。用户级个人规则及其他工具配置不属于此次撤回范围。
+当前安装为 `/Applications/Grok Build Switch.app` `0.9.15 (build 31)`，ad-hoc 签名（未公证），`codesign --verify --deep --strict` 通过；主程序 SHA-256 `eef837748dc0bd4d8940337ec749110a82a9c3c3569f8d42ac2d08a36e47eb75`。内置 CLIProxyAPI 7.3.9（提交 `61fdfc341b96178a8dcb53f2efc46cbc341d267c`）。管理服务 17878 健康，订阅代理 8317 正常。
 
-验证：全量Go、vet、关键代理/server race、前端22项、构建签名与安装校验通过。生产界面已实际恢复模型选择并访问GPT订阅代理；1280桌面及390×844移动端首页、WorkBuddy、订阅代理、设置、SSH真实导航通过，无横向溢出。无需额外删除批准即可使用当前版本；外部备份留存，清理另行决定。
+换装流程：隔离 HOME 完成全量 `go test` 门禁后构建；bundle 先复制到 `/tmp` 暂存并 `xattr -cr` 清理扩展属性（仓库位于 Documents，File Provider 会给 bundle 加 `com.apple.FinderInfo`，导致仓库内签名校验失败），随后校验签名、版本与 arm64 架构；退出旧进程并等待其结束，把旧 bundle 移动为 `.outgoing`，安装新包并启动，健康检查与管理/代理状态核对通过。按用户明确要求，本次**未保留备份**：`.outgoing` 与 `/tmp` 暂存目录已删除，旧 `0.9.14` 的 App bundle 与 `dist/macos` 中 0.9.13 的 DMG/校验文件一并删除；配置、账号认证与订阅凭据未改动。
+
+
+## API 池 `gpt-6-astra` 404（2026-09-20，已解决）
+
+- **现象**：会话 `01a0a341…` 报 `Not found (404): model_not_found: Model "gpt-6-astra" is not supported by any configured account in this group`。
+- **上游复核**：使用当前 API 池凭据直接请求原始上游 `http://api-pool.example.com:11303/v1`，`GET /models` 不包含 `gpt-6-astra`；`POST /responses` 对该模型返回同一 404，对 `gpt-5.6-sol` 返回 200。经本地流式保护端点复测结果一致，故不是保护层误报。
+- **处理**：通过 loopback 管理 API 将 API 池 Profile 的 `available_models` 和模型定义移除 `gpt-6-astra`，默认保持 `gpt-5.6-sol`，显式保留 `upstream_base_url = http://api-pool.example.com:11303/v1`。变更前快照保存在 `~/.grok/build-state/grok-build-switch-model-fix-20260920/pre-remove-api-pool-gpt-6-astra.json`。
+- **订阅代理边界**：订阅代理目录仍提供并选中 `subscription/codex/gpt-6-astra`。最小真实请求返回 HTTP 200，但返回 JSON 的 `model` 字段为 `gpt-5.6-luna`；因此当前证据只证明该订阅别名可接受并返回结果，不能声称物理 Astra 已验证。
+- **验证**：API 池路由目录不再显示 Astra，`config_matches_active=true`、`config_matches_routing=true`；API 池通过保护端点使用 `gpt-5.6-sol` 返回完成响应。原会话若仍固定旧模型，需要在会话内执行 `/model gpt-5.6-sol`；Switch 无法远程改写既有 Grok CLI 会话的模型状态。
+- **后续可选项**：让模型目录按上游 `/v1/models` 定期或保存前校验，避免第三方上游下线模型后留下陈旧选项。本次只处理已确认的生产故障。
+
+## 当前生产安装（2026-09-20）
+
+当前安装为 `/Applications/Grok Build Switch.app` `0.9.14 (build 30)`，ad-hoc 签名（未公证），`codesign --verify --deep --strict` 通过；主程序 SHA-256 `a77774418b3564adb3044bfeb4585dbe9ec4cbd3de4edf6b785d2b129ea00fe9`。内置 CLIProxyAPI 7.3.9（提交 `61fdfc341b96178a8dcb53f2efc46cbc341d267c`）。管理服务 17878 健康，Grok 订阅代理 8317 正常。
+
+本版包含 `upstream_base_url` 编辑往返修复和 API 池模型目录清理。生产已为「API 池」供应商启用流式保护：`profiles.json` 中该 Profile 的 `base_url` 指向 `http://127.0.0.1:17878/stream-guard/v1`，真实上游保存在 `upstream_base_url = http://api-pool.example.com:11303/v1`；API 池默认模型为 `gpt-5.6-sol`，`gpt-6-astra` 已从该 Profile 和路由目录移除；`config_matches_active` 与 `config_matches_routing` 均为 true。
+
+换装采用外部安装锁与事务顺序：构建使用隔离 HOME；先把 bundle 复制到 `/Applications/Grok Build Switch.app.incoming` 并完成签名、版本和架构校验，再停止并等待旧进程退出，将旧 bundle 移动到临时回退位置，原子移动新 bundle，启动后检查管理服务、配置一致性和真实模型请求，健康检查通过后才删除旧 bundle。本次升级保留了配置、账号认证和订阅凭据；旧回退 bundle 已在新实例健康后删除，`.incoming` 与安装锁无残留。升级构建日志与安装前快照位于 `~/.grok/build-state/grok-build-switch-cliproxy-739-install-20260920/`。
+
+## 流式保护：自定义上游的非标准 SSE 帧（2026-09-19）
+
+- **问题**：经 API 池供应商推理时整轮失败，Grok Build 报 `serialization error: unknown variant \`keepalive\`, expected one of \`response.created\`, ... at line 1 column 19`。该路径 `is_retryable: false`，重发同样失败。
+- **根因**：网关（自报 `303Lab - AI API Gateway`）在静默期注入自定义 SSE 帧 `event: keepalive` / `data: {"type":"keepalive","sequence_number":2}`。Grok 客户端把 Responses 事件的 `type` 反序列化为**封闭枚举**（49 个变体，已逐一比对二进制与运行时错误信息，完全一致），未知变体即终止该轮。与额度、鉴权、网络无关。
+- **真实帧已抓取**（2026-09-19，本机透明转发代理记录真实池流量）：心跳帧如上。**同一序列紧随其后是 `response.failed`**，其真实原因是 `{"code":"server_error","message":"Our servers are currently overloaded. Please try again later."}`——即上游瞬时过载。该 `response.failed` 帧**自身也缺失 schema 必需字段 `output`**，仅修掉心跳后客户端会立刻改报 `serialization error: missing field \`output\``。两个缺陷必须一起处理，否则错误仍会把「可重试的过载」伪装成不可重试的协议错误。
+- **同时影响两条协议**：同一个心跳帧在 Chat Completions 路径也会失败，报错不同（`missing field \`id\``）。因此保护按协议分模式过滤。
+- **修复**：新增 `internal/streamguard` 包，按帧（`field: value` 行 + 空行）解析 SSE：Responses 模式下丢弃 `type` 落在已知枚举之外的整帧，并对 `response.failed` 回填缺失的必需成员（`output` / `parallel_tool_calls` / `tool_choice` / `tools`，仅回填缺失项，绝不覆盖上游已有值，且保留 `sequence_number` 等无关成员）；Chat 模式下丢弃心跳与误入的 Responses 事件帧。合规帧逐字节透传，`data: [DONE]`、`{"error":{...}}`、无法解析的 JSON 与控制帧一律保留。`internal/server/stream_guard.go` 提供 loopback-only 转发端点 `/stream-guard/v1/*`；`/v1/models` 本地应答。
+- **启用方式**：`PUT /api/stream-guard {"profile_id":"...","enabled":true}` 把该 Profile 的 Base URL 指向保护端点，并把原地址存入新增的 `profiles.Profile.UpstreamBaseURL`；关闭时还原并清空。该字段已加入 `profileMutationDTO`，供应商编辑页保存不会丢失。官方账号启用时返回 409。未启用时请求路径与转发结果完全不变。
+- **顺带修复**：`internal/codebuddy/proxy.go` 的 `finish_reason` 归一化原先只处理 `""`，现同时把 `"error"` 归一为 `null`（CodeBuddy `hy4-preview` 会返回该值，撞上 `stop/length/tool_calls/content_filter/function_call` 这个封闭枚举）。
+- **验证**：
+  - 单元：`internal/streamguard` 覆盖未知事件丢帧、合规流逐字节透传、`response.failed` 回填、`sequence_number` 保留、合规 failed 帧不被改写、末尾无空行、读写错误传播、Chat 模式心跳与错误帧保留；`internal/server` 覆盖转发路径、凭据、模型改写、非 loopback 拒绝、上游 4xx/5xx 透传、本地模型目录、启用/关闭往返、编辑页往返、路由注册。
+  - **真实帧回放（决定性证据）**：把抓取到的真实字节原样重放。未经保护时真实 `grok-1.0.34` 逐字复现 `unknown variant \`keepalive\``；经保护端点后 **0 个 serialization 错误**，客户端改为按瞬时故障重试。该真实帧已固化为测试夹具（`internal/streamguard/realcapture_test.go`、`internal/server/stream_guard_test.go`）。
+  - 真实上游：保护端点对接真实 API 池，`grok -m gpt-5.6-sol` 简单请求与 `--reasoning-effort xhigh` 长流式请求均正常完成。
+  - 门禁：隔离 HOME 下 `go test ./...` 全绿；`go test -race`（server/streamguard/profiles/routing/codebuddy）通过；`go vet` 通过。
+  - **安装后生产端到端**：`grok -m gpt-5.6-sol`（经已启用的保护）返回预期文本；未受保护的 DeepSeek 官方与 CodeBuddy `hy4-preview` 两个供应商分别返回预期结果（回归确认）；关闭保护后 `config.toml` 的 `models_base_url` 与 Profile 同步还原为上游地址，重新启用后再次端到端通过。
+- **开关的死锁修复（安装验证中发现）**：`handleStreamGuardSettings` 先取 `routingMu`，随后调用的 `SetStreamGuardEnabledOpt` 内部又走 `ApplyCurrentRouting()`，而后者会再次获取同一把互斥锁——Go 的 `sync.Mutex` 不可重入，请求永久挂起，且此后所有管理 API 全部阻塞（实测生产挂死、`/api/status` 超时）。更糟的是它只完成了 `Profiles.Update` 的一半：Profile 已指向保护端点，但路由投影未执行，`config.toml` 仍指向上游，形成前后不一致的中间态。
+  - 修复：拆出不取锁的 `setStreamGuardEnabledLocked`，由持锁的调用方使用 `applyCurrentRoutingLocked()` 重新投影；HTTP handler 复用同一把锁下的内部方法，不再嵌套获取。
+  - 回归测试：新增 `TestStreamGuardToggleOverHTTPDoesNotDeadlock`，**经注册的 HTTP 路由**驱动开关（此前的测试直接调方法，因此完全测不到这个死锁），并断言切换后服务器仍能响应。已验证该测试在旧代码上确实失败（`PUT /api/stream-guard deadlocked`）、在修复后通过。
+- **边界**：只处理流式（`text/event-stream`）响应；非流式响应直接透传。保护端点仅接受 loopback 请求，不新增对外暴露面。不改变路由、凭据或模型目录的归属语义。保护只消除「帧导致的伪协议错误」，**不掩盖上游真实故障**——上游过载仍会如实传到客户端并可重试。已构建安装为 `0.9.12 (build 28)`。
+
+## 当前生产安装（2026-09-18）
+
+当前安装为 `/Applications/Grok Build Switch.app` `0.9.11 (build 27)`，ad-hoc 签名（未公证），`codesign --verify --deep --strict` 通过；主程序 SHA-256 `2ad2012046b0a42ee6a9b49f8fdda9ec91af54092e420ffc17c17f5024dbdc5d`，与本机 arm64 构建产物一致。内置 CLIProxyAPI 7.3.9。管理服务 17878 健康，Grok 订阅代理 8317 未受影响；升级未改动生产 Profile、routing 或订阅凭据。
+
+换装流程改为：先把新包 `ditto` 到 `/Applications/Grok Build Switch.app.incoming`，再由独立脚本移动 bundle 并立即重启。运行中的进程在 bundle 被移走后仍从内存镜像服务，因此中断只来自重启本身（本次实测约 2 秒）。产物、DMG、`.sha256` 与 0.9.10 build 26 回退副本位于 `~/.grok/build-state/grok-build-switch-apipool-20260918/`，改动前的 `config.toml`/`profiles.json`/`routing.json` 快照在同目录 `prechange-config-snapshot/`。
+
+构建脚本内建 `go test` 门禁仍受宿主 WorkBuddy 目录状态污染（`TestCodeBuddyProxyModelsLoopback`、`TestManagedCodeBuddyProfileRejectsOrdinaryProfileMutation`）；隔离 HOME 下两项通过。构建改用隔离 HOME 并复用真实 module/Go 构建缓存完成。
+
+## 自定义上游的辅助模型固定（2026-09-18）
+
+- **问题**：把 Grok Build 指向自定义上游（API 池，`http://api-pool.example.com:11303`，`openai_responses`）后，会话可以推理，但标题生成必然失败。日志证据：`model_id="grok-4.6" status_code=404`，报文为 `Model "grok-4.6" is not available for this group`。
+- **根因**：Grok Build 用 `[models].session_summary` 选择生成会话标题/摘要的模型。该键未设置时它解析为内置 Grok 模型（当前 `grok-4.6`），而第三方网关只提供自己的模型清单，因此返回 404。主推理流程不受影响，所以这个缺口不会以明显报错暴露。
+- **修复**：`internal/config/tomlio.go` 新增 `auxTitleModel`，在写 `[models]` 时一并写入 `session_summary = <供应商默认模型>`，覆盖 `ApplyProfile`、`ApplyProfileText`（`rewriteSection`，含丢弃未设置键的分支）与 `SnippetForProfile` 三条投影路径；`UseOfficialAuthText` 在切回官方账号时清除该键。因此换供应商会改指新供应商默认模型，不会残留指向上一家上游。
+- **验证**：隔离实例中同一场景由 1–3 个 `grok-4.6` 404 变为 0 个 404；`grok -m gpt-5.6-sol` 真实完成一次写文件任务。生产实例（升级后）同样 0 个 404。
+- **边界**：只固定 `session_summary`。实测 `image_description`、`prompt_suggestion`、`web_search` 在同一场景下不会退回到内置模型，因此未被接管。
+
+## 上游连接测试的 HTML 误报（2026-09-18）
+
+- **问题**：`probeModel` 把任何 2xx 视为连接成功。网关对未实现的协议路径会返回自己的 HTML 首页并带 HTTP 200（API 池在根路径 `/chat/completions` 即如此），于是「测试上游连接」会把一个永远无法推理的配置报成连通。
+- **修复**：`probeModel` 读取响应体，识别 HTML 文档头即判失败，并提示改用该网关支持的协议或把 `/v1` 补进 Base URL。检查只拒绝 HTML，不放宽 JSON 网关、`messages` 兼容网关或 204 空响应。
+- **实测协议差异**：API 池在 `/v1` 下 Responses 与 Chat Completions 均可用；在根路径只有 Responses 可用（Chat 会拿到 HTML，真实推理时挂住）。该池接受 `reasoning_effort` 的 `minimal/low/medium/high/xhigh/max`，拒绝 `ultra`——与 Switch 既有的 max-only 边界一致。
+
+## 生产安装与更新（2026-09-13）
+
+当前安装为 `/Applications/Grok Build Switch.app` `0.9.10 (build 26)`，ad-hoc 签名（未公证），`codesign --verify --deep --strict` 通过；内置 CLIProxyAPI 7.2.152。管理服务 17878 健康，Grok 订阅代理 8317 未受影响。DMG、校验文件、两个安装副本与覆盖前的 `0.9.8 (build 24)`、`0.9.9 (build 25)` 回退副本位于 `~/.grok/build-state/grok-build-switch-reasoning-effort-20260915/`。构建脚本在仓库内签名仍受 Documents File Provider 的 FinderInfo 竞态影响，改为在 `/tmp` 暂存目录清理扩展属性并签名后再安装。
+
+本版包含模型级推理强度声明（见 1.1「模型级推理强度声明」，已用于 DeepSeek 官方供应商）与托管 Profile 编辑页 409 修复（见 1.1「托管 Profile 编辑页往返」）。
+
+## 当前生产安装与客户端范围（2026-09-08）
+
+按用户明确指令撤回 Codex 客户端入口，当时安装 `0.9.7 build 23`（ad-hoc 签名，未公证）。Grok 官方路由、普通供应商、WorkBuddy、GPT/Google 订阅代理、额度观察、配置编辑、LAN/SSH 保留。当前源代码不再含 Codex 专用页面、接口、目录同步或客户端配置写入；不把订阅来源名称中的 Codex 误当作客户端适配。
+
+生产管理服务 17878、Grok 订阅代理 8317 正常；Codex 专用 8318 已停止，自启动项已移出 LaunchAgents。原 Codex 专用接口均返回 404。Codex 主配置只移除生成的 Switch 供应商表，其余配置语义保持；当前官方模型为 gpt-6-astra。Codex 未重启、已有任务未改写。
+
+清理前后字节比对确认 Grok config、Profiles、应用设置、订阅配置/模型选择及所有现有订阅认证、Grok/Codex 官方认证保持；routing 只更新启动时间戳。旧版 App、专用适配器状态与故障日志、独立客户端配置以及恢复清单位于 `~/.grok/build-state/grok-build-switch-remove-codex-20260908/`；当前任务不再继续热切换修复。其他旧实验资料未扩大清理。
+
+验证：全量 Go、vet、关键路由/代理 race、Wails 入口和 28 项前端测试通过。使用临时虚构供应商完成搜索、编辑保存及桌面/390×844移动端各页导航；设置页长配置路径溢出修复并复测。生产首页、订阅与 WorkBuddy 页面和核心只读 API 通过；未发起真实模型推理。最终安装包位于 `/private/tmp/gbs-grok-only-build-20260908-b23-final/`。
 
 ## 1. 当前状态
 
@@ -30,8 +120,14 @@
 - **历史本机安装（已由0.9.5 build16取代）**：2026-09-02 已构建并安装 `0.9.3 (build 12)` 到 `/Applications/Grok Build Switch.app`，主程序 SHA-256 为 `b151d543a47347c0a2c8a0fb35d3260e52bc7a57906bf528ccf4a3e432c96ce6`，与 `~/.grok/build-state/grok-build-switch-codebuddy-tool-fix-20260902/macos/Grok Build Switch.app` 逐字节一致。严格 codesign 校验通过，但仍为 ad-hoc 签名，没有 Developer ID 签名或 Apple 公证。PID 64010 从安装路径运行并监听 `127.0.0.1:17878`；健康接口、config/routing 一致性以及真实桌面和 `390×844` 移动页面通过。首次仓库内构建因 FinderInfo 签名失败且构建脚本先清空 `dist/macos`，原 0.9.2 DMG 未找到副本可恢复；失败生成的部分 0.9.3 App 已删除，当前仓库 `dist/macos` 为空。经校验的 0.9.3 App、DMG 和 `.sha256` 保留在上述仓库外 build-state。
 - **Codex 推理强度最高接入到 Max**：`gpt-5.6-sol` 的 Standard 与 Fast 逻辑路由均显式声明 `low / medium / high / xhigh / max`，不再声明 `ultra`。供应商编辑页只提供 `medium / high / xhigh / max / none`；服务端会过滤陈旧 `ultra` 元数据并拒绝将其作为默认值，Switch 内部 `reasoning_efforts_source` 不再投影到 Grok `config.toml`。本机 Grok Build `1.0.13` 已实测 Standard/Fast 的 `max` 均返回 `OK`，`ultra` 被明确拒绝。真实托管 Profile 编辑页提交 `max` 成功，证明 effort-only 保存不再误报 409；验证后 Profile 恢复 Standard+Medium，全局路由恢复 Fast+High，`config.toml`、routing 和运行 API 一致。
 - **官方 Grok CLI 登录与路由**：沿用 Grok CLI 官方登录流程，登录后可切换官方模型路由。
-- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash/deepseek-v4-pro）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。Codex GPT-5.6 订阅代理模型的建议窗口为 320,000 tokens；订阅代理 Profile 允许在供应商编辑页调整上下文窗口和默认推理强度，其他托管字段仍通过订阅代理页面更新；编辑表单会保留上游已声明但不在当前菜单中的推理档位（如 Codex 的 `low`），避免保存上下文窗口时丢失模型元数据。CodeBuddy 的 DeepSeek v4 Flash/Pro 使用 1,000,000 的配置窗口，为已验证的 1,048,576 网关上限保留系统提示、工具调用和输出余量。
+- **普通 Profile**：管理供应商、Base URL、API Key、上游格式与常用模型。模型卡片支持显式「上下文窗口」；已知模型（Kimi k3-256k、Codex gpt-5.6-*、Gemini gemini-3.7-flash-high、订阅 grok-4.5/4.6、CodeBuddy hy3/deepseek-v4-flash/deepseek-v4-pro）在 UI 预填并在服务端按 `profiles.KnownContextWindow` 兜底填入建议值，0 仍表示省略、由 Grok 用自身默认。Codex gpt-5.6-sol 与 gpt-6-astra 订阅代理模型的建议窗口为 320,000 tokens；订阅代理 Profile 允许在供应商编辑页调整上下文窗口和默认推理强度，其他托管字段仍通过订阅代理页面更新；编辑表单会保留上游已声明但不在当前菜单中的推理档位（如 Codex 的 `low`），避免保存上下文窗口时丢失模型元数据。CodeBuddy 的 DeepSeek v4 Flash/Pro 使用 1,000,000 的配置窗口，为已验证的 1,048,576 网关上限保留系统提示、工具调用和输出余量。
+
+- **辅助模型键（2026-09-18）**：启用自定义供应商时，除 `[models].default` 外还写入 `[models].session_summary = <供应商默认模型>`；切回官方账号清除该键，换供应商改指新供应商默认模型。原因是 Grok Build 的会话标题/摘要走这个键，未设置时请求内置 Grok 模型，第三方网关返回 404。当前只接管该键：`image_description`、`prompt_suggestion`、`web_search` 经实测不会在此场景退回内置模型。
+
+- **上游连接测试（2026-09-18）**：`probeModel` 不再把 HTML 200 当成功；网关对未实现的协议路径返回首页 HTML 时会判失败并提示换协议或补 `/v1`。只拒绝 HTML，不影响 JSON 网关、`messages` 兼容网关与 204 空响应的既有路径。
 - **供应商默认模型写入路由**：在供应商编辑页设置 default 模型与推理强度；保存后事务性更新 `config.toml` 与 `routing.json`。explore / plan 跟随该 default（无独立「模型路由」页）。
+- **托管 Profile 编辑页往返（2026-09-15）**：CodeBuddy 托管供应商此前在供应商编辑页保存必然 409，即使未做任何修改。原因是编辑表单的「默认推理强度」下拉没有空选项，未设置过档位的托管 Profile（存储值 `""`）回传时被规范成 `none`，而 `managedProfileEditableUpdate` 逐字比较托管默认值，把未修改的请求判为所有权变更。修复为把未设置与 `none` 视为同一值，并在等价时保留存储值；真实改动托管默认值仍返回 409，订阅代理的允许项（上下文窗口、已声明档位）与拒绝项（未声明档位）行为不变。普通 Profile 保存路径不受影响。
+- **模型级推理强度声明（2026-09-15）**：模型卡片「模型高级设置」新增「支持推理强度」开关与 low / medium / high / xhigh / max 档位勾选。勾选后 Switch 写入 `supports_reasoning_effort = true` 与 `reasoning_efforts = [...]`（内部来源标记为 `declared`）；未勾选即不声明，不伪造能力。Grok Build 只为此处声明过的模型提供档位选择，因此普通供应商（不再局限于可信 Codex 订阅与 CodeBuddy 目录）也能在 Grok `/m`、`/effort` 中选择推理强度。默认模型声明的档位会收窄供应商级「默认推理强度」菜单；档位列表为空时不再保留 `declared` 来源，避免 Grok 拒绝默认档位。已按此声明 DeepSeek 官方 `https://api.deepseek.com/` 的 `deepseek-flash`：`low / medium / high / xhigh / max`，默认 `high`；`https://api.deepseek.com/chat/completions` 会对 `reasoning_effort` 做枚举校验（`none/minimal/low/medium/high/xhigh/max`），声明外取值被拒绝。验证：Grok Build `1.0.30` ACP `session/new` 中 `deepseek-flash` 由无 `supportsReasoningEffort` 变为 `supportsReasoningEffort: true`、`reasoningEffort: high`、五档 `reasoningEfforts`；真实 headless 请求 `grok -p ... -m deepseek-flash --reasoning-effort low` 返回 `pong`，未被丢弃或告警；`low`/`max` 直连 DeepSeek 官方均 HTTP 200。
 - **用量观察**：聚合 prompt、cached prompt、completion、reasoning token 与缓存命中率，不展示 transcript、不推算美元成本。
 - **订阅代理**：内嵌 CLIProxyAPI，负责受支持订阅账号的接入、状态和代理路由。
 - **CodeBuddy / WorkBuddy 模型接入**：Switch 以本机 loopback OpenAI Chat Completions 代理直接请求固定推理端点 `https://copilot.tencent.com/v2/chat/completions`，不使用 WorkBuddy agent harness。`/v2/chat/completions` 本身不提供模型枚举；CodeBuddy 页面通过 `GET /api/codebuddy/models` 和“刷新模型目录”只读解析 WorkBuddy 本机已同步的产品目录，只采用 `cli` agent 明确允许、支持 tool call 且模型 ID 合法的条目，并显示来源和更新时间。目录缺失或损坏时使用 Switch 内置已验证兜底；普通启动不扩张用户模型子集。2026-08-30 页面新增 CodeBuddy 专属“暴露给 Grok Build”多选：默认模型必须属于所选子集；保存只更新 CodeBuddy Profile 并重新投影组合路由，其他供应商模型保持不变。隔离浏览器实例已验证只选 `hy4-preview` 后 CodeBuddy Profile、`config.toml` 与代理 `/v1/models` 均只保留该模型，另一个供应商的模型仍存在；空子集被前后端拒绝，桌面流程和 `390×844` 移动布局无横向溢出。2026-08-28 本机目录包含 16 个 CLI 模型，包括 `kimi-k3-2`、`hy4-preview`、`glm-5.3`、`glm-5.3-flash`；四者均已用现有 CodeBuddy API Key 最小直连验证 HTTP 200。CodeBuddy 托管 Profile 的普通编辑入口仅允许调整上下文窗口，目录、密钥、暴露子集和默认模型必须走 CodeBuddy 页面。当天已安装 `0.9.0 (build 9)` ad-hoc 本地候选并在真实实例同步该目录；CodeBuddy 保持未激活，默认供应商仍为 Codex Sol，四个新模型经页面逐一连通返回 `pong`。旧 0.8.0 安装包已保存在仓库外 build-state 供回滚；新包未经 Developer ID 签名或 Apple 公证。
@@ -126,13 +222,20 @@
 
 - `server.go` 仍较大，可继续按配置、模型探测等资源拆分。
 - 直接编辑 TOML 的入口仍需要持续加强与统一路由策略的一致性校验。
-- `SupportsBackendSearch` 主要依赖 Profile 声明，尚未实现通用自动探测。
+- `SupportsBackendSearch` 与模型级推理强度声明都主要依赖 Profile 声明，尚未实现通用自动探测。
+- `profileMutationModelDTO` 不携带 `stream_tool_calls`：普通 Profile 的模型若带该字段，经供应商编辑页保存会丢字段（托管 Profile 因走 `previous` 重建路径不受影响）。仅代码路径确认，尚未端到端复现。
 - CodeBuddy 最新模型目录依赖 WorkBuddy 已在本机同步产品配置；Switch 不调用未确认的远程枚举端点，也不会从 `/v2/chat/completions` 猜测目录。没有本机目录时会明确回退到内置兜底，因此“最新”取决于 WorkBuddy 本地缓存的新鲜度。
 - 用量日志的 per-turn 事件不直接携带模型 ID；当前按 session `summary.json` 的模型归属，模型中途切换的历史 turn 可能被归到当前模型。UI 已明确标注这是近似归属，不应作为精确 per-model 计费证据。
 - 仅完成一次经授权的 Economy 最小只读 live smoke；Focused Evidence、Focused Build、Assurance、Critical、Fast priority 与跨角色 handoff 仍未做真实试点。真实多任务成本/质量/返工率对照已从当前版本完成门槛中移除；除非未来另立研究项目并获得足够证据，否则不宣称实际节省比例或质量优势。
 - 当前不支持项目级 Collaboration artifact export，也不提供已生成文件的自动删除；停用只保留文件并继续观测其漂移。
 - CLIProxy 完整 YAML 合并已有跨进程 operation lock、write-ahead recovery journal、post-PUT 语义/ledger 核验和 raw catalog 稳定收敛；但上游管理端点没有 ETag/CAS，无法与不遵守 Switch lock 的外部写入者形成真正原子事务。未知语义状态会保留 journal 并 fail closed，需要先恢复/人工核对，不能声称已应用。
+- 多个 `grok` 会话共用同一份 `~/.grok/config.toml`，各自 `/model` 选择会互相覆盖 `[models].default`；Switch 侧写入不具排他性。`config_matches_active=false` 因此既可能来自并发写入，也可能是不一致，需结合 `[model.*]` 路由表判断。
+- 供应商 `available_models` 是拉取时的快照，不随上游 `/v1/models` 实时校验：上游下线某模型后 Switch 仍会列出并在 `/model` 菜单中提供（API 池的 `gpt-6-astra` 即实例），选中后得到上游 404。
+- 供应商编辑页保存只回传表单字段：凡 Profile 上「不在表单里出现」的字段都依赖服务端显式保留（如流式保护的 `upstream_base_url`）。新增此类字段时必须同时补一条**经 handler 驱动**的往返测试——直接调 `store.Update` 的测试绕过 handler，测不到该路径。
 - DataDir 清理需要按明确归属执行；未知记录不得自动删除。
+- 能力探测的缓存没有失效策略：模型一旦记为 `efforts_known` 就不再重测，因此上游后来改变档位或新增 Fast 支持不会被发现；需要时只能删除 `cliproxy/capability.json` 重新探测。
+- Fast 缺少可验证的成功信号（`service_tier` 不被校验且响应恒为 `default`），当前以「代理接受该模型」为准开启；这与 docs/agent.md 中「不得把无法验证的能力表述为已验证」的边界一致，但需要在 UI/文档措辞上持续保持诚实。
+- `cliproxy/config.yaml` 的 2 条重复 priority 规则为先于 0.9.15 的既有漂移，尚未清理。
 - 正式 macOS 发布仍需本机可用的 Developer ID Application 证书与 notarytool 凭据；缺失时只能生成 ad-hoc 本地候选，不能发布为已签名/已公证资产。
 
 ---

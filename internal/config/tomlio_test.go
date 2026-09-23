@@ -695,3 +695,117 @@ reasoning_efforts_source = "declared"
 		t.Fatalf("ReasoningEffortsSource = %q", got)
 	}
 }
+
+// A custom endpoint cannot serve Grok's built-in models. Grok resolves session
+// titles through [models].session_summary, which defaults to a built-in model
+// and is rejected with HTTP 404 by a third-party upstream, so every provider
+// apply must pin it to that provider's own default model.
+func TestApplyProfilePinsAuxTitleModelToProviderDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"old\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := profiles.Profile{
+		BaseURL:      "https://pool.example/v1",
+		DefaultModel: "gpt-5.6-sol",
+		Models: []profiles.ModelDef{{
+			Name: "gpt-5.6-sol", Model: "gpt-5.6-sol", APIKey: "k",
+			APIBackend: "responses", ContextWindow: 320000,
+		}},
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseDoc(mustRead(t, path), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringAt(tableAt(doc, "models"), auxTitleModelKey); got != "gpt-5.6-sol" {
+		t.Fatalf("%s = %q, want the provider default", auxTitleModelKey, got)
+	}
+	if got := stringAt(tableAt(doc, "models"), "default"); got != "gpt-5.6-sol" {
+		t.Fatalf("default = %q", got)
+	}
+}
+
+// Switching providers must move the pin too, not leave it on the previous
+// endpoint's model.
+func TestApplyProfileRepointsAuxTitleModelWhenProviderChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"old\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := profiles.Profile{
+		BaseURL:      "https://one.example/v1",
+		DefaultModel: "one-model",
+		Models: []profiles.ModelDef{{
+			Name: "one-model", Model: "one-model", APIKey: "k1",
+			APIBackend: "responses", ContextWindow: 1000,
+		}},
+	}
+	if err := ApplyProfileToFile(path, first); err != nil {
+		t.Fatal(err)
+	}
+	second := profiles.Profile{
+		BaseURL:      "https://two.example/v1",
+		DefaultModel: "two-model",
+		Models: []profiles.ModelDef{{
+			Name: "two-model", Model: "two-model", APIKey: "k2",
+			APIBackend: "responses", ContextWindow: 2000,
+		}},
+	}
+	if err := ApplyProfileToFile(path, second); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseDoc(mustRead(t, path), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringAt(tableAt(doc, "models"), auxTitleModelKey); got != "two-model" {
+		t.Fatalf("%s = %q, want two-model", auxTitleModelKey, got)
+	}
+	// An unchanged re-apply must stay idempotent and remain a match.
+	matches, err := CurrentMatches(path, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matches {
+		t.Fatal("a re-applied provider must still match its config")
+	}
+}
+
+// Returning to the official account must clear the pin: an official session has
+// its own catalog and must not keep a third-party model pinned.
+func TestUseOfficialAuthTextClearsAuxTitleModel(t *testing.T) {
+	data := []byte(`
+[models]
+default = "gpt-5.6-sol"
+session_summary = "gpt-5.6-sol"
+web_search = "gpt-5.6-sol"
+
+[endpoints]
+models_base_url = "https://pool.example/v1"
+
+[model."gpt-5.6-sol"]
+model = "gpt-5.6-sol"
+api_backend = "responses"
+`)
+	out := string(UseOfficialAuthText(data))
+	if strings.Contains(out, auxTitleModelKey) {
+		t.Fatalf("official auth config still pins %s:\n%s", auxTitleModelKey, out)
+	}
+	if strings.Contains(out, "gpt-5.6-sol") {
+		t.Fatalf("official auth config still references a custom model:\n%s", out)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}

@@ -23,6 +23,7 @@ import (
 )
 
 const managementBaseURL = "http://127.0.0.1:8317/v0/management"
+const inferenceBaseURL = "http://127.0.0.1:8317"
 
 type Manager struct {
 	Paths           Paths
@@ -188,14 +189,64 @@ func (m *Manager) request(ctx context.Context, management bool, method, endpoint
 	return nil
 }
 
+// requestRawStatus performs an authenticated inference request and returns the
+// HTTP status with the raw body. The capability probe depends on reading a
+// deliberate 400, so this variant does not treat non-2xx as a transport error.
+func (m *Manager) requestRawStatus(ctx context.Context, management bool, method, endpoint, contentType string, body []byte, responseLimit int64) (int, []byte, error) {
+	keys, err := m.keys()
+	if err != nil {
+		return 0, nil, err
+	}
+	base := inferenceBaseURL
+	if management {
+		base = managementBaseURL
+	}
+	var payload io.Reader
+	if body != nil {
+		payload = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+endpoint, payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("创建请求失败")
+	}
+	if body != nil && contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if management {
+		req.Header.Set("Authorization", "Bearer "+keys.Management)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+keys.Inference)
+	}
+	client := m.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 12 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("CLIProxyAPI 请求失败")
+	}
+	defer resp.Body.Close()
+	if responseLimit <= 0 {
+		responseLimit = 1 << 20
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
+	if err != nil {
+		return 0, nil, fmt.Errorf("读取 CLIProxyAPI 响应失败")
+	}
+	if int64(len(raw)) > responseLimit {
+		return 0, nil, fmt.Errorf("CLIProxyAPI 响应过大")
+	}
+	return resp.StatusCode, raw, nil
+}
+
 func (m *Manager) requestRaw(ctx context.Context, management bool, method, endpoint, contentType string, body []byte, responseLimit int64) ([]byte, error) {
 	keys, err := m.keys()
 	if err != nil {
 		return nil, err
 	}
-	base := managementBaseURL
-	if !management {
-		base = "http://127.0.0.1:8317"
+	base := inferenceBaseURL
+	if management {
+		base = managementBaseURL
 	}
 	var payload io.Reader
 	if body != nil {
@@ -707,6 +758,12 @@ func (m *Manager) Models(ctx context.Context) ([]server.SubscriptionProxyModel, 
 	if err != nil {
 		return nil, err
 	}
+	// A read-only status path still reflects the last measured capabilities, so
+	// the catalog and the generated routes agree. It issues no probe requests,
+	// and a missing or unreadable record simply leaves the static registry.
+	if ledger, err := loadCapabilityLedger(m.Paths); err == nil {
+		_ = publishCapabilities(m.Paths, ledger)
+	}
 	return subscriptionModels(models), nil
 }
 
@@ -726,6 +783,22 @@ func (m *Manager) ReconcileModels(ctx context.Context) ([]server.SubscriptionPro
 	if err != nil {
 		return nil, err
 	}
+	// Measure newly seen Codex models once, persist the result, then publish it
+	// before any ownership or route derivation reads the registry.
+	ledger, err := loadCapabilityLedger(m.Paths)
+	if err != nil {
+		return nil, sanitize(err)
+	}
+	ledger, probed := m.discoverCapabilities(ctx, initial, ledger)
+	if probed {
+		if err := saveCapabilityLedger(m.Paths, ledger); err != nil {
+			return nil, sanitize(err)
+		}
+	}
+	if err := publishCapabilities(m.Paths, ledger); err != nil {
+		return nil, sanitize(err)
+	}
+
 	previous, err := previousConfigOwnership(m.Paths)
 	if err != nil {
 		return nil, sanitize(err)

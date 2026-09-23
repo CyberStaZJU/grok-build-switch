@@ -62,6 +62,7 @@ type Server struct {
 	subscriptionProxyState     *subscriptionProxySelection
 	subscriptionProxyStateOnce sync.Once
 	routingMu                  sync.Mutex
+	streamGuardClient          *http.Client
 	csrfMu                     sync.Mutex
 	csrfSecret                 string
 	reconfigureLAN             func(bool) error
@@ -214,6 +215,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/subscription-proxy/v1/", s.handleSubscriptionInference)
 	mux.HandleFunc("/codebuddy-proxy/v1", s.handleCodeBuddyProxy)
 	mux.HandleFunc("/codebuddy-proxy/v1/", s.handleCodeBuddyProxy)
+	mux.HandleFunc(StreamGuardPathPrefix, s.handleStreamGuard)
+	mux.HandleFunc(StreamGuardPathPrefix+"/", s.handleStreamGuard)
+	mux.HandleFunc("/api/stream-guard", s.handleStreamGuardSettings)
 	mux.HandleFunc("/api/codebuddy", s.handleCodeBuddyAPI)
 	mux.HandleFunc("/api/codebuddy/models", s.handleCodeBuddyModels)
 	mux.HandleFunc("/api/codebuddy/test", s.handleCodeBuddyTest)
@@ -475,6 +479,9 @@ type profileMutationDTO struct {
 	DefaultModel           string                    `json:"default_model"`
 	DefaultReasoningEffort string                    `json:"default_reasoning_effort"`
 	Models                 []profileMutationModelDTO `json:"models"`
+	// UpstreamBaseURL keeps the real endpoint when BaseURL points at the
+	// in-process streaming guard; without it an edit would lose the upstream.
+	UpstreamBaseURL string `json:"upstream_base_url,omitempty"`
 }
 
 type profileLocalDTO struct {
@@ -514,6 +521,7 @@ func profileMutationFromProfile(profile profiles.Profile) profileMutationDTO {
 		BaseURL: profile.BaseURL, APIKey: profile.APIKey,
 		AvailableModels: append([]string(nil), profile.AvailableModels...), DefaultModel: profile.DefaultModel,
 		DefaultReasoningEffort: profile.DefaultReasoningEffort,
+		UpstreamBaseURL:        profile.UpstreamBaseURL,
 		Models:                 make([]profileMutationModelDTO, len(profile.Models)),
 	}
 	for i, model := range profile.Models {
@@ -532,7 +540,8 @@ func (dto profileMutationDTO) profile() profiles.Profile {
 	profile := profiles.Profile{
 		ID: dto.ID, Name: dto.Name, UpstreamFormat: dto.UpstreamFormat, BaseURL: dto.BaseURL, APIKey: dto.APIKey,
 		AvailableModels: append([]string(nil), dto.AvailableModels...), DefaultModel: dto.DefaultModel,
-		DefaultReasoningEffort: dto.DefaultReasoningEffort, Models: make([]profiles.ModelDef, len(dto.Models)),
+		DefaultReasoningEffort: dto.DefaultReasoningEffort, UpstreamBaseURL: dto.UpstreamBaseURL,
+		Models: make([]profiles.ModelDef, len(dto.Models)),
 	}
 	for i, model := range dto.Models {
 		profile.Models[i] = profiles.ModelDef{
@@ -557,7 +566,7 @@ func managedProfileEditableUpdate(previous, requested profiles.Profile, allowRea
 		requested.BaseURL != previous.BaseURL ||
 		requested.APIKey != previous.APIKey ||
 		requested.DefaultModel != previous.DefaultModel ||
-		(!allowReasoningEffort && requested.DefaultReasoningEffort != previous.DefaultReasoningEffort) ||
+		(!allowReasoningEffort && !sameDefaultReasoningEffort(requested.DefaultReasoningEffort, previous.DefaultReasoningEffort)) ||
 		!reflect.DeepEqual(requested.AvailableModels, previous.AvailableModels) ||
 		len(requested.Models) != len(previous.Models) {
 		return profiles.Profile{}, false
@@ -566,7 +575,9 @@ func managedProfileEditableUpdate(previous, requested profiles.Profile, allowRea
 		return profiles.Profile{}, false
 	}
 	updated := previous
-	updated.DefaultReasoningEffort = requested.DefaultReasoningEffort
+	if !sameDefaultReasoningEffort(requested.DefaultReasoningEffort, previous.DefaultReasoningEffort) {
+		updated.DefaultReasoningEffort = requested.DefaultReasoningEffort
+	}
 	for i := range previous.Models {
 		if !subscriptionModelMetadataEqual(requested.Models[i], previous.Models[i]) {
 			return profiles.Profile{}, false
@@ -574,6 +585,20 @@ func managedProfileEditableUpdate(previous, requested profiles.Profile, allowRea
 		updated.Models[i].ContextWindow = requested.Models[i].ContextWindow
 	}
 	return updated, true
+}
+
+// sameDefaultReasoningEffort treats an unset default as "none". The provider
+// editor has no empty option for this field, so a managed profile that never
+// set an effort comes back as "none"; the two must compare equal or an
+// untouched save is rejected as an ownership change.
+func sameDefaultReasoningEffort(requested, stored string) bool {
+	canonical := func(value string) string {
+		if value = strings.TrimSpace(value); value == "none" {
+			return ""
+		}
+		return value
+	}
+	return canonical(requested) == canonical(stored)
 }
 
 func managedModelSupportsEffort(profile profiles.Profile, effort string) bool {
@@ -735,6 +760,14 @@ func (s *Server) handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		// markers so startup ensure/reconcile does not create duplicate providers.
 		if previousErr == nil && strings.TrimSpace(profile.Source) == "" && strings.TrimSpace(previous.Source) != "" {
 			profile.Source = previous.Source
+		}
+		// UpstreamBaseURL is provenance kept while BaseURL points at the
+		// in-process streaming guard. The editor field shows the guard endpoint,
+		// so a save that omits it would strand the guard with no upstream to
+		// forward to; keep the stored value whenever the guard is still enabled.
+		if previousErr == nil && strings.TrimSpace(profile.UpstreamBaseURL) == "" &&
+			strings.TrimSpace(previous.UpstreamBaseURL) != "" && isStreamGuardBaseURL(profile.BaseURL) {
+			profile.UpstreamBaseURL = previous.UpstreamBaseURL
 		}
 		profiles.ApplyKnownContextDefaults(&profile)
 		updated, err := s.Profiles.Update(id, profile)
@@ -1273,15 +1306,27 @@ func probeModel(ctx context.Context, baseURL, apiKey, upstreamFormat, apiBackend
 		return err
 	}
 	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// A gateway that does not implement this backend path may still answer
+		// 200 with its HTML landing page. Reject that so "测试上游连接" cannot
+		// report success for an endpoint that will never serve inference, and
+		// tell the user which protocol/URL form the gateway actually serves.
+		if looksLikeHTML(raw) {
+			return fmt.Errorf("%s: 响应是 HTML 页面而不是 JSON，%s 端点不在此地址。请改用该网关支持的协议（如 Responses），或把 /v1 补进 Base URL", resp.Status, backend)
+		}
 		return nil
 	}
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	msg := strings.TrimSpace(string(raw))
 	if msg == "" {
 		msg = resp.Status
 	}
 	return fmt.Errorf("%s: %s", resp.Status, msg)
+}
+
+func looksLikeHTML(raw []byte) bool {
+	trimmed := bytes.TrimSpace(bytes.ToLower(raw))
+	return bytes.HasPrefix(trimmed, []byte("<!doctype html")) || bytes.HasPrefix(trimmed, []byte("<html"))
 }
 
 func rejectOfficialAnthropic(baseURL string) error {

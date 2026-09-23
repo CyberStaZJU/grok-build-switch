@@ -1,6 +1,6 @@
 # Grok Build Switch — 维护者文档
 
-> 面向维护者的当前架构、产品边界与数据安全约定。最后更新：2026-08-18。
+> 面向维护者的当前架构、产品边界与数据安全约定。最后更新：2026-09-08。
 
 ---
 
@@ -81,13 +81,15 @@ HTTP request
 - 自定义供应商切换保留 `config.toml` 的组合自定义模型目录，以兼容旧会话固定的旧别名；
 - `/m` 混合显示各自定义供应商**已启用**的模型；官方 default 时清空自定义 `[model.*]`（档案仍保留）；「设为默认」只改 default；
 - 路由更新只处理配置与模型选择；普通 Profile UI 只管理基础连接信息和常用模型；
+- 启用自定义供应商时必须同时写入 `[models].session_summary = <默认模型>`（`internal/config/tomlio.go` 的 `auxTitleModel`）。Grok Build 用它选模型生成会话标题与摘要；不写入时它会请求内置 Grok 模型，第三方网关返回 404，标题生成失败但主流程仍继续，属于不易察觉的配置缺口。切回官方账号时该键必须清除，换供应商时必须改指新供应商的默认模型；
+- 连接测试（`probeModel`）不得把「HTTP 200 + HTML」当作连通：网关对未实现的路径可能返回自己的首页。该检查只拒绝 HTML 响应，不放宽 JSON 网关、`messages` 兼容网关或 `204` 空响应；
 - UI 不超出当前产品范围。
 
 ---
 
 ## 客户端范围
 
-仅适配 Grok 客户端。保留 CLIProxyAPI 的 GPT/ChatGPT 供应商及 Grok 所需的 Responses 代理能力；不提供 Codex 客户端配置管理或 CodeBuddy Chat→Responses 桥接。不得因移除客户端适配而删除订阅认证、GPT模型或供应商路由。
+按 2026-09-08 用户决策，Switch 仅管理 Grok Build，不再提供 Codex 客户端入口、配置写入或专用代理。Grok 的 GPT/ChatGPT 与 Google 订阅代理、WorkBuddy、供应商路由及认证继续保留。不得将订阅来源中的 Codex 名称误认为已移除的客户端适配。
 
 ## 4. Collaboration 控制面
 
@@ -102,7 +104,7 @@ HTTP request
 ### 4.2 角色与 workflow 不变量
 
 - 主协调、任务拆解、主实现、困难实现 / 复核都是独立配置；可以复用同一 Standard anchor，但每个角色必须单独保存 `speed_tier` 和 reasoning effort，二者不可互相推断。
-- Standard route 必须显式自锚定，使用 exact-registry 可信 `subscription/codex/<physical-id>` 别名且不注入 priority。Fast route 必须显式锚定同 provider Standard route，并精确解析为 `<standard-alias>-fast`；只有 `gpt-5.6-terra`、`gpt-5.6-sol`、`gpt-5.6-luna` 在当前 registry 中可信。禁止按后缀、显示名、provider 名或 GPT 名称推断关系。
+- Standard route 必须显式自锚定，使用 exact-registry 可信 `subscription/codex/<physical-id>` 别名且不注入 priority。Fast route 必须显式锚定同 provider Standard route，并精确解析为 `<standard-alias>-fast`。可信集合由两部分组成：静态名单（`gpt-5.6-terra`、`gpt-5.6-sol`、`gpt-5.6-luna`），以及订阅代理在目录更新时实测得到的能力覆盖层（见「订阅代理模型能力探测」）。静态名单之上的实测结果只对该模型自身生效，不改变其他模型的信任状态。禁止按后缀、显示名、provider 名或 GPT 名称推断关系。
 - Fast 通过 CLIProxy 受管完整 YAML 合并，仅对精确可信 Fast aliases 注入 `service_tier: priority`。Standard 不得注入。缺失/歧义/伪造 Fast 必须失败，绝不静默回退；Fast 通常更快且消耗更多订阅 credits，但文档/UI 不声称固定倍率。
 - `gbs-terra-coordinator`、`gbs-luna-evidence` 与 `gbs-sol-builder` 是为保持旧 manifest 所有权而保留的稳定 basename，不再绑定 Terra/Luna/Sol 模型；`gbs-main-implementation` 是第四个 role 文件。
 - capability 分别为：主协调 `all`、任务拆解 `read-only`、主实现 `all`、困难实现 / 复核 `all`。
@@ -164,7 +166,7 @@ HTTP request
 - 修改请求的 CSRF 防护；
 - 请求体大小限制和严格解码；
 - 响应脱敏，禁止返回 API Key、OAuth token 或私有 header；
-- 不新增已移除能力的兼容端点。
+- 只增加当前明确批准的客户端入口；不恢复无关旧扩展。
 
 ---
 
@@ -194,7 +196,8 @@ go test -tags wailsgui .
 产品边界相关变更还应覆盖：
 
 - 官方登录和官方路由；
-- 普通 Profile 与统一路由事务；
+- 普通 Profile 与统一路由事务，含辅助模型键：启用自定义供应商后 `[models].session_summary` 指向该供应商默认模型，换供应商时改指，切回官方时清除；
+- 上游连接测试对 HTML 200 判失败、对 JSON 成功响应放行；
 - Max Collaboration schema v5 exact Standard/Fast 解析、concrete effort capability、preview/fingerprint、canonical artifact ownership/type/drift/race、跨文件回滚、policy-only disable 和 workflow validate-only；
 - CLIProxy 完整 YAML ownership merge、canonical ledger/认证 marker、二次 GET rebase、write-ahead recovery journal、跨进程 operation lock、受管 alias 出现/消失的稳定目录收敛、只读 `Models` 与显式 `ReconcileModels` 分离、Standard 无 priority 与精确 Fast `service_tier: priority`；
 - completion/reasoning token 的 aggregate、recent 和 UI 展示；
@@ -203,6 +206,18 @@ go test -tags wailsgui .
 - LAN、SSH、菜单栏和 Wails；
 - DataDir 遗留清理不会触及 Grok CLI 官方认证或订阅代理凭据；
 - 当前 UI 和当前产品文档不出现已移除能力。
+
+## 订阅代理模型能力探测
+
+订阅代理的 Codex 模型是否提供 Fast 与推理档位，由 `internal/cliproxy/capability.go` 在目录更新（`ReconcileModels`）时实测决定，而不是按模型名推断。
+
+- **唯一可用信号**：CLIProxyAPI 自己校验 `reasoning_effort`，非法值返回 HTTP 400 并列出该模型接受的档位（`level "x" not supported, valid levels: ...`）。请求在推理前被拒，不消耗 completion token，也可直接用物理模型 ID 探测，无需先存在别名。
+- **不要声称 Fast 已被证明生效**：`service_tier` 不被校验（传非法值仍 200），且 Standard 与已知可用的 `-fast` 别名都回报 `service_tier: "default"`。Fast 以「代理接受并解析该模型」为准开启，属可获得的最强信号。UI 与文档不得表述为已验证更快，也不得给出固定倍率。
+- **不可用即不授予**：无可用账号（`auth_unavailable` / `model_not_found`）记为 `unavailable`，不授予能力并在下次目录更新重试；端点不匹配（如仅支持 `/v1/images/*`）记为已测量且无档位，不再重测。
+- **记录与失效**：能力存于 `cliproxy/capability.json`，`efforts_known` 区分「无档位」与「未测量」，未知 `version` fail closed。目前没有缓存失效策略——模型一旦测量便不再重测，需要重新探测时删除该文件。新增字段或改变语义时必须同步提升 `capabilityLedgerVersion`。
+- **顺序约束**：发布实测能力必须早于读取所有权账本；`validateConfigOwnership` 会通过 registry 解析 Fast 别名，顺序颠倒会让探测得到的别名校验失败。`publishCapabilities` 同时从 `config-ownership.json` 恢复已拥有的 Fast 模型，因此 `capability.json` 丢失只降级为「有 Fast、无档位」，不会阻断启动。
+- **触发边界**：探测只在 `ReconcileModels`（目录更新）发生，只针对新出现或档位未记录的模型；只读的 `Models` 与 `WriteConfig` 只发布已记录结果。单模型 20s、单次总预算 45s、每次最多 24 个模型，避免拖慢保存请求。
+- **只增不减**：实测覆盖层不能移除静态名单或 `gpt-6-astra` 的「仅推理、不生成 Fast」声明。
 
 发布前运行构建、签名/公证检查和安装包 smoke test。构建产物必须留在 `dist/` 或仓库外，不提交 Git。真实 workflow/model smoke、写入真实 `~/.grok`、推送、发布和删除外部 evidence 都是单独授权动作；本地单元测试与 `validate_only` 不替代这些确认。
 

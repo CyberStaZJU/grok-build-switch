@@ -506,6 +506,36 @@ func TestDefaultReasoningEffortControl(t *testing.T) {
 	}
 }
 
+func TestPerModelReasoningEffortDeclaration(t *testing.T) {
+	appData, err := assets.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`const MODEL_REASONING_TIERS = ["low", "medium", "high", "xhigh", "max"]`,
+		`data-field="supports_reasoning_effort"`,
+		`data-reasoning-tier="${escapeAttr(tier)}"`,
+		"支持推理强度（Grok Build 只为勾选的模型提供档位选择）",
+		`reasoning_efforts_source: modelReasoningEffortSource(reasoningEfforts, row.dataset.reasoningEffortsSource)`,
+		`const declared = cardDeclaredReasoningEfforts(row)`,
+	} {
+		if !bytes.Contains(appData, []byte(expected)) {
+			t.Fatalf("per-model reasoning declaration contract missing: %s", expected)
+		}
+	}
+	// Support must come from the explicit control, not from the tier list, so a
+	// model that advertises effort with an empty list still round-trips.
+	for _, stale := range []string{
+		`supports_reasoning_effort: reasoningEfforts.length > 0`,
+		`card.dataset.reasoningEffortsSource = model.reasoning_efforts_source || "default"`,
+		`reasoning_efforts_source: row.dataset.reasoningEffortsSource || "default"`,
+	} {
+		if bytes.Contains(appData, []byte(stale)) {
+			t.Fatalf("stale reasoning declaration behavior remains: %s", stale)
+		}
+	}
+}
+
 func TestCodeBuddyPageContract(t *testing.T) {
 	htmlData, err := assets.ReadFile("ui/index.html")
 	if err != nil {

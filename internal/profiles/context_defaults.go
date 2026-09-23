@@ -9,11 +9,11 @@ import "strings"
 // stay editable per model. Keep in sync with CONTEXT_WINDOW_SUGGESTIONS in
 // ui/app.js.
 var knownContextWindows = map[string]int64{
-	// CLIProxyAPI 7.2.152: use the common Codex tier limit, not Pro-only capacity.
+	// CLIProxyAPI 7.3.9: use the common Codex tier limit, not Pro-only capacity.
 	"gpt-5.6-terra": 372000,
-	"gpt-5.6-sol":   372000,
+	"gpt-5.6-sol":   320000,
 	"gpt-5.6-luna":  372000,
-	"gpt-6-astra":   272000,
+	"gpt-6-astra":   320000,
 	// Gemini 订阅代理（Gemini 系列 1M）
 	"gemini-3.6-flash-high": 1048576,
 	"gemini-3.7-flash-high": 1048576,

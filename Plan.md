@@ -1,11 +1,7 @@
 # Plan.md — 工作计划
 
-> 代理执行任务的计划与进度跟踪。任务完成后归档到「已完成」并更新 Status.md。
-> 最后更新：2026-09-07
-
-## 当前任务
-
-暂无正在进行的任务。当前阶段需求均已完成并通过验证。
+> 代理执行任务的计划与进度跟踪。任务完成后归档到「已完成」并更新 Status.md；历史细节由 [docs/status.md](docs/status.md) 承载。
+> 最后更新：2026-09-23
 
 ## 待办（按优先级）
 
@@ -16,14 +12,22 @@
 2. **技术债**
    - [ ] 拆分 `server.go`（按配置、模型探测等资源）
    - [ ] 加强 TOML 直编与统一路由的一致性校验
+   - [ ] 清理 `cliproxy/config.yaml` 中先于 0.9.15 的 2 条重复 priority 规则（`mergeManagedFastRule` 当前只按 fingerprint 处理受管规则）
+   - [ ] 为能力探测评估缓存失效策略：目前模型一旦 `efforts_known` 便不再重测，上游改变档位或新增 Fast 支持不会被发现
+3. **可选（等待用户决定）**
+   - [ ] 评估是否升级内嵌 CLIProxyAPI 到 7.3.15（含 `fix(codex): compact client model catalog and preserve required fields`、registry 定义更新）
+   - [ ] 跟进 `gpt-6-sol` 的账号/上游访问权限（当前 `model_not_found`，无法探测或使用）
+   - [ ] 评估是否让模型目录按上游 `/v1/models` 实时校验，避免第三方上游下线模型后再次留下陈旧选项
+   - [ ] 评估在多供应商混合目录下是否也要固定其他依赖单一模型的辅助调用（当前只固定 `session_summary`）
 
-## 已完成
+## 已完成（近期）
 
-- [x] 2026-09-07 升级 CLIProxyAPI 到 7.2.152，支持 gpt-6-astra 与 gemini-3.7/3.8-flash-high。
-- [x] 2026-09-07 实现 Codex 与 Google 只读额度读取、同厂商聚合端点与桌面概览展示。
-- [x] 2026-09-07 更新 Codex (372k)、Astra (272k)、Gemini (1048k) 上下文长度建议值，并修复前端表单步长为 1 token。
-- [x] 2026-09-07 全量 Go、vet、并发 race、28 项前端单元测试及隔离浏览器端到端验收通过。
-- [x] 2026-09-07 构建 0.9.5 build 19 覆盖安装至 `/Applications/Grok Build Switch.app`，重启并完成生产额度实测与 Astra 真实推理验证（HTTP 200 Pong!）。
-- [x] 2026-09-05 回退为 Grok 专用，保留 GPT 代理，构建安装 0.9.4 build 18。
-- [x] 2026-09-02 修复 CodeBuddy 工具调用 ID 协议兼容，构建安装 0.9.3 build 12。
-- [x] 2026-08-30 增加 Sol Ultra 档位支持与 CodeBuddy 模型暴露多选，构建安装 0.9.2 build 11。
+- [x] 2026-09-23 订阅代理模型能力自动探测：目录更新时为 Codex 新模型探测可接受推理档位，并据此自动生成 Standard/Fast 配对与档位声明；构建安装 `0.9.15 (build 31)`，生产实测 7 条 Fast 别名与真实请求通过，旧 bundle 无备份删除。
+- [x] 2026-09-20 升级内嵌 CLIProxyAPI 到 `7.3.9`，重新构建并安装 Grok Build Switch `0.9.14 (build 30)`；保留配置、账号认证和订阅凭据，生产重启后健康检查通过；确认新实例稳定后删除旧回退 App。
+- [x] 2026-09-20 重新构建并安装 `0.9.13 (build 29)`：隔离 HOME 通过全量构建门禁，使用外部原子安装锁、`.incoming` 预校验、旧进程等待退出、健康检查后卸载旧包，确认新实例健康且无并发残留。
+- [x] 2026-09-20 修复 `PUT /api/profiles/{id}` 丢弃 `upstream_base_url`（编辑页保存会让流式保护失去上游 → 全部请求 503）；补经 handler 驱动的回归测试，生产已恢复该字段并验证端到端。
+- [x] 2026-09-20 定位并处理 API 池 `gpt-6-astra` 404：原始上游不提供 Astra，已从 API 池模型目录移除；订阅代理别名保留并记录实际响应模型。
+- [x] 2026-09-20 删除旧 `0.9.12` 及更早版本的 App、DMG 和 `.sha256` 安装包；保留配置快照、日志和运行数据。
+- [x] 2026-09-19 流式保护：诊断 API 池 `keepalive` 序列化错误（网关自定义 SSE 帧撞上 Grok CLI 封闭事件枚举）；实现 `internal/streamguard` 与 loopback-only `/stream-guard/v1/*`；真实帧回放加固（含 `response.failed` 缺 `output` 的回填）；顺带把 CodeBuddy `finish_reason: "error"` 归一为 `null`；修复开关 `routingMu` 重入死锁；构建安装 `0.9.12 (build 28)` 并为「API 池」启用。
+- [x] 2026-09-18 接入 API 池供应商：启用自定义供应商时一并写入 `[models].session_summary`，消除内置 `grok-4.6` 的 404 标题请求；连接测试不再把网关 HTML 200 当成功。安装 `0.9.11 (build 27)`。
+- [x] 2026-09-15 修复 CodeBuddy 托管 Profile 编辑页必然 409（未设置档位与 `none` 视为同值）；模型卡片支持按模型声明推理强度档位，DeepSeek `deepseek-flash` 声明 `low/medium/high/xhigh/max`。安装 `0.9.10 (build 26)`、`0.9.9 (build 25)`。

@@ -109,3 +109,37 @@ func TestProbeModelSupportsThirdPartyMessagesGateway(t *testing.T) {
 		t.Fatal("third-party Messages gateway was not called")
 	}
 }
+
+// A gateway can answer an unimplemented backend path with its HTTP 200 HTML
+// landing page. Reporting that as a successful connection test hides a
+// configuration that can never serve inference, so the probe must fail and say
+// which protocol/URL form the address actually serves.
+func TestProbeModelRejectsHTMLSuccessResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!doctype html>\n<html lang=\"zh-CN\"><head></head></html>"))
+	}))
+	defer upstream.Close()
+
+	err := probeModel(t.Context(), upstream.URL+"/v1", "key", "openai_chat", "chat_completions", "some-model")
+	if err == nil {
+		t.Fatal("an HTML 200 response must not count as a successful probe")
+	}
+	if !strings.Contains(err.Error(), "HTML") {
+		t.Fatalf("error should explain the response was HTML: %v", err)
+	}
+}
+
+// The check must not reject a gateway that answers with real JSON.
+func TestProbeModelAcceptsJSONSuccessResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed"}`))
+	}))
+	defer upstream.Close()
+
+	if err := probeModel(t.Context(), upstream.URL+"/v1", "key", "openai_responses", "responses", "some-model"); err != nil {
+		t.Fatal(err)
+	}
+}

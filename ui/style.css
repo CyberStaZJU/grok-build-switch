@@ -1083,6 +1083,25 @@ textarea:focus,
   margin-top: 8px;
 }
 
+.reasoningTiers {
+  margin-top: 10px;
+}
+
+.reasoningTiersRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 6px;
+}
+
+.reasoningTiersRow .check {
+  margin-top: 0;
+}
+
+.reasoningTiersRow .check:has(input:disabled) {
+  color: var(--muted);
+}
+
 textarea {
   resize: vertical;
   min-height: 56px;
@@ -1408,3 +1427,7 @@ textarea {
 .headerRight { flex-wrap: wrap; }
 .headerRight .btn { white-space: nowrap; }
 @media (max-width: 640px) { .headerRight .btn { flex: 1 0 auto; } }
+
+/* Keep long local configuration paths inside the mobile editor card. */
+.configEditor .rowBetween > div { min-width: 0; }
+#configPathLabel { overflow-wrap: anywhere; }

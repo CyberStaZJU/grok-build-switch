@@ -24,7 +24,11 @@
 3. 拉取或填写该上游可用模型；
 4. 保存 Profile。
 
-普通 Profile 用于基础连接和常用模型选择。
+普通 Profile 用于基础连接和常用模型选择。启用（保存为当前默认）时，Switch 除写入 `[models].default` 外，还会把 `[models].session_summary` 一并指向该供应商的默认模型：Grok Build 用这个模型生成会话标题和摘要，若不指定，它会去请求内置 Grok 模型，而第三方上游（例如 API 池）并不提供该模型，会返回 404 并让标题生成失败。切回官方账号或换供应商时该键会同步更新或清除，不会残留在上一家上游。
+
+> 上游协议按网关实际实现选择。API 池这类网关在 `/v1` 下同时提供 Responses 与 Chat Completions；在根路径直接给 Base URL 时只有 Responses 可用，选 `OpenAI Chat` 会拿到网关首页 HTML 并在推理时挂住。拿不到预期结果时，用「测试上游连接」确认——它会把 HTML 200 判为失败并提示换协议或补 `/v1`。
+
+> **推理中途报 `serialization error: unknown variant ...`**：这类第三方网关可能在静默期插入非标准心跳帧（如 `{"type":"keepalive"}`），Grok 客户端的流式事件类型是封闭枚举，遇到未知类型会中断整轮且不重试。为该供应商开启**流式保护**后，请求先经本机转发端点过滤掉这些帧，其余内容原样转发；供应商的 Base URL 会被改指本机端点，原地址保存在 Profile 中，关闭保护即还原。
 
 每个模型卡片都有「上下文窗口」字段：常见模型（Kimi `k3-256k`、Codex `gpt-5.6-*`、Gemini `gemini-3.7-flash-high`、订阅 Grok `grok-4.5/4.6`、CodeBuddy `hy4-preview` / `glm-5.3` / `glm-5.3-flash` / `kimi-k3-2` / `hy3` / `deepseek-v4-flash`）会自动填入建议值，可直接修改；填 `0` 表示不写进 `config.toml`，由 Grok 使用自己的默认（自定义模型约 200k）。上游 `/v1/models` 不返回上下文长度，拉取模型后建议核对一次该字段，否则 `/m` 切到该模型时 Grok 的上下文用量上限和 auto-compact 阈值都按错误窗口计算。
 
@@ -37,13 +41,17 @@
 - **默认模型**（写入 Grok `default`；explore / plan 会跟随它）；
 - **推理强度**（medium / high / xhigh / max / none）；并在该供应商的模型卡片上声明支持推理强度。
 
+模型卡片展开「模型高级设置」后可声明该模型的推理能力：勾选「支持推理强度」，再勾选它实际接受的档位（low / medium / high / xhigh / max）。保存后 Switch 会把 `supports_reasoning_effort = true` 与 `reasoning_efforts = [...]` 写进该模型的 `[model.<id>]`，Grok Build 才会在 `/m` 和 `/effort` 里为这个模型提供档位选择；不勾选则不声明，Grok 不显示档位。默认模型声明的档位会收窄上方「默认推理强度」菜单，避免保存出上游不接受的档位。
+
+示例：DeepSeek 官方（`https://api.deepseek.com/`）的 `deepseek-flash` 已按此声明 `low / medium / high / xhigh / max`；该 API 会校验 `reasoning_effort`，声明外的值会被上游拒绝。
+
 `max` 是同一个 GPT 模型的**推理强度值**，不是独立模型 ID，所以不会作为单独模型出现在 `/m`。当前 Switch 暂只接入到 Grok Build 1.0.13 支持的最高原生档位 `max`；`ultra` 不写入模型能力列表，也不提供为默认值。使用 `/effort max` 或 `--effort max` 可选择该档位。
 
 「设为默认」只改新会话默认，不会把其他供应商的已启用模型从 `/m` 拿掉。保存后更新 `~/.grok/config.toml` 与 `routing.json`。
 
 ## Grok 客户端与 GPT 模型
 
-Switch 只管理 Grok 客户端，不提供 Codex 客户端配置切换或 WorkBuddy Responses 桥接。GPT/ChatGPT 模型仍可通过“订阅代理”创建供应商，供 Grok 使用；订阅代理中的 Codex/ChatGPT 指供应商来源，不是对 Codex 客户端的适配。现有账号与凭据保持。
+Switch 只管理 Grok 客户端，不提供 Codex 客户端入口或配置切换。GPT/ChatGPT 模型仍通过“订阅代理”供 Grok 使用；订阅代理中的 Codex/ChatGPT 指供应商来源。现有账号与凭据保持。
 
 ## 6. Max Collaboration（已移除）
 
@@ -167,4 +175,3 @@ go run ./cmd/codebuddy-setup -activate -base-url http://127.0.0.1:8788/v1
 启动时设置 `CODEBUDDY_ACTIVATE=1` 可在有 Key 时自动激活。  
 代理会强制上游流式，并清洗中间帧 `finish_reason:""`，否则 Grok 无法反序列化。  
 启用时会给每个 CodeBuddy 模型写入 `stream_tool_calls = false`：上游后续 SSE 分片会把 `function.name` 写成空串，Grok 增量合并后工具名会丢。
-

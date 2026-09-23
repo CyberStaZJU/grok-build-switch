@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Grok Build Switch</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/style.css?v=48">
+  <link rel="stylesheet" href="/style.css?v=50">
 </head>
 <body>
   <div class="shell">
@@ -127,7 +127,7 @@
                     <option value="none">禁用推理 (none)</option>
                   </select>
                 </div>
-                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、none。当前 Grok Build 兼容范围暂只接入到 max；其他上游若不支持可能静默忽略。</span>
+                <span id="reasoningEffortStatus" class="muted tiny" role="status">可选：medium、high、xhigh、max、none。Grok Build 只为「模型高级设置」里勾选支持推理强度的模型提供档位选择；其他上游若不支持可能静默忽略。</span>
               </label>
               <label class="field">协议格式
                 <select id="upstreamFormat">
@@ -500,6 +500,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=54"></script>
+  <script src="/app.js?v=57"></script>
 </body>
 </html>

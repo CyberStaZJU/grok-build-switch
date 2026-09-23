@@ -1,6 +1,6 @@
 # Grok Build Switch 产品文档
 
-> 面向用户与维护者的当前产品边界、数据和使用说明。最后更新：2026-08-03。
+> 面向用户与维护者的当前产品边界、数据和使用说明。最后更新：2026-09-08。
 
 ---
 
@@ -88,6 +88,12 @@ Profile 用于保存一个上游所需的基础信息：
 
 Profile 保持普通、可理解的基础模型选择界面。
 
+启用一个自定义供应商时，Switch 除 `[models].default` 外还会写入 `[models].session_summary = <该供应商默认模型>`。Grok Build 用这个键选模型生成会话标题与摘要；不指定时它会请求内置 Grok 模型，第三方网关（如 API 池）通常不提供该模型并返回 404。切回官方账号会清除该键，换供应商会改指新供应商的默认模型，以免残留在上一家上游。
+
+`base_url` 与 `api_backend` 必须匹配网关实际实现。同一网关在根路径与 `/v1` 下暴露的协议可能不同：API 池在 `/v1` 下同时支持 Responses 与 Chat Completions，而在根路径只有 Responses 可用。连接测试会把「HTTP 200 + HTML 首页」判为失败，避免把不可用的地址组合报成连通。
+
+部分第三方网关会在流式响应中插入非标准心跳帧（例如 `data: {"type":"keepalive"}`）。Grok 客户端的流式事件类型是封闭枚举，遇到未知类型会直接中断整轮推理且不重试。Switch 的**流式保护**把该供应商的请求先交给本机 `127.0.0.1` 上的转发端点：它按 SSE 帧过滤，丢弃枚举外的帧，其余内容逐字节转发，同时保留原上游地址、凭据与模型改写。启用与关闭只改变客户端连接的地址，不改变供应商配置本身。
+
 ### 3.2 默认模型写入路由
 
 产品 UI 不再提供独立「模型路由」页。用户在供应商编辑页选择默认模型与推理强度（medium / high / xhigh / max / none）；保存后服务端把该选择写入 `default`，并强制 `subagents.explore` / `subagents.plan` 跟随。当前 Grok Build 兼容范围暂只接入到 `max`，不写入或提供 `ultra`。`web_search` 仍由路由事务在具备能力时处理。
@@ -107,7 +113,7 @@ Max Collaboration 已从当前产品移除，不再作为与 Grok Build 适配�
 
 Collaboration schema v5 为每个角色分别保存同一可信 Codex 订阅供应商中的 **Standard route anchor**、显式 `speed_tier` 和推理强度；允许多个角色复用同一锚点。Standard 使用原有逻辑模型身份，不注入 priority。Fast 解析为同一物理模型的精确 `subscription/codex/<model>-fast` 别名，由 CLIProxy 注入 `service_tier: priority`；它通常更快，但会消耗更多订阅 credits，且没有可可靠声称的固定倍率。
 
-Standard/Fast 关系只信任 Switch exact registry 中 Terra/Sol/Luna 的显式同供应商元数据，不从后缀、显示名、provider 名或 GPT 名称推断。Fast partner 缺失、歧义或伪造时直接失败，不静默回退。推理强度在解析后的具体 Standard/Fast route 上校验；只有该 route 明确声明或经用户授权 probe 证明支持所选 effort 时才可应用。未知 capability 会 fail closed。
+Standard/Fast 关系只信任 Switch exact registry 的显式同供应商元数据，不从后缀、显示名、provider 名或 GPT 名称推断。可信集合包含静态名单（Terra/Sol/Luna）以及订阅代理在目录更新时为 Codex 模型实测得到的能力（见 `docs/status.md` 的「订阅代理模型能力自动探测」）；实测只证明代理接受并解析该模型，**不证明 `service_tier: priority` 已生效**。Fast partner 缺失、歧义或伪造时直接失败，不静默回退。推理强度在解析后的具体 Standard/Fast route 上校验；只有该 route 明确声明或经实测确认支持所选 effort 时才可应用。未知 capability 会 fail closed。
 
 schema v1/v2 读取时保留其 Standard 速度语义，schema v3 保留已保存的 Standard/Fast 选择，schema v4 迁移旧预算与并发控制；四者都只在内存迁移为 v5，读取不会重写旧字节，下一次显式保存才持久化 v5。若 v1/v2 旧记录本身保存了具体 `-fast` route ID，它不会被自动推断为 Fast；无法解析成可信 Standard 锚点时要求用户显式修复，以避免迁移意外提高 credit 档。
 

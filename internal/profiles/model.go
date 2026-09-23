@@ -48,6 +48,12 @@ type Profile struct {
 	Models                 []ModelDef `json:"models"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
+
+	// UpstreamBaseURL remembers the provider's real endpoint when BaseURL has
+	// been pointed at the in-process streaming guard. It is profile-local
+	// provenance, not a second routing source: ApplyCurrentRouting keeps
+	// projecting the profile, and the guard forwards here.
+	UpstreamBaseURL string `json:"upstream_base_url,omitempty"`
 }
 
 // Matches compares the view that can be projected to and reconstructed from

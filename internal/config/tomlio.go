@@ -15,6 +15,20 @@ import (
 	"grok_switch/internal/routing"
 )
 
+// auxTitleModelKey pins the model Grok uses for session titles and summaries.
+// Left unset behind a custom endpoint it resolves to a built-in Grok model,
+// which a third-party upstream rejects with HTTP 404; every custom provider
+// therefore pins it to its own default model. The value is derived on write
+// rather than stored on the Profile.
+const auxTitleModelKey = "session_summary"
+
+// auxTitleModel returns the model Grok should use for session titles and
+// summaries. It follows the profile's default model so a custom endpoint never
+// falls back to a built-in Grok model it cannot serve.
+func auxTitleModel(profile profiles.Profile) string {
+	return strings.TrimSpace(profile.DefaultModel)
+}
+
 func ImportProfile(path, name string) (profiles.Profile, error) {
 	doc, err := readDoc(path)
 	if err != nil {
@@ -101,7 +115,7 @@ func UseOfficialAuthText(data []byte) []byte {
 		case "endpoints":
 			out = append(out, removeAssignments(lines[i:end], "models_base_url")...)
 		case "models":
-			out = append(out, removeAssignments(lines[i:end], "default", "web_search", "default_reasoning_effort")...)
+			out = append(out, removeAssignments(lines[i:end], "default", "web_search", "default_reasoning_effort", auxTitleModelKey)...)
 		case "subagents":
 			// Drop legacy default_model; keep enabled and other user keys.
 			out = append(out, removeAssignments(lines[i:end], "default_model")...)
@@ -207,6 +221,9 @@ func SnippetForProfile(profile profiles.Profile) (string, error) {
 	if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" && effort != "none" {
 		b.WriteString("default_reasoning_effort = " + quote(effort) + "\n")
 	}
+	if title := auxTitleModel(profile); title != "" {
+		b.WriteString(auxTitleModelKey + " = " + quote(title) + "\n")
+	}
 	modelData, err := marshalModelSection(profile)
 	if err != nil {
 		return "", err
@@ -229,6 +246,11 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 		models["default_reasoning_effort"] = effort
 	} else {
 		delete(models, "default_reasoning_effort")
+	}
+	if title := auxTitleModel(profile); title != "" {
+		models[auxTitleModelKey] = title
+	} else {
+		delete(models, auxTitleModelKey)
 	}
 
 	modelTable := make(map[string]any, len(profile.Models))
@@ -567,6 +589,9 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 		if effort := strings.TrimSpace(profile.DefaultReasoningEffort); effort != "" && effort != "none" {
 			values["default_reasoning_effort"] = quote(effort)
 		}
+		if title := auxTitleModel(profile); title != "" {
+			values[auxTitleModelKey] = quote(title)
+		}
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(lines)+len(values))
@@ -582,9 +607,10 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 			seen[key] = true
 			continue
 		}
-		// Drop an empty/none default_reasoning_effort left by older writers;
-		// Grok rejects unknown enum variants including "".
-		if section == "models" && key == "default_reasoning_effort" {
+		// Drop managed keys this profile does not set: Grok rejects an empty
+		// reasoning-effort enum value, and a stale title model would keep
+		// pointing at the previous provider's endpoint.
+		if section == "models" && (key == "default_reasoning_effort" || key == auxTitleModelKey) {
 			continue
 		}
 		out = append(out, line)

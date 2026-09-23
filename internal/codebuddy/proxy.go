@@ -338,7 +338,13 @@ func sanitizeChunk(obj map[string]any, state *toolCallStreamState) {
 		if fr, exists := ch["finish_reason"]; exists {
 			switch v := fr.(type) {
 			case string:
-				if v == "" {
+				// Grok models finish_reason as a closed enum of
+				// stop/length/tool_calls/content_filter/function_call. An
+				// upstream that reports an out-of-band failure as
+				// `finish_reason: "error"` aborts the turn with a
+				// serialization error, so surface it as a normal stop and let
+				// the error channel carry the failure.
+				if v == "" || v == "error" {
 					ch["finish_reason"] = nil
 				}
 			case bool:

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"grok_switch/internal/codebuddy"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/remoteaccess"
 	"grok_switch/internal/settings"
@@ -225,6 +226,65 @@ func TestSubscriptionProfileUpdatePreservesDeclaredLowWhileChangingContextWindow
 	}
 	if updated.DefaultReasoningEffort != "low" || updated.Models[0].ContextWindow != 321000 {
 		t.Fatalf("updated profile = %#v", updated)
+	}
+}
+
+func TestCodeBuddyManagedProfileAcceptsUntouchedEffortValue(t *testing.T) {
+	s := newRoutingTestServer(t)
+	model := "deepseek-v4.1-flash"
+	baseURL := "http://127.0.0.1:17878/codebuddy-proxy/v1"
+	profile, err := s.Profiles.Create(profiles.Profile{
+		Name: "CodeBuddy", Source: codebuddy.SourceTag, UpstreamFormat: "openai_chat", BaseURL: baseURL, APIKey: "ck",
+		AvailableModels: []string{model}, DefaultModel: model, DefaultReasoningEffort: "",
+		Models: []profiles.ModelDef{{
+			Name: model, Model: model, BaseURL: baseURL, APIKey: "ck", APIBackend: "chat_completions",
+			SupportsReasoningEffort: true, ReasoningEfforts: []string{}, ContextWindow: 1000000,
+			MaxCompletionTokens: 128000, StreamToolCalls: profiles.BoolPtr(false),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The provider editor has no empty option for the default effort, so an
+	// unset managed value arrives as "none" and must not read as an ownership
+	// change: the documented editable field is the context window.
+	mutation := profileMutationFromProfile(profile)
+	mutation.DefaultReasoningEffort = "none"
+	mutation.Models[0].ContextWindow = 1048576
+	payload, err := json.Marshal(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := s.Profiles.Get(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DefaultReasoningEffort != "" {
+		t.Fatalf("default reasoning effort = %q, want it left unset", updated.DefaultReasoningEffort)
+	}
+	if updated.Models[0].ContextWindow != 1048576 {
+		t.Fatalf("context window = %d", updated.Models[0].ContextWindow)
+	}
+	if updated.Source != codebuddy.SourceTag {
+		t.Fatalf("source = %q", updated.Source)
+	}
+
+	// A real change to the managed default stays rejected.
+	changed := profileMutationFromProfile(updated)
+	changed.DefaultReasoningEffort = "high"
+	payload, err = json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	s.handleProfileByID(response, loopbackRequest(http.MethodPut, "/api/profiles/"+profile.ID, string(payload)))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
